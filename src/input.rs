@@ -263,13 +263,22 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             json!({"accept_difference":false,"accept_outside":false}),
         ),
         "settle" => (
-            &["preview_id", "renewals", "delete_cycle_ids"],
+            &[
+                "preview_id",
+                "renewals",
+                "delete_cycle_ids",
+                "delete_scopes",
+            ],
             json!({"renewals":[],"delete_cycle_ids":[]}),
         ),
         "transition" => (&["action", "version"], json!({})),
-        "netting-payment" => (&["user_a", "user_b", "digest"], json!({})),
+        "netting-payment" => (
+            &["user_a", "user_b", "digest", "note", "reference"],
+            json!({}),
+        ),
         "merge" => (&["ids"], json!({})),
-        "delete-retry" | "delete-cancel" => (&["version"], json!({})),
+        "delete-retry" => (&["version", "scope_digest"], json!({})),
+        "delete-cancel" => (&["version"], json!({})),
         "renewal" => (
             &["cycle_id", "cost", "creditor_id", "cost_kind"],
             json!({"cost_kind":null}),
@@ -294,7 +303,14 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         }
     }
     for k in fields {
-        required(&v, k)?;
+        if !matches!(
+            (kind, *k),
+            ("netting-payment", "note" | "reference")
+                | ("settle", "delete_scopes")
+                | ("delete-retry", "scope_digest")
+        ) {
+            required(&v, k)?;
+        }
     }
     for k in [
         "account_id",
@@ -416,6 +432,30 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         }
         "settle" => {
             ids(&v, "delete_cycle_ids", 0)?;
+            if let Some(scopes) = v.get("delete_scopes") {
+                let scopes = scopes
+                    .as_object()
+                    .filter(|m| m.len() <= 100)
+                    .ok_or_else(|| Error::invalid("删除范围无效"))?;
+                let delete_ids = array(&v["delete_cycle_ids"]);
+                if scopes.len() != delete_ids.len() {
+                    return Err(Error::invalid("请确认每个账号的删除范围"));
+                }
+                for (key, value) in scopes {
+                    if key
+                        .parse::<i64>()
+                        .ok()
+                        .is_none_or(|id| key != &id.to_string() || !delete_ids.contains(&json!(id)))
+                        || !value.as_str().is_some_and(|v| {
+                            v.len() == 64
+                                && v.bytes()
+                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        })
+                    {
+                        return Err(Error::invalid("删除范围无效"));
+                    }
+                }
+            }
             let r = v["renewals"]
                 .as_array()
                 .ok_or_else(|| Error::invalid("续期数据无效"))?;
@@ -446,7 +486,24 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             &["submit", "mark_paid", "confirm", "reject", "split"],
             false,
         )?,
-        "netting-payment" => cost(&v, "digest", r"^[0-9a-f]{64}$")?,
+        "netting-payment" => {
+            cost(&v, "digest", r"^[0-9a-f]{64}$")?;
+            for (key, max) in [("note", 500), ("reference", 128)] {
+                if v.get(key).is_some() {
+                    string(&v, key, 0, max)?;
+                    if text(&v, key).chars().any(|c| {
+                        c.is_control() && !(key == "note" && ['\n', '\r', '\t'].contains(&c))
+                    }) {
+                        return Err(Error::invalid("付款备注或凭证编号包含无效字符"));
+                    }
+                }
+            }
+        }
+        "delete-retry" => {
+            if v.get("scope_digest").is_some() {
+                cost(&v, "scope_digest", r"^[0-9a-f]{64}$")?;
+            }
+        }
         "merge" => {
             ids(&v, "ids", 1)?;
             if array(&v["ids"]).len() < 2 {

@@ -28,6 +28,8 @@ pub struct App {
     pub client: reqwest::Client,
     pub cipher: Arc<crate::keys::Keyring>,
     pub limiter: Arc<crate::rate::Limiter>,
+    pub metrics: Arc<crate::metrics::Metrics>,
+    pub reminders: Arc<crate::reminders::Reminders>,
     _ledger_lock: Option<Arc<crate::keys::LedgerLock>>,
     pub deletion_lock: Arc<Mutex<()>>,
     pub deletion_wake: Arc<Notify>,
@@ -45,6 +47,8 @@ impl App {
         let store = Store::open(&config.data_dir.join("settlement.sqlite3")).await?;
         let cipher = crate::keys::Keyring::load(&config.data_dir, &store).await?;
         let limiter = crate::rate::Limiter::environment(config.test)?;
+        let metrics = crate::metrics::Metrics::environment(config.test)?;
+        let reminders = crate::reminders::Reminders::environment(config.test, config.read_only)?;
         let source = Source::new(&config).await?;
         let service = Service::new(store, source).await?;
         let client = reqwest::Client::builder()
@@ -58,6 +62,8 @@ impl App {
             client,
             cipher: Arc::new(cipher),
             limiter: Arc::new(limiter),
+            metrics: Arc::new(metrics),
+            reminders: Arc::new(reminders),
             _ledger_lock: ledger_lock,
             deletion_lock: Arc::new(Mutex::new(())),
             deletion_wake: Arc::new(Notify::new()),
@@ -226,6 +232,7 @@ impl App {
     }
     pub fn router(&self) -> Router {
         Router::new()
+            .route("/metrics", get(crate::metrics::endpoint))
             .route("/settlement/healthz", get(health))
             .route("/settlement/sso/start", get(sso))
             .route("/settlement/api/v1/{*path}", any(api))
@@ -277,9 +284,12 @@ impl App {
         if method == "GET" || method == "HEAD" {
             return match parts.as_slice() {
                 ["me"] => Ok(actor.clone()),
+                ["audit"] => s.audit_log(actor, query, false).await,
+                ["operations", "status"] => s.operation_status(actor).await,
                 ["overview"] => s.overview(actor).await,
                 ["catalog"] => s.catalog(actor).await,
                 ["accounts", "state"] => s.account_state(actor).await,
+                ["accounts", _, "deletion-scope"] => s.deletion_scope(actor, id(1)?).await,
                 ["account-deletions"] => self.deletion_list(actor, None).await,
                 ["cycles", _, "start-candidate"] => {
                     s.start_candidate(
@@ -379,6 +389,12 @@ impl App {
                     )
                     .await?;
                 }
+                "delete-retry"
+                    if payload.get("scope_digest").is_some()
+                        && !s.inventory.refresh(true).await["error"].is_null() =>
+                {
+                    return Err(Error::new(503, "无法核验删除范围，请稍后重试"));
+                }
                 _ => {}
             }
             s.mutate(actor, key, &action, &payload, prepared, Some(sid))
@@ -446,7 +462,10 @@ fn route_methods(path: &str) -> Option<&'static [&'static str]> {
         .as_slice()
     {
         ["me" | "overview" | "catalog" | "history" | "inbox" | "account-deletions"]
+        | ["audit" | "audit.csv"]
+        | ["operations", "status"]
         | ["accounts", "state"]
+        | ["accounts", _, "deletion-scope"]
         | ["cycles", _, "start-candidate"]
         | ["netting", "balances"]
         | ["netting", "balances", _, _]
@@ -517,6 +536,20 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     if app.config.read_only && method != "GET" && method != "HEAD" {
         return Err(Error::new(403, "当前实例仅用于只读核验"));
     }
+    if method == "GET" && path == "audit.csv" {
+        let bytes = app.service.audit_csv(&actor, &query).await?;
+        return Ok((
+            [
+                ("Content-Type", "text/csv; charset=utf-8"),
+                (
+                    "Content-Disposition",
+                    "attachment; filename=\"settlement-audit.csv\"",
+                ),
+            ],
+            bytes,
+        )
+            .into_response());
+    }
     let bytes = axum::body::to_bytes(request.into_body(), 20 * 1024 * 1024)
         .await
         .map_err(|_| Error::new(413, "请求内容过大"))?;
@@ -525,11 +558,13 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     } else {
         serde_json::from_slice(&bytes).map_err(|_| Error::invalid("请求 JSON 无效"))?
     };
-    Ok(Json(
-        app.dispatch(&method, &path, &query, &headers, body, (&actor, &sid))
-            .await?,
-    )
-    .into_response())
+    let result = app
+        .dispatch(&method, &path, &query, &headers, body, (&actor, &sid))
+        .await;
+    if method != "GET" && result.as_ref().is_err_and(|error| error.status == 409) {
+        app.metrics.conflict();
+    }
+    Ok(Json(result?).into_response())
 }
 async fn security(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;

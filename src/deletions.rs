@@ -1,7 +1,7 @@
 use crate::{
     error::{Error, Result},
     http::App,
-    json::{flag, int, text, without},
+    json::{digest, dumps, flag, int, text, without},
     service::{Db, admin, audit, one},
     store::{self, all, exec},
     time,
@@ -10,6 +10,29 @@ use serde_json::{Value, json};
 pub fn public_job(row: Value) -> Value {
     without(row, &["session_id", "account_created_at"])
 }
+pub fn scope(aid: i64, rows: Vec<Value>) -> Result<Value> {
+    let mut rows = rows
+        .into_iter()
+        .filter(|a| int(a, "root_id") == aid && !flag(a, "deleted"))
+        .collect::<Vec<_>>();
+    if !rows.iter().any(|a| int(a, "id") == aid) {
+        return Err(Error::conflict("原账号已不存在，请刷新账号状态"));
+    }
+    rows.sort_by_key(|a| int(a, "id"));
+    let targets = rows.iter().map(|a|json!({"id":a["id"],"name":a["name"],"created_at":a["created_at"],"shadow":int(a,"id")!=aid})).collect::<Vec<_>>();
+    Ok(json!({"account_id":aid,"targets":targets,"digest":digest(&json!([aid,targets]))}))
+}
+pub async fn scope_from_db(db: &mut Db, aid: i64) -> Result<Value> {
+    scope(
+        aid,
+        all(
+            db,
+            "SELECT * FROM accounts WHERE root_id=? AND deleted=0 ORDER BY id",
+            &[json!(aid)],
+        )
+        .await?,
+    )
+}
 pub async fn change(
     db: &mut Db,
     actor: &Value,
@@ -17,6 +40,7 @@ pub async fn change(
     version: i64,
     action: &str,
     session: Option<&str>,
+    scope_digest: Option<&str>,
 ) -> Result<Value> {
     admin(actor)?;
     let row = one(
@@ -33,6 +57,23 @@ pub async fn change(
     }
     if action == "retry" && row["status"] != "failed" {
         return Err(Error::conflict("删除任务已经排队，请勿重复提交"));
+    }
+    if action == "retry" {
+        let saved = store::optional(
+            db,
+            "SELECT digest FROM rust_deletion_scopes WHERE deletion_id=?",
+            &[json!(jid)],
+        )
+        .await?;
+        if saved.is_some() || scope_digest.is_some() {
+            let current = scope_from_db(db, int(&row, "account_id")).await?;
+            let expected =
+                scope_digest.or_else(|| saved.as_ref().and_then(|v| v["digest"].as_str()));
+            if expected != current["digest"].as_str() {
+                return Err(Error::conflict("删除范围已变化，请重新确认账号与影子账号"));
+            }
+            exec(db,"INSERT INTO rust_deletion_scopes(deletion_id,digest,snapshot) VALUES(?,?,?) ON CONFLICT(deletion_id) DO UPDATE SET digest=excluded.digest,snapshot=excluded.snapshot",&[json!(jid),current["digest"].clone(),json!(dumps(&current))]).await?;
+        }
     }
     let target = if action == "retry" {
         "queued"
@@ -153,6 +194,33 @@ impl App {
                     .await;
             }
             let mut db = self.service.store.read().await?;
+            let expected = store::optional(
+                &mut db,
+                "SELECT digest FROM rust_deletion_scopes WHERE deletion_id=?",
+                &[json!(jid)],
+            )
+            .await?;
+            if let Some(expected) = expected {
+                let state = self.service.inventory.state.read().await;
+                let current = scope(
+                    int(&job, "account_id"),
+                    state.rows.values().cloned().collect(),
+                );
+                let changed = current
+                    .as_ref()
+                    .map_or(true, |current| current["digest"] != expected["digest"]);
+                drop(state);
+                if changed {
+                    drop(db);
+                    return self
+                        .finish_deletion(
+                            &job,
+                            "failed",
+                            Some("删除范围已变化，请重新确认账号与影子账号"),
+                        )
+                        .await;
+                }
+            }
             let s = one(
                 &mut db,
                 "SELECT status FROM settlements WHERE id=?",

@@ -3,7 +3,7 @@ use crate::{backup, json::hash, time};
 use serde::Serialize;
 
 const HISTORY: &str = "CREATE TABLE IF NOT EXISTS rust_schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)";
-const LATEST: i64 = 3;
+const LATEST: i64 = 7;
 #[derive(Serialize)]
 pub struct Inspection {
     pub schema_version: i64,
@@ -20,6 +20,10 @@ fn checksum(version: i64) -> String {
         ),
         2 => include_str!("../sync_schema.sql"),
         3 => include_str!("../security_schema.sql"),
+        4 => include_str!("../payment_schema.sql"),
+        5 => include_str!("../deletion_scope_schema.sql"),
+        6 => include_str!("../reminder_schema.sql"),
+        7 => include_str!("../operations_schema.sql"),
         _ => "",
     };
     hash(bytes.as_bytes())
@@ -134,6 +138,26 @@ pub(super) async fn apply(db: &mut SqliteConnection) -> Result<()> {
             }
             3 => {
                 sqlx::raw_sql(include_str!("../security_schema.sql"))
+                    .execute(&mut *db)
+                    .await?;
+            }
+            4 => {
+                sqlx::raw_sql(include_str!("../payment_schema.sql"))
+                    .execute(&mut *db)
+                    .await?;
+            }
+            5 => {
+                sqlx::raw_sql(include_str!("../deletion_scope_schema.sql"))
+                    .execute(&mut *db)
+                    .await?;
+            }
+            6 => {
+                sqlx::raw_sql(include_str!("../reminder_schema.sql"))
+                    .execute(&mut *db)
+                    .await?;
+            }
+            7 => {
+                sqlx::raw_sql(include_str!("../operations_schema.sql"))
                     .execute(&mut *db)
                     .await?;
             }

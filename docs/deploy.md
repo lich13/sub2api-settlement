@@ -57,4 +57,20 @@ Nginx 配置已关闭结算路径访问日志并设置 `Referrer-Policy: no-refe
 
 基础镜像固定 digest，CI 检查 Rust 与前端依赖，发布时生成 SPDX SBOM，并用 GitHub Actions OIDC 对同一个已测试镜像 digest 签名。源码、静态前端、Linux amd64 镜像包、签名与摘要文件随 Release 提供。依赖许可及唯一的未激活依赖例外见 [SECURITY.md](../SECURITY.md)。
 
+## 运行状态与稽核
+
+管理视图显示最近消费同步、账号核对、全量对账和未完成删除任务数。操作记录支持按类型与北京时间区间筛选、向前分页和 CSV 导出；导出超过十万条时需缩小范围。导出使用 UTF-8 BOM，文字单元格会防护电子表格公式注入，不改变账本中的原记录。只有管理员可以查看和导出。
+
+Prometheus 入口为 `/metrics`，默认关闭。启用 `SETTLEMENT_METRICS_ENABLED=true` 后，仅允许服务实际回环连接，或携带 `Authorization: Bearer …` 且匹配 `SETTLEMENT_METRICS_TOKEN` 的采集器。令牌至少 32 位；转发头不能替代认证。默认 Nginx 配置不转发这个路径，建议仅通过受保护的内部网络采集。
+
+指标包括 `settlement_sync_lag_seconds`、`settlement_last_successful_sync_timestamp_seconds`、`settlement_sync_healthy`、`settlement_pending_deletion_tasks` 和 `settlement_write_conflicts_total`。最后一个计数包括版本变化、旧预览和幂等冲突，重启归零；指标不包含用户、账号名称或凭据。尚未同步时成功时间为 0，结合 healthy 判断，不能把延迟为 0 当成同步成功。
+
+## 待付款提醒（可选）
+
+默认不发送外部提醒。设置 `SETTLEMENT_REMINDERS_ENABLED=true`、HTTPS 的 `SETTLEMENT_REMINDER_URL` 和至少 32 字节的 `SETTLEMENT_REMINDER_SECRET` 后启用通用 Webhook。URL 和密钥只放在权限 0600 的环境配置中。只读实例或禁用外部写操作的实例不会发送。
+
+`SETTLEMENT_REMINDER_HOUR` 为北京时间的发送小时，默认 9。每天到该小时后，对存在超过 24 小时待付原单的双方按当前净额提醒，每对用户每天最多创建一条记录；净额为零不发送。请求 JSON 只包含事件 ID、时间、付款人与收款人的用户 ID、整数分金额、币种和订单数量，不发送姓名、订单明细或凭据。
+
+接收端应以 `X-Settlement-Event` 去重，并校验 `X-Settlement-Signature: v1=<hex>`：使用共享密钥计算 `HMAC-SHA256(X-Settlement-Timestamp + "." + 原始请求体)`，同时检查时间戳新鲜度。返回任意 2xx 表示接收成功，其他状态与超时按 60、120、240、480 秒退避，最多尝试五次；不跟随重定向。失败与进程中断可能发生在接收端已收到之后，因此投递语义是至少一次，不能把提醒当成付款凭据。每次发送前重核净额摘要，已经支付或账目发生变化的队列项作废，后续日期按最新账目生成。
+
 返回 [项目首页](../README.zh-CN.md)。

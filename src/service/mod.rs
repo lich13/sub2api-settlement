@@ -1,6 +1,7 @@
 mod calculation;
 mod cycles;
 mod ledger;
+pub mod operations;
 mod reads;
 mod sync;
 use crate::{
@@ -138,6 +139,7 @@ impl Service {
                         "cancel"
                     },
                     session_id,
+                    payload.get("scope_digest").and_then(Value::as_str),
                 )
                 .await?
             }

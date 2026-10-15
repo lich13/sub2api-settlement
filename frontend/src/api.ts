@@ -54,6 +54,21 @@ export function money(fen: number) {
     String(n % 100).padStart(2, "0")
   );
 }
+export async function downloadCsv(path: string, filename: string) {
+  const response = await fetch("/settlement/api/v1" + path, {
+    credentials: "same-origin", cache: "no-store",
+    headers: currentUser ? { "X-Settlement-User": String(currentUser) } : {},
+  });
+  if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event("settlement:expired"));
+    const data = await response.json();
+    throw new ApiError(typeof data.detail === "string" ? data.detail : "导出失败，请重试", response.status);
+  }
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url; link.download = filename; document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 export function costInput(fen: number) {
   return (fen / 100).toFixed(2);
 }

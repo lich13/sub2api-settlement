@@ -241,4 +241,4 @@ export type NetBalance = {
   digest: string;
 };
 export type NetPayment = NetBalance & { id: number; actor_id: number; created_at: string };
-export type NetDetail = NetBalance & { orders: Order[]; id?: number; created_at?: string };
+export type NetDetail = NetBalance & { orders: Order[]; id?: number; created_at?: string; note?: string; reference?: string };

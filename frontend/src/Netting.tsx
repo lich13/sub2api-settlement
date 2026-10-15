@@ -34,6 +34,8 @@ export function NettingDetails({ value }: { value: NetDetail }) {
       {!value.orders.some(o => o.payer_id === uid) && <p className="detail-time">无待抵扣订单</p>}
     </div>)}
     {value.created_at && <p className="detail-time">结清时间 {date(value.created_at)}</p>}
+    {value.reference && <p className="payment-memo">凭证编号：{value.reference}</p>}
+    {value.note && <p className="payment-memo">备注：{value.note}</p>}
   </section>;
 }
 

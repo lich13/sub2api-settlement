@@ -360,6 +360,7 @@ describe("SettleForm preview integration", () => {
     const fetcher = vi.fn<typeof fetch>(async input => {
       const path = String(input);
       if (path.endsWith("/previews")) return response(preview(cycle(), "settlement-preview-delete"));
+      if (path.endsWith("/deletion-scope")) return response({ account_id: 1, digest: "a".repeat(64), targets: [{ id: 1, name: "Shared account", shadow: false }] });
       if (path.endsWith("/settlements")) return response({ deletions: [{ id: 12, account_id: 1, account_name: "Shared account", settlement_id: 88, status: "failed", version: 1, error: "upstream unavailable", updated_at: "2026-10-01T00:00:00Z" }] });
       return response({});
     });
@@ -379,11 +380,22 @@ describe("SettleForm preview integration", () => {
     expect(renewal.checked).toBe(false);
     expect(renewal.disabled).toBe(true);
 
+    await advance(0);
+    const scopeConfirmation = checkbox("确认删除以上");
+    expect(scopeConfirmation.checked).toBe(false);
+    await click(button("确认结算"));
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
+
+    await act(async () => {
+      scopeConfirmation.click();
+      await Promise.resolve();
+    });
     await click(button("确认结算"));
     const settlementCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/settlements"));
     expect(JSON.parse(String(settlementCall?.[1]?.body))).toMatchObject({
       preview_id: "settlement-preview-delete",
       delete_cycle_ids: [7],
+      delete_scopes: { "7": "a".repeat(64) },
     });
     expect(done).toHaveBeenCalledWith("已出单，删除未完成。请在管理视图中查看。");
   });

@@ -1493,3 +1493,22 @@ td small {
   .deletion-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .manage-tabs { flex-wrap: wrap; }
 }
+:is(.operation-status,.audit-filters) { display:flex; flex-wrap:wrap; gap:16px; align-items:end; padding:18px 0; }
+.operation-status { border-bottom:1px solid var(--line); }
+.operation-status > div { display:grid; gap:5px; flex:1 1 180px; font-size:12px; }
+.operation-status span { color:var(--muted); }
+.operation-status b { font-weight:500; font-variant-numeric:tabular-nums; }
+.operation-status .form-error { flex-basis:100%; margin:0; }
+.audit-filters label { display:grid; gap:6px; font-size:12px; flex:1 1 180px; }
+.audit-filters input,.audit-filters select { width:100%; }
+.audit-list details { margin-top:6px; max-width:100%; }
+.audit-list summary { font-size:12px; cursor:pointer; color:var(--muted); }
+.audit-list pre { overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; max-height:260px; }
+@media(max-width:640px) { .audit-filters { display:grid; grid-template-columns:1fr; } .operation-status > div { flex-basis:40%; } }
+.payment-memo { white-space:pre-wrap; overflow-wrap:anywhere; }
+.deletion-scope { padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin:10px 0; }
+.deletion-targets { list-style:none; margin:12px 0; padding:0; }
+.deletion-targets li { display:flex; justify-content:space-between; gap:16px; padding:7px 0; border-bottom:1px solid var(--line); }
+.deletion-targets li span { overflow-wrap:anywhere; }
+.deletion-targets small { flex-shrink:0; color:var(--muted); }
+@media(max-width:640px){.deletion-targets li {flex-direction:column;gap:3px;}}

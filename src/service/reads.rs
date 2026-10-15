@@ -5,7 +5,7 @@ use crate::{
         cycles::{estimate, start_meta},
         ledger::authorize,
     },
-    store::all,
+    store::{all, optional},
 };
 impl Service {
     pub async fn account_state(&self, actor: &Value) -> Result<Value> {
@@ -268,6 +268,15 @@ impl Service {
         let mut items = Vec::new();
         for p in rows {
             let mut s: Value = serde_json::from_str(text(&p, "snapshot"))?;
+            if let Some(note) = optional(
+                &mut db,
+                "SELECT note,reference FROM rust_payment_notes WHERE payment_id=?",
+                &[p["id"].clone()],
+            )
+            .await?
+            {
+                s = merge(s, note);
+            }
             if pid.is_none() {
                 s = without(s, &["orders"]);
             }

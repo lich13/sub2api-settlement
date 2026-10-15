@@ -56,6 +56,8 @@ import type {
 import { useAutoPreview } from "./useAutoPreview";
 import { useAccountState } from "./useAccountState";
 import { NettingList, NettingReceivables, NettingDetails } from "./Netting";
+import { AuditLog, OperationStatus } from "./Operations";
+import { DeletionScope, DeletionTargets, type DeletionScopeValue } from "./DeletionScope";
 import "./style.css";
 import settlementIcon from "./assets/settlement.svg?raw";
 
@@ -824,6 +826,7 @@ export function SettleForm({
   >({});
   const renewalDefaultsSet = useRef(false);
   const [deleteIds, setDeleteIds] = useState<number[]>([]);
+  const [deleteScopes,setDeleteScopes] = useState<Record<number,DeletionScopeValue|null>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { preview, loading, error: previewError, refresh: inspect } = useAutoPreview({
@@ -837,7 +840,7 @@ export function SettleForm({
       }
     },
   });
-  const pendingSubmission = useRef<{preview_id: string; renewals: {cycle_id: number; cost: string; creditor_id: number; cost_kind: CostKind}[]; delete_cycle_ids?: number[]} | null>(null);
+  const pendingSubmission = useRef<{preview_id: string; renewals: {cycle_id: number; cost: string; creditor_id: number; cost_kind: CostKind}[]; delete_cycle_ids?: number[];delete_scopes?:Record<string,string>} | null>(null);
   let cutoff = "";
   try { if (end) cutoff = fromInput(end); } catch { /* Date input may be incomplete. */ }
   const cycleMap = new Map<number, Cycle>();
@@ -849,6 +852,7 @@ export function SettleForm({
   const billCycles = [...cycleMap.values()].filter(canImportBill);
   const calculations = new Map((preview?.cycles || []).map((calculation) => [calculation.cycle.id, calculation]));
   async function settle() {
+    if (!pendingSubmission.current && deleteIds.some(id=>!deleteScopes[id])) {setError("请先核验并确认删除范围");return;}
     if ((!preview || loading) && !pendingSubmission.current) return;
     if (!pendingSubmission.current && preview && preview.cycles.some((c) => c.can_settle === false)) {
       setError("请先确认起点、成本或账单");
@@ -871,7 +875,7 @@ export function SettleForm({
           cycle_id: Number(id),
           ...r,
         })),
-        ...(deleteIds.length ? { delete_cycle_ids: deleteIds } : {}),
+        ...(deleteIds.length ? { delete_cycle_ids: deleteIds,delete_scopes:Object.fromEntries(deleteIds.map(id=>[id,deleteScopes[id]!.digest])) } : {}),
       };
       pendingSubmission.current = payload;
       const result = await api<{ deletions?: DeletionJob[] }>("/settlements", "POST", payload);
@@ -952,7 +956,7 @@ export function SettleForm({
               结算后续期
             </label>
             <label className="checkline deletion-option"><input type="checkbox" checked={deleteIds.includes(c.cycle.id)} disabled={!!renew[c.cycle.id]} onChange={e => setDeleteIds(prev => e.target.checked ? [...prev, c.cycle.id] : prev.filter(id => id !== c.cycle.id))} />出单后删除账号</label>
-            {deleteIds.includes(c.cycle.id) && <p className="field-hint">同时删除关联影子账号，历史账单保留。</p>}
+            {deleteIds.includes(c.cycle.id) && <DeletionScope accountId={c.cycle.account_id} onConfirmed={value=>setDeleteScopes(prev=>({...prev,[c.cycle.id]:value}))}/>}
             {renew[c.cycle.id] && (
               <div className="form-columns">
                 <label>新周期成本类型<select value={renew[c.cycle.id].cost_kind} onChange={(e) => setRenew({...renew, [c.cycle.id]: {...renew[c.cycle.id], cost_kind: e.target.value as CostKind}})}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></select></label>
@@ -1009,7 +1013,7 @@ export function SettleForm({
           </button>
           <button
             className="button primary"
-            disabled={busy || (!pendingSubmission.current && (loading || !preview || preview.cycles.some((c) => c.can_settle === false)))}
+            disabled={busy || (!pendingSubmission.current && (loading || !preview || preview.cycles.some((c) => c.can_settle === false) || deleteIds.some(id=>!deleteScopes[id])))}
             onClick={settle}
           >
             {busy ? "结算中…" : pendingSubmission.current ? "重试结算" : "确认结算"}
@@ -1053,8 +1057,12 @@ export function App() {
   const [startCycle, setStartCycle] = useState<Cycle | null>(null);
   const [confirm, setConfirm] = useState<{
     text: string;
-    action: () => Promise<unknown>;
+    action: (memo?: {note?:string;reference?:string}) => Promise<unknown>;
+    payment?: boolean;
+    deletionScope?: DeletionScopeValue;
   } | null>(null);
+  const [paymentNote, setPaymentNote] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
@@ -1242,7 +1250,13 @@ export function App() {
     const creditorName = value.creditor_id === value.user_a ? value.name_a : value.name_b;
     const text = value.amount_fen ? `${payerName} 向 ${creditorName} 转账 ${money(value.amount_fen)}，结清双方 ${value.order_count} 张订单` : `确认 ${value.name_a} 与 ${value.name_b} 的 ${value.order_count} 张订单相互抵消，无需转账`;
     const payload = {user_a: value.user_a, user_b: value.user_b, digest: value.digest};
-    setConfirm({text, action: () => api("/netting/payments", "POST", payload)});
+    setPaymentNote(""); setPaymentReference("");
+    setConfirm({text, payment:true, action: memo => api("/netting/payments", "POST", {...payload,...memo})});
+  }
+  async function retryDeletion(job:DeletionJob) {
+    setBusy(true);setError("");
+    try{const scope=await api<DeletionScopeValue>(`/accounts/${job.account_id}/deletion-scope`);setConfirm({text:`重试删除以下 ${scope.targets.length} 个账号`,deletionScope:scope,action:()=>api(`/account-deletions/${job.id}/retry`,"POST",{version:job.version,scope_digest:scope.digest})});}
+    catch(e){setError((e as Error).message);}finally{setBusy(false);}
   }
   const filteredAccounts = (overview?.accounts || []).filter(
     (a) =>
@@ -1350,6 +1364,7 @@ export function App() {
                 <button className={costView === "expenses" ? "active" : ""} onClick={() => { setCostView("expenses"); setQuery(""); setSelected([]); }} role="tab" aria-selected={costView === "expenses"}>固定费用</button>
               </div>
             )}
+            {tab === "manage" && <OperationStatus />}
             {tab === "manage" && (
               <div className="segments manage-tabs">
                 {[
@@ -1715,61 +1730,11 @@ export function App() {
               {deletions.filter(j => !["done", "cancelled"].includes(j.status)).map(job => <div className="deletion-row" key={job.id}>
                 <div><strong>{job.account_name}</strong><span>{({queued: "等待删除", running: "删除中", verify: "等待核验", failed: "删除未完成"} as Record<string, string>)[job.status] || job.status}</span>{job.error && <p className="form-error">{job.error}</p>}</div>
                 <span className="muted">{date(job.updated_at)}</span>
-                <div className="row-actions">{job.status === "failed" && <button className="text-button" disabled={busy} onClick={() => run(() => api(`/account-deletions/${job.id}/retry`, "POST", {version: job.version}), "已提交删除重试")}>重试删除</button>}{["failed", "queued"].includes(job.status) && <button className="text-button" disabled={busy} onClick={() => run(() => api(`/account-deletions/${job.id}/cancel`, "POST", {version: job.version}), "已取消删除任务")}>取消删除</button>}</div>
+                <div className="row-actions">{job.status === "failed" && <button className="text-button" disabled={busy} onClick={() => retryDeletion(job)}>重试删除</button>}{["failed", "queued"].includes(job.status) && <button className="text-button" disabled={busy} onClick={() => run(() => api(`/account-deletions/${job.id}/cancel`, "POST", {version: job.version}), "已取消删除任务")}>取消删除</button>}</div>
               </div>)}
               {!deletions.some(j => !["done", "cancelled"].includes(j.status)) && <Empty text="暂无待处理删除" />}
             </div>}
-            {tab === "manage" && manageTab === "audit" && (
-              <div className="audit-list">
-                {history.audit.map((a) => (
-                  <div key={a.id}>
-                    <div>
-                      <strong>
-                        {{
-                          create_cycle: "创建周期",
-                          edit_cycle: "修改成本与周期",
-                          confirm_cycle_start: "确认周期起点",
-                          mark_free: "标记免费",
-                          upgrade_paid: "升级付费",
-                          settle: "结算出单",
-                          create_expense: "新增固定费用",
-                          edit_expense: "修改固定费用",
-                          settle_expense: "固定费用出单",
-                          void_expense: "作废固定费用结算",
-                          import_bill: "确认上游账单",
-                          bill_allocation: "确认账单分摊方式",
-                          request_account_deletion: "结算后删除账号",
-                          retry_account_deletion: "重试删除账号",
-                          cancel_account_deletion: "取消删除账号",
-                          account_deletion_done: "账号已删除",
-                          account_deletion_failed: "账号删除未完成",
-                          account_deletion_verify: "账号删除待核验",
-                          merge: "合并订单",
-                          submit: "付款方结清",
-                          mark_paid: "管理员标记结清",
-                          netting_payment: "对冲结清",
-                          confirm: "管理员标记结清",
-                          reject: "退回付款",
-                          split: "拆分订单",
-                          void: "作废结算",
-                        }[a.action as string] || a.action}
-                      </strong>
-                      <span>
-                        {a.actor_name} · #{a.entity_id}
-                      </span>
-                      {a.action === "edit_cycle" && (
-                        <b>
-                          {money(a.payload.before.cost_fen)} →{" "}
-                          {money(a.payload.after.cost_fen)}
-                        </b>
-                      )}
-                    </div>
-                    <time>{date(a.created_at)}</time>
-                  </div>
-                ))}
-                {!history.audit.length && <Empty text="暂无操作记录" />}
-              </div>
-            )}
+            {tab === "manage" && manageTab === "audit" && <AuditLog />}
           </>
         )}
       </main>
@@ -1892,6 +1857,11 @@ export function App() {
         <Modal title="确认操作" close={() => !busy && setConfirm(null)}>
           <div className="form">
             <p className="confirm-text">{confirm.text}</p>
+            {confirm.deletionScope && <DeletionTargets value={confirm.deletionScope}/>}
+            {confirm.payment && <>
+              <label>备注（选填）<textarea maxLength={500} value={paymentNote} disabled={busy} onChange={e=>setPaymentNote(e.target.value)}/></label>
+              <label>转账凭证编号（选填）<input maxLength={128} value={paymentReference} disabled={busy} onChange={e=>setPaymentReference(e.target.value)}/></label>
+            </>}
             <FormError error={error} />
             <footer>
               <button
@@ -1904,7 +1874,7 @@ export function App() {
               <button
                 className="button primary"
                 disabled={busy}
-                onClick={() => run(confirm.action)}
+                onClick={() => run(() => confirm.action(confirm.payment ? {...(paymentNote ? {note:paymentNote}:{}),...(paymentReference ? {reference:paymentReference}:{})} : undefined))}
               >
                 {busy ? "处理中…" : "确认"}
               </button>

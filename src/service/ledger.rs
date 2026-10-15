@@ -165,6 +165,9 @@ impl Service {
         let stamp = time::now();
         let snapshot = merge(current.clone(), json!({"orders":order_details(&rows)}));
         let pid=exec(db,"INSERT INTO netting_payments(user_a,user_b,payer_id,creditor_id,amount_fen,offset_fen,a_to_b_fen,b_to_a_fen,actor_id,created_at,digest,snapshot) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",&[json!(a),json!(b),current["payer_id"].clone(),current["creditor_id"].clone(),current["amount_fen"].clone(),current["offset_fen"].clone(),current["a_to_b_fen"].clone(),current["b_to_a_fen"].clone(),actor["id"].clone(),json!(stamp),current["digest"].clone(),json!(dumps(&snapshot))]).await?.last_insert_rowid();
+        if !text(data, "note").is_empty() || !text(data, "reference").is_empty() {
+            exec(db,"INSERT INTO rust_payment_notes(payment_id,note,reference,created_by,created_at) VALUES(?,?,?,?,?)",&[json!(pid),json!(text(data,"note")),json!(text(data,"reference")),actor["id"].clone(),json!(stamp)]).await?;
+        }
         for r in &rows {
             let submitted = if nonzero && r["payer_id"] == current["payer_id"] {
                 json!(stamp)
@@ -228,6 +231,11 @@ impl Service {
     }
     pub async fn prepare_settlement(&self, actor: &Value, data: &Value) -> Result<Prepared> {
         admin(actor)?;
+        if data.get("delete_scopes").is_some()
+            && !self.inventory.refresh(true).await["error"].is_null()
+        {
+            return Err(Error::new(503, "无法核验删除范围，请稍后重试"));
+        }
         let mut db = self.store.read().await?;
         let p = store::one(
             &mut db,
@@ -452,7 +460,22 @@ impl Service {
                 )
                 .await?;
                 let stamp = time::now();
+                let scope = if let Some(expected) = data
+                    .get("delete_scopes")
+                    .and_then(|v| v.get(cid.to_string()))
+                {
+                    let scope = crate::deletions::scope_from_db(db, int(&c, "account_id")).await?;
+                    if scope["digest"] != *expected {
+                        return Err(Error::conflict("删除范围已变化，请重新确认账号与影子账号"));
+                    }
+                    Some(scope)
+                } else {
+                    None
+                };
                 let jid=exec(db,"INSERT INTO account_deletions(account_id,settlement_id,account_name,account_created_at,actor_id,session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",&[a["id"].clone(),json!(sid),c["name"].clone(),a["created_at"].clone(),actor["id"].clone(),json!(session_id),json!(stamp),json!(stamp)]).await?.last_insert_rowid();
+                if let Some(scope) = scope {
+                    exec(db,"INSERT INTO rust_deletion_scopes(deletion_id,digest,snapshot) VALUES(?,?,?)",&[json!(jid),scope["digest"].clone(),json!(dumps(&scope))]).await?;
+                }
                 jobs.push(json!({"id":jid,"account_id":a["id"],"status":"queued"}));
                 audit(
                     db,

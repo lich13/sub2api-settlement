@@ -94,10 +94,14 @@ async fn run() -> Result<()> {
     }
     let app = App::new(config).await?;
     app.recover_deletions().await?;
+    app.reminders.recover(&app).await?;
     let _ = app.service.sync(true).await;
     let cancel = CancellationToken::new();
     let mut tasks = tokio::task::JoinSet::new();
-    for kind in ["sync", "accounts", "deletions"] {
+    for kind in ["sync", "accounts", "deletions", "reminders"] {
+        if kind == "reminders" && !app.reminders.enabled() {
+            continue;
+        }
         if kind != "deletions" && !app.config.background {
             continue;
         }
@@ -120,6 +124,7 @@ async fn run() -> Result<()> {
                             if app.service.inventory.refresh(false).await["error"].is_null() { Ok(()) }
                             else { Err(settlement::error::Error::unavailable()) }
                         },
+                        "reminders" => app.reminders.tick(&app).await,
                         _ => app.pending_deletions().await,
                     }
                 }).catch_unwind().await;
@@ -131,7 +136,7 @@ async fn run() -> Result<()> {
                 failures = if ok { 0 } else { (failures + 1).min(4) };
                 tracing::debug!(task=kind, failures, request_capacity=app.requests.available_permits(), calculation_capacity=app.service.cpu.available_permits());
                 if kind != "deletions" {
-                    let delay = if kind == "sync" { 60 + failures * 5 } else { 5 };
+                    let delay = if kind == "sync" || kind == "reminders" { 60 + failures * 5 } else { 5 };
                     tokio::select! {
                         _ = cancel.cancelled() => break,
                         _ = tokio::time::sleep(Duration::from_secs(delay)) => {},
