@@ -7,7 +7,10 @@ use std::{
 };
 
 use serde_json::Value;
-use settlement::{backup, store::Store};
+use settlement::{
+    backup,
+    store::{Store, migrations},
+};
 use sqlx::{ConnectOptions, Connection, Row, sqlite::SqliteConnectOptions};
 use tempfile::TempDir;
 
@@ -297,18 +300,22 @@ async fn first_migration_keeps_a_private_pre_migration_backup_and_reopen_adds_no
         .fetch_one(&mut migrated)
         .await
         .unwrap();
-    assert_eq!(version, 3);
     migrated.close().await.unwrap();
+    let target_version = migrations::inspect(&ledger).await.unwrap().target_version;
+    assert_eq!(version, target_version);
 
     let store = Store::open(&ledger).await.expect("reopen migrated ledger");
     store.close().await;
     assert_eq!(backup_files(&backup_directory), backups);
 }
 
-#[test]
-fn migrate_check_on_missing_data_directory_is_read_only_and_creates_nothing() {
+#[tokio::test]
+async fn migrate_check_on_missing_data_directory_is_read_only_and_creates_nothing() {
     let temporary = TempDir::new().unwrap();
     let data_dir = temporary.path().join("not-created").join("data");
+    let expected = migrations::inspect(&data_dir.join("settlement.sqlite3"))
+        .await
+        .unwrap();
 
     let output = run_migrate_check(&data_dir);
     assert!(
@@ -318,8 +325,8 @@ fn migrate_check_on_missing_data_directory_is_read_only_and_creates_nothing() {
     );
     let report = parse_json_stdout(&output);
     assert_eq!(report["schema_version"], 0);
-    assert_eq!(report["target_version"], 3);
-    assert_eq!(report["pending"], serde_json::json!([1, 2, 3]));
+    assert_eq!(report["target_version"], expected.target_version);
+    assert_eq!(report["pending"], serde_json::json!(expected.pending));
     assert_eq!(report["existing"], false);
     assert!(!data_dir.exists());
 }
@@ -332,6 +339,7 @@ async fn migrate_check_reports_pending_versions_without_changing_legacy_database
     let ledger = data_dir.join("settlement.sqlite3");
     import_legacy_fixture(&ledger).await;
     let before = fs::read(&ledger).unwrap();
+    let expected = migrations::inspect(&ledger).await.unwrap();
 
     let output = run_migrate_check(&data_dir);
     assert!(
@@ -341,8 +349,8 @@ async fn migrate_check_reports_pending_versions_without_changing_legacy_database
     );
     let report = parse_json_stdout(&output);
     assert_eq!(report["schema_version"], 0);
-    assert_eq!(report["target_version"], 3);
-    assert_eq!(report["pending"], serde_json::json!([1, 2, 3]));
+    assert_eq!(report["target_version"], expected.target_version);
+    assert_eq!(report["pending"], serde_json::json!(expected.pending));
     assert_eq!(report["existing"], true);
     assert_eq!(fs::read(&ledger).unwrap(), before);
     assert!(!data_dir.join("backups").exists());

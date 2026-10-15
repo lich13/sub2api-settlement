@@ -550,6 +550,17 @@ impl Harness {
                 .await
                 .map_err(display_error)?;
         }
+        let recreates_legacy_schema = self.name == "old-schema-migration"
+            && ["cycles_compat_legacy", "orders_compat_legacy"]
+                .iter()
+                .all(|table| {
+                    statements.iter().any(|statement| {
+                        statement["sql"].as_str().is_some_and(|sql| {
+                            sql.to_ascii_lowercase()
+                                .contains(&format!("create table {table}"))
+                        })
+                    })
+                });
         for (index, statement) in statements.iter().enumerate() {
             let sql = statement["sql"].as_str().ok_or_else(|| {
                 format!("{} / {label}: statement {index} has no SQL text", self.name)
@@ -594,6 +605,13 @@ impl Harness {
                 .execute(&mut connection)
                 .await
                 .map_err(|error| format!("{} / {label} statement {index}: {error}", self.name))?;
+        }
+        if recreates_legacy_schema {
+            // This workflow reconstructs a pre-migration database from the current test schema.
+            sqlx::query("DROP TABLE IF EXISTS rust_schema_migrations")
+                .execute(&mut connection)
+                .await
+                .map_err(display_error)?;
         }
         sqlx::query("COMMIT")
             .execute(&mut connection)
