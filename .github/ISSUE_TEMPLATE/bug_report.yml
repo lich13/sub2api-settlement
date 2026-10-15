@@ -1,0 +1,26 @@
+name: 问题反馈
+description: 提供可复现的问题与预期行为
+title: '[问题] '
+body:
+  - type: markdown
+    attributes:
+      value: 请勿提交真实账本、凭据、会话、个人资料或服务器地址；使用虚构数据说明。
+  - type: input
+    id: version
+    attributes:
+      label: 版本与运行环境
+      placeholder: v0.10.0 / Docker / linux-amd64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 写明入口、操作、预期和实际结果。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 脱敏后的错误信息
+      description: 不上传数据库、Cookie、SSO URL 或完整日志。

@@ -11,3 +11,21 @@
 - 成本编辑保留草稿，服务端拒绝陈旧版本；弹窗未提交不覆盖表单输入。关闭和 Escape 不提交。
 - SSO 跟随主站 theme 参数，界面不显示 Token、连接配置或内部字段。
 - 真实 iframe 入口、深浅主题、窄屏、键盘焦点、空状态和错误都需验收。
+
+## 订单状态
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "待付款" as Pending
+    state "已报已付（历史）" as Submitted
+    state "已结清" as Paid
+    state "已作废" as Void
+    [*] --> Pending
+    Pending --> Paid: 净付款人确认转账 / 管理员代处理
+    Pending --> Paid: 零净额确认对冲
+    Pending --> Void: 整次结算符合未付款作废条件
+    Submitted --> Paid: 管理员处理历史订单
+```
+
+新订单确认转账后直接结清，不再进入“已报已付”。对冲是结清方式，原始订单仍为“已结清”；收款方无确认或退回操作。历史待处理订单不参与实时净额计算。已结清订单不可作废。

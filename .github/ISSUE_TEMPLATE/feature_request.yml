@@ -1,0 +1,17 @@
+name: 改进建议
+description: 说明需要解决的操作问题
+title: '[建议] '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景与问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望行为
+      description: 如果涉及金额、付款或权限，请说明希望保持的规则。
+    validations:
+      required: true
