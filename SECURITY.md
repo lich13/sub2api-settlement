@@ -1,16 +1,9 @@
-# 安全与隐私
+# Security policy
 
-## 不要提交的内容
+Report vulnerabilities privately through the repository's GitHub Security Advisory workflow. Do not include credentials, production ledger data, or session files in public issues. Rotate exposed credentials before publishing a report.
 
-- `.env`、数据库文件、SQLite WAL、`session.key` 和备份文件。
-- Sub2API Token、Cookie、CSRF 值、API Key、密码、私钥和上游账单原文件。
-- 生产账号名称、用户邮箱、真实消费明细、付款信息和服务器凭据。
-- 本机路径、云主机地址、内部服务凭据和未公开的管理接口响应。
+The service uses a column-restricted, read-only source database role. SSO and all writes still verify the upstream identity. Deploy behind the supplied same-origin TLS proxy and keep the data volume private. See [deployment](docs/deploy.md) for limits and [upgrade](docs/upgrade.md) for offline key rotation and recovery.
 
-示例和测试只能使用虚构身份、虚构金额和本地测试地址。发布包只包含受版本控制的源码和已构建前端，不包含运行数据。
+CI checks Rust advisories, dependency licenses and frontend advisories. `RUSTSEC-2023-0071` is excluded only because the affected `rsa` crate belongs to SQLx's inactive optional MySQL dependency in the lockfile; a separate feature-graph check rejects any compiled `rsa` or `sqlx-mysql` dependency. The application does not use MySQL. Other advisories fail CI.
 
-## 报告问题
-
-请通过 GitHub Security Advisories 私下报告安全问题。不要在公开 Issue、讨论区或发布说明中粘贴凭据、Token、账单或可识别个人的信息。
-
-报告时请说明受影响的版本、复现步骤、影响范围和建议的修复方式；如需提供日志，请先删除身份信息、请求头、Cookie 和完整请求内容。
+The application is MIT-licensed. Dependencies retain their own licenses; the Fernet implementation is MPL-2.0 and its source is available from the pinned Cargo dependency. The runtime release includes an SPDX SBOM. Image signatures and SBOM attestations use GitHub Actions OIDC with Sigstore; verify the tag workflow identity and image digest, not only the tag name.

@@ -25,6 +25,21 @@ async fn main() {
 }
 async fn run() -> Result<()> {
     let config = Config::env()?;
+    if std::env::args().nth(1).as_deref() == Some("rotate-session-key") {
+        let arguments = std::env::args().collect::<Vec<_>>();
+        if arguments.len() != 4 || arguments[2] != "--id" {
+            return Err(settlement::error::Error::invalid(
+                "用法：settlement rotate-session-key --id KEY_ID",
+            ));
+        }
+        let _lock = settlement::keys::LedgerLock::acquire(&config.data_dir)?;
+        let store =
+            settlement::store::Store::open(&config.data_dir.join("settlement.sqlite3")).await?;
+        settlement::keys::rotate(&config.data_dir, &store, &arguments[3]).await?;
+        store.close().await;
+        println!("{{\"status\":\"rotated\"}}");
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         let address = if config.bind.ip().is_unspecified() {
             format!("127.0.0.1:{}", config.bind.port())
@@ -92,7 +107,12 @@ async fn run() -> Result<()> {
     }
     let listener = tokio::net::TcpListener::bind(app.config.bind).await?;
     let stop = cancel.clone();
-    let server = axum::serve(listener, app.router()).with_graceful_shutdown(async move {
+    let server = axum::serve(
+        listener,
+        app.router()
+            .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
         shutdown_signal().await;
         stop.cancel();
     });

@@ -3,6 +3,9 @@
 !.env.example
 data/
 session.key
+session.keys*.json
+settlement.lock
+.secret-*
 *.sqlite*
 *.db
 frontend/node_modules/

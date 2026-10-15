@@ -12,4 +12,17 @@ v0.9.0 是最后一个已验证可与 Python 版双向回滚的版本；新版�
 
 回滚前先停止新版本，保存当前账本和密钥，记录最后一次业务写入时间。读取失败或版本不兼容时保留现状排查，不以覆盖账本作为默认修复。
 
+## 会话密钥轮换
+
+先停止服务并备份账本、`session.key`、存在时的 `session.keys.json` 与 `session.keys.pending.json`，再运行：
+
+```sh
+docker compose run --rm --no-deps settlement /app/settlement rotate-session-key --id rotation-01
+docker compose up -d
+```
+
+每次使用新的密钥 ID。命令持有账本独占锁，在事务中重新加密会话；Cookie、CSRF、用户和有效期保持原值。`session.key` 始终保存当前密钥，旧密钥保留在权限 0600 的密钥集中，供已有会话兼容读取。密钥最多保留 32 个，达到上限时需要先审查和归档，不自动丢弃旧密钥。
+
+中断时保留待完成文件；下次启动会根据其中的新旧密钥完成轮换。不要单独删除该文件或混用不同备份的数据库、密钥。若必须立即切回不支持密钥集的旧 Rust 镜像，应先让当前版本完成恢复，使所有会话均可由 `session.key` 解密。无法解密时启动会明确失败，账目不会被修改。
+
 返回 [项目首页](../README.zh-CN.md)。

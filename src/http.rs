@@ -26,35 +26,27 @@ pub struct App {
     pub config: Config,
     pub service: Service,
     pub client: reqwest::Client,
-    pub cipher: Arc<fernet::Fernet>,
+    pub cipher: Arc<crate::keys::Keyring>,
+    pub limiter: Arc<crate::rate::Limiter>,
+    _ledger_lock: Option<Arc<crate::keys::LedgerLock>>,
     pub deletion_lock: Arc<Mutex<()>>,
     pub deletion_wake: Arc<Notify>,
     pub requests: Arc<Semaphore>,
 }
 impl App {
     pub async fn new(config: Config) -> Result<Self> {
+        let ledger_lock = if config.test {
+            None
+        } else {
+            Some(Arc::new(crate::keys::LedgerLock::acquire(
+                &config.data_dir,
+            )?))
+        };
         let store = Store::open(&config.data_dir.join("settlement.sqlite3")).await?;
+        let cipher = crate::keys::Keyring::load(&config.data_dir, &store).await?;
+        let limiter = crate::rate::Limiter::environment(config.test)?;
         let source = Source::new(&config).await?;
         let service = Service::new(store, source).await?;
-        let path = config.data_dir.join("session.key");
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        match opts.open(&path) {
-            Ok(mut file) => {
-                use std::io::Write;
-                file.write_all(fernet::Fernet::generate_key().as_bytes())?;
-                file.sync_all()?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e.into()),
-        }
-        let key = std::fs::read_to_string(path)?;
-        let cipher = fernet::Fernet::new(key.trim()).ok_or_else(Error::unavailable)?;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(6))
             .redirect(reqwest::redirect::Policy::none())
@@ -65,18 +57,16 @@ impl App {
             service,
             client,
             cipher: Arc::new(cipher),
+            limiter: Arc::new(limiter),
+            _ledger_lock: ledger_lock,
             deletion_lock: Arc::new(Mutex::new(())),
             deletion_wake: Arc::new(Notify::new()),
             requests: Arc::new(Semaphore::new(64)),
         })
     }
     pub fn decrypt(&self, encrypted: &str) -> Result<String> {
-        String::from_utf8(
-            self.cipher
-                .decrypt(encrypted)
-                .map_err(|_| Error::new(401, "登录已失效"))?,
-        )
-        .map_err(|_| Error::new(401, "登录已失效"))
+        String::from_utf8(self.cipher.decrypt(encrypted)?)
+            .map_err(|_| Error::new(401, "登录已失效"))
     }
     pub async fn validate(&self, token: &str) -> Result<Value> {
         if token.is_empty() || token.len() > 16384 {
@@ -211,6 +201,7 @@ impl App {
             )
             .await?;
         }
+        store::exec(&mut db,"INSERT INTO rust_session_keys(session_id,key_id) VALUES(?,?) ON CONFLICT(session_id) DO UPDATE SET key_id=excluded.key_id",&[json!(hash(raw.as_bytes())),json!(self.cipher.active)]).await?;
         db.commit().await?;
         let target = if params.get("theme").is_some_and(|s| s == "dark") {
             "/settlement/?theme=dark"
@@ -431,6 +422,7 @@ fn params(request: &Request) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 async fn sso(State(app): State<App>, request: Request) -> Result<Response> {
+    app.limiter.sso(app.limiter.request_ip(&request)).await?;
     app.sso(request.headers(), &params(&request)).await
 }
 async fn index(State(app): State<App>) -> Result<Response> {
@@ -519,6 +511,9 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     let (actor, sid) = app
         .authenticate(&headers, method != "GET" && method != "HEAD")
         .await?;
+    if method != "GET" && method != "HEAD" {
+        app.limiter.write(int(&actor, "id")).await?;
+    }
     if app.config.read_only && method != "GET" && method != "HEAD" {
         return Err(Error::new(403, "当前实例仅用于只读核验"));
     }

@@ -47,4 +47,14 @@ Rust stable（当前 1.99.0）、Node 24.21.0 LTS、pnpm 12.11.2。运行镜像�
 
 水位线、指纹和消费副本在同一次发布事务中更新。同步失败保留上一批有效结果，并显示同步错误；重新启动会完整核对。较老记录的原地修改最迟在每日对账发现，正式预览与结算始终单独复核所选账期。历史消费副本不会随源日志清理而删除。
 
+## 访问与发布安全
+
+SSO 默认每个客户端 IP 每分钟 30 次；业务写入默认每个已验证用户每分钟 120 次，超限返回 `429` 和 `Retry-After: 60`。可分别用 `SETTLEMENT_SSO_PER_MINUTE`、`SETTLEMENT_WRITES_PER_MINUTE` 调整。内存限流表最多保存 10000 个活跃身份，满额时拒绝新的身份请求，过期后释放。
+
+只有回环连接或 `SETTLEMENT_TRUSTED_PROXIES` 中明确列出的代理 IP 可以提供 `X-Real-IP`，不信任任意客户端提交的转发头。Docker 桥接部署时应填入实际 Nginx 连接来源 IP，并确保代理覆盖该头；不配置则按连接来源限流。多个用户共用同一未识别代理时会共享 SSO 限额。
+
+Nginx 配置已关闭结算路径访问日志并设置 `Referrer-Policy: no-referrer`，避免 SSO 查询参数被记录或带往其他页面。Compose 使用只读根文件系统、移除全部 capabilities、禁止提权和运行时健康检查；仅数据卷与临时目录可写。
+
+基础镜像固定 digest，CI 检查 Rust 与前端依赖，发布时生成 SPDX SBOM，并用 GitHub Actions OIDC 对同一个已测试镜像 digest 签名。源码、静态前端、Linux amd64 镜像包、签名与摘要文件随 Release 提供。依赖许可及唯一的未激活依赖例外见 [SECURITY.md](../SECURITY.md)。
+
 返回 [项目首页](../README.zh-CN.md)。

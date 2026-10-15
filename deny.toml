@@ -1,0 +1,15 @@
+[advisories]
+# sqlx-mysql/rsa are lockfile-only optional dependencies. CI separately rejects
+# them in the compiled feature graph; removing that check invalidates this waiver.
+ignore = ["RUSTSEC-2023-0071"]
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CC0-1.0", "OpenSSL", "MPL-2.0", "Unlicense", "CDLA-Permissive-2.0"]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

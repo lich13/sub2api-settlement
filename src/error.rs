@@ -60,10 +60,16 @@ impl From<serde_json::Error> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
             Json(json!({"detail": self.detail.unwrap_or(serde_json::Value::String(self.message))})),
         )
-            .into_response()
+            .into_response();
+        if self.status == 429 {
+            response
+                .headers_mut()
+                .insert("Retry-After", axum::http::HeaderValue::from_static("60"));
+        }
+        response
     }
 }

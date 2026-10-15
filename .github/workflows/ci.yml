@@ -8,11 +8,44 @@ on:
 permissions:
   contents: read
 jobs:
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: 1.99.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: security-tools
+      - name: Install pinned dependency checks
+        run: |
+          cargo install --locked cargo-audit --version 0.22.2
+          cargo install --locked cargo-deny --version 0.20.2
+      - name: Check advisories and compiled feature graph
+        shell: bash
+        run: |
+          cargo tree --locked --all-features --target all --prefix none > /tmp/settlement-dependencies.txt
+          if grep -E '^(rsa|sqlx-mysql) v' /tmp/settlement-dependencies.txt; then
+            exit 1
+          fi
+          cargo audit --ignore RUSTSEC-2023-0071
+          cargo deny --locked check
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 12.11.2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.21.0'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm --dir frontend install --frozen-lockfile
+      - run: pnpm --dir frontend audit --audit-level=low
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
         env:
           POSTGRES_USER: fixture_owner
           POSTGRES_DB: settlement_fixture
@@ -24,19 +57,20 @@ jobs:
     env:
       TEST_POSTGRES_URL: postgresql://fixture_owner@127.0.0.1:5432/settlement_fixture
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
         with:
+          toolchain: 1.99.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --locked --bin settlement
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 12.11.2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.21.0'
           cache: pnpm
@@ -70,27 +104,62 @@ jobs:
           cd /tmp/settlement-release
           sha256sum sub2api-settlement-linux-amd64-image.tar.gz >> SHA256SUMS
       - if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
           path: /tmp/settlement-release/*
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: verify
-    runs-on: ubuntu-latest
+    needs: [verify, security]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
+      packages: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.99.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: 1.99.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Generate Chinese release notes
         run: cargo run --locked -p settlement-tools -- release-notes "${GITHUB_REF_NAME}" /tmp/release-notes.md
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release
           path: release
-      - uses: softprops/action-gh-release@v2
+      - name: Load the tested image
+        run: gzip -dc release/sub2api-settlement-linux-amd64-image.tar.gz | docker load
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: sub2api-settlement:${{ github.sha }}
+          format: spdx-json
+          output-file: release/sub2api-settlement.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: Publish and sign the tested image
+        shell: bash
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          docker tag sub2api-settlement:${{ github.sha }} "$IMAGE:$GITHUB_REF_NAME"
+          docker push "$IMAGE:$GITHUB_REF_NAME"
+          image_digest=$(docker image inspect "$IMAGE:$GITHUB_REF_NAME" --format '{{index .RepoDigests 0}}')
+          test -n "$image_digest"
+          cosign sign --yes --bundle release/image-signature.bundle.json "$image_digest"
+          cosign attest --yes --type spdxjson --predicate release/sub2api-settlement.spdx.json --bundle release/image-sbom.bundle.json "$image_digest"
+          printf '%s\n' "$image_digest" > release/IMAGE_DIGEST
+          cd release
+          sha256sum sub2api-settlement.spdx.json image-signature.bundle.json image-sbom.bundle.json IMAGE_DIGEST >> SHA256SUMS
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: release/*
           body_path: /tmp/release-notes.md
