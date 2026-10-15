@@ -1,0 +1,323 @@
+{
+  "schema_version": 1,
+  "reference_revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+  "data_origin": "synthetic_fixture_only",
+  "cases": [
+    {
+      "id": "bom_crlf_scale_timezone_and_numeric_limits",
+      "input": "﻿Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\r\n2025-01-15T08:00:00.123456+08:00,0001.2300, 模型 α ,00010,20,0,999999999999, fixture-request \r\n2025-01-15T00:00:00.000001Z,0.000000000000000001,fixture-model,10,20,0,0,\r\n2025-01-15T00:00:00.000000+00:00,9999999999.999999999999999999,fixture-model,10,20,0,0,fixture-maximum\r\n",
+      "file_sha256": "33d9eff7c2c08a5132666b3fdb5c8fc337abc010299d0822892acdca669b07fb",
+      "expected": [
+        {
+          "row": 2,
+          "created_at": "2025-01-15T00:00:00.123456+00:00",
+          "amount": "1.2300",
+          "model": "模型 α",
+          "request_id": "fixture-request",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 999999999999
+        },
+        {
+          "row": 3,
+          "created_at": "2025-01-15T00:00:00.000001+00:00",
+          "amount": "1E-18",
+          "model": "fixture-model",
+          "request_id": "",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        },
+        {
+          "row": 4,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "9999999999.999999999999999999",
+          "model": "fixture-model",
+          "request_id": "fixture-maximum",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "quoted_commas_newline_and_quotes",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,\"fixture,\"\"model\"\"\nnext-line\",10,20,0,0,\"fixture,request\"\n2025-01-15T00:00:00.000000+00:00,2.00,fixture-model,10,20,0,0,fixture-second\n",
+      "file_sha256": "bd0af94aa4f7dd0209cf9f6c8257e1cc663a1dbb475ed648f1afe05cd711e132",
+      "expected": [
+        {
+          "row": 2,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture,\"model\"\nnext-line",
+          "request_id": "fixture,request",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        },
+        {
+          "row": 3,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "2.00",
+          "model": "fixture-model",
+          "request_id": "fixture-second",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "upstream_id_column_fallback",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Upstream Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,upstream-fixture\n",
+      "file_sha256": "8015b9dfd71735e59bbd595fe6170692eb061268f7f801f8ea9b47109bf93056",
+      "expected": [
+        {
+          "row": 2,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture-model",
+          "request_id": "upstream-fixture",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "request_id_truthiness_before_trimming",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID,Upstream Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,,upstream-fixture\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,   ,ignored-fixture\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,request-fixture,ignored-fixture\n",
+      "file_sha256": "aa13b5a1f3fc286aad18884951484879b29111283bc166a640a0c66755208cb7",
+      "expected": [
+        {
+          "row": 2,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture-model",
+          "request_id": "upstream-fixture",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        },
+        {
+          "row": 3,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture-model",
+          "request_id": "",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        },
+        {
+          "row": 4,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture-model",
+          "request_id": "request-fixture",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "missing_optional_request_column",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0\n",
+      "file_sha256": "e2ad417d9efda342f469fae277c7ea45f8ec2a5f4269354045da0147fac5e0c9",
+      "expected": [
+        {
+          "row": 2,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture-model",
+          "request_id": "",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "unknown_extra_column",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID,Extra\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,,fixture-extra\n",
+      "file_sha256": "7c89fcc16153494fc5c91d78e7f54c05a2351b8409e6047d830bcd5706b0c92b",
+      "expected": [
+        {
+          "row": 2,
+          "created_at": "2025-01-15T00:00:00.000000+00:00",
+          "amount": "1.00",
+          "model": "fixture-model",
+          "request_id": "",
+          "input_tokens": 10,
+          "output_tokens": 20,
+          "cache_read_tokens": 0,
+          "cache_creation_tokens": 0
+        }
+      ]
+    },
+    {
+      "id": "reject_missing_header",
+      "input": "Time,Billed Cost\n2025-01-15T00:00:00Z,1.00\n",
+      "file_sha256": "5510a71db8704d699ee5914e5fb981fa61536c92b206045da32c550172f68483",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 缺少必要字段或列名重复"
+      }
+    },
+    {
+      "id": "reject_duplicate_header",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID,Model\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,,duplicate\n",
+      "file_sha256": "473cd6affbf0b10fb69a4ca3fcc88933fce82a94760b8cb27242e42471c5fd15",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 缺少必要字段或列名重复"
+      }
+    },
+    {
+      "id": "reject_no_rows",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n",
+      "file_sha256": "cf1c9830f568910c4bb1ea618ba2909836bf1a21244e55e72dc8dc08aec30c74",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 没有请求记录"
+      }
+    },
+    {
+      "id": "reject_empty",
+      "input": "",
+      "file_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 缺少必要字段或列名重复"
+      }
+    },
+    {
+      "id": "reject_extra_cells",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20,0,0,,extra\n",
+      "file_sha256": "757c3466458f1aab1027df6393682c490d660e84063c7d35f94790c0ab20638c",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：列数不一致"
+      }
+    },
+    {
+      "id": "reject_missing_required_cell",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,10,20\n",
+      "file_sha256": "092dcc4ba83c4d9e31eb41ac2f5f6a5f6e5e6fdabaca5a3fb0df7ace1437a3ad",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：列数不一致"
+      }
+    },
+    {
+      "id": "reject_negative_cost",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,-1.00,fixture-model,10,20,0,0,\n",
+      "file_sha256": "03aa53a4378356093de64aa90c44c87fd45358a25331c496fdb349739cd9250e",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Billed Cost 必须为非负十进制金额"
+      }
+    },
+    {
+      "id": "reject_scientific_cost",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1e-8,fixture-model,10,20,0,0,\n",
+      "file_sha256": "d75d6f066c93c6a4384e00100d4ef008eb624846498e9de3e906ffd0b700467b",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Billed Cost 必须为非负十进制金额"
+      }
+    },
+    {
+      "id": "reject_nineteen_fractional_digits",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,0.0000000000000000001,fixture-model,10,20,0,0,\n",
+      "file_sha256": "aab88c7ad5a8712b09b01fd4227658a15d97e8b323d6ef0985086ae847e5287a",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Billed Cost 必须为非负十进制金额"
+      }
+    },
+    {
+      "id": "reject_eleven_integer_digits",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,10000000000,fixture-model,10,20,0,0,\n",
+      "file_sha256": "c8d069aa084b68c78093f648670a2f5c23148da7461ca1682ed7884a3ed3dcc5",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Billed Cost 必须为非负十进制金额"
+      }
+    },
+    {
+      "id": "reject_signed_tokens",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,+1,0,0,0,\n",
+      "file_sha256": "582ace6b6d45a35350df06f8d9cd6d1e84009b95e08cd5956359eb36b0e8ecba",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Input Tokens 必须为非负整数"
+      }
+    },
+    {
+      "id": "reject_decimal_tokens",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,1.0,0,0,0,\n",
+      "file_sha256": "e2f091e126d486604054f25246966fe31c1d86964bb571698aa23b7d09bd220a",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Input Tokens 必须为非负整数"
+      }
+    },
+    {
+      "id": "reject_thirteen_digit_tokens",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,fixture-model,1000000000000,0,0,0,\n",
+      "file_sha256": "60588bfba0edd9d35263c5305a8da42997083f5ee86a373bd2641964e0d8d75d",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Input Tokens 必须为非负整数"
+      }
+    },
+    {
+      "id": "reject_blank_model",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,   ,10,20,0,0,\n",
+      "file_sha256": "9a072a92ff99e20f4530bb0327f71fe4f77f4c13df75b7ccec4f133957e3e7cb",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Model 无效"
+      }
+    },
+    {
+      "id": "reject_long_model",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,10,20,0,0,\n",
+      "file_sha256": "cd0265b682ca1c2fa11456c393fc9289e677b0130ad3ab4033bcba9a4ff51ce0",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：Model 无效"
+      }
+    },
+    {
+      "id": "reject_timezone_missing",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00,1.00,fixture-model,10,20,0,0,\n",
+      "file_sha256": "c04f03a1050cab358076c6dcbe8390a486b5078dd4c3bf68e1924e7f7bf1d619",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 2 行：时间必须包含时区"
+      }
+    },
+    {
+      "id": "quoted_newline_error_uses_physical_line",
+      "input": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-15T00:00:00.000000+00:00,1.00,\"fixture\nmodel\",10,20,0,0,\n2025-01-15T00:00:00.000000+00:00,1e2,fixture-model,10,20,0,0,\n",
+      "file_sha256": "3ec73b34e749559f75e998f5f16cf60184e9894d9e4e18ccc30f820a67bf7aba",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "CSV 第 4 行：Billed Cost 必须为非负十进制金额"
+      }
+    }
+  ]
+}

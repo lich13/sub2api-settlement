@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "reference_revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+  "data_origin": "synthetic_fixture_only",
+  "key_origin": "public_synthetic_bytes_00_through_1f_never_a_real_secret",
+  "library": "cryptography==46.0.3",
+  "encrypt": [
+    {
+      "id": "empty_plaintext",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "iv_hex": "101112131415161718191a1b1c1d1e1f",
+      "timestamp": 1609459200,
+      "plaintext": "",
+      "plaintext_hex": "",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH5xU1XFwLPoPA_NiFWdrq3h-haZPOM1VqCtFHrXXyaNJ1vn16n79DX9B5eglwtQd2Q==",
+      "expected_plaintext": ""
+    },
+    {
+      "id": "ascii_fixture_token",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "iv_hex": "101112131415161718191a1b1c1d1e1f",
+      "timestamp": 1609459200,
+      "plaintext": "fixture-session@example.invalid",
+      "plaintext_hex": "666978747572652d73657373696f6e406578616d706c652e696e76616c6964",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "expected_plaintext": "fixture-session@example.invalid"
+    },
+    {
+      "id": "unicode_utf8_plaintext",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "iv_hex": "101112131415161718191a1b1c1d1e1f",
+      "timestamp": 1609459200,
+      "plaintext": "虚构会话🙂fixture",
+      "plaintext_hex": "e8999ae69e84e4bc9ae8af9df09f998266697874757265",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH7lsHHyxfZ0A6zs3ugTyQTw0mSDz3WRphH4uIinRa4iv8WffJwALcEkqlKD-Nv3Tj5vKL4KUFXhR_uhEqhsgv6k=",
+      "expected_plaintext": "虚构会话🙂fixture"
+    },
+    {
+      "id": "one_aes_block",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "iv_hex": "101112131415161718191a1b1c1d1e1f",
+      "timestamp": 1609459200,
+      "plaintext": "0123456789abcdef",
+      "plaintext_hex": "30313233343536373839616263646566",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eHw_yHwO9rhrm-typDeRgQ8YryFUnTtBs9K7v5icmMIFuQb8alb-5o87VzN132bJvnXrb7enJsvmm608JfXAfHB4=",
+      "expected_plaintext": "0123456789abcdef"
+    },
+    {
+      "id": "block_plus_one",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "iv_hex": "101112131415161718191a1b1c1d1e1f",
+      "timestamp": 1609459200,
+      "plaintext": "0123456789abcdefg",
+      "plaintext_hex": "3031323334353637383961626364656667",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eHw_yHwO9rhrm-typDeRgQ8Z4XWw5ZBGpFdJg53eEmg6-egJe5FS1R1heFgCG1mJJTBqwPUVeXkHqc_U9kS_6eQ4=",
+      "expected_plaintext": "0123456789abcdefg"
+    },
+    {
+      "id": "unix_epoch_timestamp",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "iv_hex": "101112131415161718191a1b1c1d1e1f",
+      "timestamp": 0,
+      "plaintext": "fixture-epoch",
+      "plaintext_hex": "666978747572652d65706f6368",
+      "token": "gAAAAAAAAAAAEBESExQVFhcYGRobHB0eHySTqL8veu8TsYFw8gT4G-l52zitC2utWMAsWvKAMlzHfpWhjISJTVjbaAkvAb_5DA==",
+      "expected_plaintext": "fixture-epoch"
+    }
+  ],
+  "decrypt": [
+    {
+      "id": "timeless_decrypt",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "ttl": null,
+      "current_time": null,
+      "expected": "fixture-session@example.invalid"
+    },
+    {
+      "id": "ttl_exact_boundary",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "ttl": 60,
+      "current_time": 1609459260,
+      "expected": "fixture-session@example.invalid"
+    },
+    {
+      "id": "ttl_expired_by_one_second",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "ttl": 60,
+      "current_time": 1609459261,
+      "expected_error": {
+        "type": "InvalidToken",
+        "message": ""
+      }
+    },
+    {
+      "id": "future_clock_skew_exact_boundary",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "ttl": 60,
+      "current_time": 1609459140,
+      "expected": "fixture-session@example.invalid"
+    },
+    {
+      "id": "future_clock_skew_exceeded",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "ttl": 60,
+      "current_time": 1609459139,
+      "expected_error": {
+        "type": "InvalidToken",
+        "message": ""
+      }
+    },
+    {
+      "id": "wrong_key",
+      "key_base64url": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=",
+      "ttl": null,
+      "current_time": null,
+      "expected_error": {
+        "type": "InvalidToken",
+        "message": ""
+      }
+    },
+    {
+      "id": "tampered_mac",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikg=",
+      "ttl": null,
+      "current_time": null,
+      "expected_error": {
+        "type": "InvalidToken",
+        "message": ""
+      }
+    },
+    {
+      "id": "truncated_token",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "gAAAAABf7mYAEBESExQVFhcYGRobHB",
+      "ttl": null,
+      "current_time": null,
+      "expected_error": {
+        "type": "InvalidToken",
+        "message": ""
+      }
+    },
+    {
+      "id": "invalid_token",
+      "key_base64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token": "fixture-invalid",
+      "ttl": null,
+      "current_time": null,
+      "expected_error": {
+        "type": "InvalidToken",
+        "message": ""
+      }
+    }
+  ]
+}

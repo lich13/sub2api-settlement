@@ -1,0 +1,1617 @@
+{
+  "schema_version": 1,
+  "reference_revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+  "data_origin": "synthetic_fixture_only",
+  "decimal": [
+    {
+      "id": "integer_zero",
+      "input": "0",
+      "expected": "0"
+    },
+    {
+      "id": "trailing_scale",
+      "input": "001.2300",
+      "expected": "1.2300"
+    },
+    {
+      "id": "explicit_plus_and_whitespace",
+      "input": " +1.2300 ",
+      "expected": "1.2300"
+    },
+    {
+      "id": "negative_zero",
+      "input": "-0.00",
+      "expected": "-0.00"
+    },
+    {
+      "id": "scaled_zero",
+      "input": "0.000000000000000000",
+      "expected": "0E-18"
+    },
+    {
+      "id": "fixed_scientific_boundary",
+      "input": "0.0000010",
+      "expected": "0.0000010"
+    },
+    {
+      "id": "small_scientific",
+      "input": "0.0000001",
+      "expected": "1E-7"
+    },
+    {
+      "id": "tiny_scientific_scale",
+      "input": "0.00000000000000000100",
+      "expected": "1.00E-18"
+    },
+    {
+      "id": "positive_exponent",
+      "input": "1.2300E+12",
+      "expected": "1.2300E+12"
+    },
+    {
+      "id": "negative_exponent",
+      "input": "1.2300e-70",
+      "expected": "1.2300E-70"
+    },
+    {
+      "id": "sixty_plus_digits",
+      "input": "123456789012345678901234567890123456789012345678901234567890.123400",
+      "expected": "123456789012345678901234567890123456789012345678901234567890.123400"
+    },
+    {
+      "id": "numeric_integer",
+      "input": 100,
+      "expected": "100"
+    },
+    {
+      "id": "numeric_float",
+      "input": 1.25,
+      "expected": "1.25"
+    },
+    {
+      "id": "reject_negative",
+      "input": "-0.0001",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费记录包含无效或负数金额"
+      }
+    },
+    {
+      "id": "reject_nan",
+      "input": "NaN",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费记录包含无效或负数金额"
+      }
+    },
+    {
+      "id": "reject_snan",
+      "input": "sNaN",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费记录包含无效或负数金额"
+      }
+    },
+    {
+      "id": "reject_infinity",
+      "input": "Infinity",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费记录包含无效或负数金额"
+      }
+    },
+    {
+      "id": "reject_negative_infinity",
+      "input": "-Infinity",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费记录包含无效或负数金额"
+      }
+    },
+    {
+      "id": "reject_empty",
+      "input": "",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费金额无效"
+      }
+    },
+    {
+      "id": "reject_text",
+      "input": "fixture-invalid",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费金额无效"
+      }
+    },
+    {
+      "id": "reject_null",
+      "input": null,
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费金额无效"
+      }
+    },
+    {
+      "id": "reject_boolean",
+      "input": true,
+      "expected_error": {
+        "type": "ValueError",
+        "message": "消费金额无效"
+      }
+    }
+  ],
+  "cents": [
+    {
+      "input": "0",
+      "expected": 0
+    },
+    {
+      "input": "0.0",
+      "expected": 0
+    },
+    {
+      "input": "0.00",
+      "expected": 0
+    },
+    {
+      "input": "0.01",
+      "expected": 1
+    },
+    {
+      "input": "12.3",
+      "expected": 1230
+    },
+    {
+      "input": "12.34",
+      "expected": 1234
+    },
+    {
+      "input": "9999999999.99",
+      "expected": 999999999999
+    },
+    {
+      "input": "-0",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "-1",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "01",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "1.001",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "1e2",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "+1",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": ".1",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "1.",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "NaN",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": " 1",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "1 ",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": "10000000000",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": 1,
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": 1.2,
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    },
+    {
+      "input": null,
+      "expected_error": {
+        "type": "ValueError",
+        "message": "金额须为非负数，最多两位小数"
+      }
+    }
+  ],
+  "allocate": [
+    {
+      "id": "numeric_key_tie_p28",
+      "precision": 28,
+      "cost_fen": 100,
+      "weights": [
+        [
+          100,
+          "1.00"
+        ],
+        [
+          10,
+          "1.0"
+        ],
+        [
+          2,
+          "1"
+        ]
+      ],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1",
+          "amount_fen": 34,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 10,
+          "consumption": "1.0",
+          "amount_fen": 33,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 100,
+          "consumption": "1.00",
+          "amount_fen": 33,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "fewer_fen_than_users_p28",
+      "precision": 28,
+      "cost_fen": 2,
+      "weights": [
+        [
+          100,
+          "1"
+        ],
+        [
+          10,
+          "1"
+        ],
+        [
+          2,
+          "1"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1",
+          "amount_fen": 1,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "1",
+          "amount_fen": 1,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "1",
+          "amount_fen": 0,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "fractional_weights_p28",
+      "precision": 28,
+      "cost_fen": 1,
+      "weights": [
+        [
+          2,
+          "0.1"
+        ],
+        [
+          10,
+          "0.2"
+        ],
+        [
+          100,
+          "0.7"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.1",
+          "amount_fen": 0,
+          "share": "0.1",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "0.2",
+          "amount_fen": 0,
+          "share": "0.2",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "0.7",
+          "amount_fen": 1,
+          "share": "0.7",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "tiny_exact_weights_p28",
+      "precision": 28,
+      "cost_fen": 100,
+      "weights": [
+        [
+          10,
+          "2E-70"
+        ],
+        [
+          2,
+          "1.00E-70"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.00E-70",
+          "amount_fen": 33,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "2E-70",
+          "amount_fen": 67,
+          "share": "0.6666666666666666666666666667",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "large_cost_exact_remainders_p28",
+      "precision": 28,
+      "cost_fen": 999999999999,
+      "weights": [
+        [
+          100,
+          "5"
+        ],
+        [
+          2,
+          "2"
+        ],
+        [
+          10,
+          "3"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "2",
+          "amount_fen": 200000000000,
+          "share": "0.2",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "3",
+          "amount_fen": 300000000000,
+          "share": "0.3",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "5",
+          "amount_fen": 499999999999,
+          "share": "0.5",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "zero_weights_creditor_fallback_p28",
+      "precision": 28,
+      "cost_fen": 125,
+      "weights": [
+        [
+          10,
+          "0.000"
+        ],
+        [
+          100,
+          "-0.00"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0",
+          "amount_fen": 125,
+          "share": "0",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "empty_weights_creditor_fallback_p28",
+      "precision": 28,
+      "cost_fen": 125,
+      "weights": [],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 10,
+          "consumption": "0",
+          "amount_fen": 125,
+          "share": "0",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "zero_cost_keeps_positive_users_p28",
+      "precision": 28,
+      "cost_fen": 0,
+      "weights": [
+        [
+          10,
+          "2.00"
+        ],
+        [
+          2,
+          "1.0"
+        ],
+        [
+          100,
+          "0"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.0",
+          "amount_fen": 0,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "2.00",
+          "amount_fen": 0,
+          "share": "0.6666666666666666666666666667",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "creditor_absent_p28",
+      "precision": 28,
+      "cost_fen": 5,
+      "weights": [
+        [
+          100,
+          "2.0"
+        ],
+        [
+          10,
+          "3.00"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 10,
+          "consumption": "3.00",
+          "amount_fen": 3,
+          "share": "0.6",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "2.0",
+          "amount_fen": 2,
+          "share": "0.4",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "sequential_decimal_division_p28",
+      "precision": 28,
+      "cost_fen": 17,
+      "weights": [
+        [
+          100,
+          "2.34567891E-60"
+        ],
+        [
+          2,
+          "1.23456789E-60"
+        ],
+        [
+          10,
+          "9.87654321E-60"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.23456789E-60",
+          "amount_fen": 2,
+          "share": "0.09174311920469657384510230609",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "9.87654321E-60",
+          "amount_fen": 12,
+          "share": "0.7339449603256460416446670851",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "2.34567891E-60",
+          "amount_fen": 3,
+          "share": "0.1743119204696573845102306089",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "sixty_digit_ratio_p28",
+      "precision": 28,
+      "cost_fen": 31,
+      "weights": [
+        [
+          2,
+          "1.2345678901234567890123456789012345678901234567890123456789012345"
+        ],
+        [
+          10,
+          "9.8765432109876543210987654321098765432109876543210987654321098765"
+        ]
+      ],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.2345678901234567890123456789012345678901234567890123456789012345",
+          "amount_fen": 3,
+          "share": "0.1111111102111111102111111102",
+          "self_covered": false
+        },
+        {
+          "user_id": 10,
+          "consumption": "9.8765432109876543210987654321098765432109876543210987654321098765",
+          "amount_fen": 28,
+          "share": "0.8888888897888888897888888899",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "numeric_key_tie_p60",
+      "precision": 60,
+      "cost_fen": 100,
+      "weights": [
+        [
+          100,
+          "1.00"
+        ],
+        [
+          10,
+          "1.0"
+        ],
+        [
+          2,
+          "1"
+        ]
+      ],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1",
+          "amount_fen": 34,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 10,
+          "consumption": "1.0",
+          "amount_fen": 33,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 100,
+          "consumption": "1.00",
+          "amount_fen": 33,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "fewer_fen_than_users_p60",
+      "precision": 60,
+      "cost_fen": 2,
+      "weights": [
+        [
+          100,
+          "1"
+        ],
+        [
+          10,
+          "1"
+        ],
+        [
+          2,
+          "1"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1",
+          "amount_fen": 1,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "1",
+          "amount_fen": 1,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "1",
+          "amount_fen": 0,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "fractional_weights_p60",
+      "precision": 60,
+      "cost_fen": 1,
+      "weights": [
+        [
+          2,
+          "0.1"
+        ],
+        [
+          10,
+          "0.2"
+        ],
+        [
+          100,
+          "0.7"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.1",
+          "amount_fen": 0,
+          "share": "0.1",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "0.2",
+          "amount_fen": 0,
+          "share": "0.2",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "0.7",
+          "amount_fen": 1,
+          "share": "0.7",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "tiny_exact_weights_p60",
+      "precision": 60,
+      "cost_fen": 100,
+      "weights": [
+        [
+          10,
+          "2E-70"
+        ],
+        [
+          2,
+          "1.00E-70"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.00E-70",
+          "amount_fen": 33,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "2E-70",
+          "amount_fen": 67,
+          "share": "0.666666666666666666666666666666666666666666666666666666666667",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "large_cost_exact_remainders_p60",
+      "precision": 60,
+      "cost_fen": 999999999999,
+      "weights": [
+        [
+          100,
+          "5"
+        ],
+        [
+          2,
+          "2"
+        ],
+        [
+          10,
+          "3"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "2",
+          "amount_fen": 200000000000,
+          "share": "0.2",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "3",
+          "amount_fen": 300000000000,
+          "share": "0.3",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "5",
+          "amount_fen": 499999999999,
+          "share": "0.5",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "zero_weights_creditor_fallback_p60",
+      "precision": 60,
+      "cost_fen": 125,
+      "weights": [
+        [
+          10,
+          "0.000"
+        ],
+        [
+          100,
+          "-0.00"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0",
+          "amount_fen": 125,
+          "share": "0",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "empty_weights_creditor_fallback_p60",
+      "precision": 60,
+      "cost_fen": 125,
+      "weights": [],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 10,
+          "consumption": "0",
+          "amount_fen": 125,
+          "share": "0",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "zero_cost_keeps_positive_users_p60",
+      "precision": 60,
+      "cost_fen": 0,
+      "weights": [
+        [
+          10,
+          "2.00"
+        ],
+        [
+          2,
+          "1.0"
+        ],
+        [
+          100,
+          "0"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.0",
+          "amount_fen": 0,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "2.00",
+          "amount_fen": 0,
+          "share": "0.666666666666666666666666666666666666666666666666666666666667",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "creditor_absent_p60",
+      "precision": 60,
+      "cost_fen": 5,
+      "weights": [
+        [
+          100,
+          "2.0"
+        ],
+        [
+          10,
+          "3.00"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 10,
+          "consumption": "3.00",
+          "amount_fen": 3,
+          "share": "0.6",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "2.0",
+          "amount_fen": 2,
+          "share": "0.4",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "sequential_decimal_division_p60",
+      "precision": 60,
+      "cost_fen": 17,
+      "weights": [
+        [
+          100,
+          "2.34567891E-60"
+        ],
+        [
+          2,
+          "1.23456789E-60"
+        ],
+        [
+          10,
+          "9.87654321E-60"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.23456789E-60",
+          "amount_fen": 2,
+          "share": "0.0917431192046965738451023060885231128014012904998879446733672",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "9.87654321E-60",
+          "amount_fen": 12,
+          "share": "0.733944960325646041644667085059165607058469659511317587989916",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "2.34567891E-60",
+          "amount_fen": 3,
+          "share": "0.174311920469657384510230608852311280140129049988794467336717",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "sixty_digit_ratio_p60",
+      "precision": 60,
+      "cost_fen": 31,
+      "weights": [
+        [
+          2,
+          "1.2345678901234567890123456789012345678901234567890123456789012345"
+        ],
+        [
+          10,
+          "9.8765432109876543210987654321098765432109876543210987654321098765"
+        ]
+      ],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.2345678901234567890123456789012345678901234567890123456789012345",
+          "amount_fen": 3,
+          "share": "0.111111110211111110211111110211111110211111110211111110211111",
+          "self_covered": false
+        },
+        {
+          "user_id": 10,
+          "consumption": "9.8765432109876543210987654321098765432109876543210987654321098765",
+          "amount_fen": 28,
+          "share": "0.888888889788888889788888889788888889788888889788888889788890",
+          "self_covered": true
+        }
+      ]
+    }
+  ],
+  "allocate_matched": [
+    {
+      "id": "half_up_below_p28",
+      "precision": 28,
+      "weights": [
+        [
+          2,
+          "0.004999999999999999"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.004999999999999999",
+          "amount_fen": 0,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "half_up_exact_p28",
+      "precision": 28,
+      "weights": [
+        [
+          2,
+          "0.005"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.005",
+          "amount_fen": 1,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "half_up_above_p28",
+      "precision": 28,
+      "weights": [
+        [
+          2,
+          "0.005000000000000001"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.005000000000000001",
+          "amount_fen": 1,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "three_half_fen_numeric_tie_p28",
+      "precision": 28,
+      "weights": [
+        [
+          100,
+          "0.0050"
+        ],
+        [
+          10,
+          "0.00500"
+        ],
+        [
+          2,
+          "0.005"
+        ]
+      ],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.005",
+          "amount_fen": 1,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 10,
+          "consumption": "0.00500",
+          "amount_fen": 1,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 100,
+          "consumption": "0.0050",
+          "amount_fen": 0,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "total_rounds_once_p28",
+      "precision": 28,
+      "weights": [
+        [
+          100,
+          "0.004"
+        ],
+        [
+          10,
+          "0.004"
+        ],
+        [
+          2,
+          "0.004"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.004",
+          "amount_fen": 1,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "0.004",
+          "amount_fen": 0,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "0.004",
+          "amount_fen": 0,
+          "share": "0.3333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "mixed_scale_remainder_p28",
+      "precision": 28,
+      "weights": [
+        [
+          100,
+          "1.001"
+        ],
+        [
+          10,
+          "1.00900"
+        ],
+        [
+          2,
+          "2.0050"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "2.0050",
+          "amount_fen": 201,
+          "share": "0.4993773349937733499377334994",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "1.00900",
+          "amount_fen": 101,
+          "share": "0.2513075965130759651307596513",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "1.001",
+          "amount_fen": 100,
+          "share": "0.2493150684931506849315068493",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "zero_and_tiny_positive_p28",
+      "precision": 28,
+      "weights": [
+        [
+          100,
+          "0E-18"
+        ],
+        [
+          10,
+          "-0.00"
+        ],
+        [
+          2,
+          "1E-70"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1E-70",
+          "amount_fen": 0,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "zero_weights_empty_result_p28",
+      "precision": 28,
+      "weights": [
+        [
+          2,
+          "0.00"
+        ],
+        [
+          10,
+          "0E-18"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": []
+    },
+    {
+      "id": "empty_weights_p28",
+      "precision": 28,
+      "weights": [],
+      "creditor_id": 2,
+      "expected": []
+    },
+    {
+      "id": "reduced_fraction_share_p28",
+      "precision": 28,
+      "weights": [
+        [
+          100,
+          "2.34567891E-60"
+        ],
+        [
+          2,
+          "1.23456789E-60"
+        ],
+        [
+          10,
+          "9.87654321E-60"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.23456789E-60",
+          "amount_fen": 0,
+          "share": "0.09174311920469657384510230609",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "9.87654321E-60",
+          "amount_fen": 0,
+          "share": "0.7339449603256460416446670851",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "2.34567891E-60",
+          "amount_fen": 0,
+          "share": "0.1743119204696573845102306089",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "half_up_below_p60",
+      "precision": 60,
+      "weights": [
+        [
+          2,
+          "0.004999999999999999"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.004999999999999999",
+          "amount_fen": 0,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "half_up_exact_p60",
+      "precision": 60,
+      "weights": [
+        [
+          2,
+          "0.005"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.005",
+          "amount_fen": 1,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "half_up_above_p60",
+      "precision": 60,
+      "weights": [
+        [
+          2,
+          "0.005000000000000001"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.005000000000000001",
+          "amount_fen": 1,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "three_half_fen_numeric_tie_p60",
+      "precision": 60,
+      "weights": [
+        [
+          100,
+          "0.0050"
+        ],
+        [
+          10,
+          "0.00500"
+        ],
+        [
+          2,
+          "0.005"
+        ]
+      ],
+      "creditor_id": 10,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.005",
+          "amount_fen": 1,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 10,
+          "consumption": "0.00500",
+          "amount_fen": 1,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 100,
+          "consumption": "0.0050",
+          "amount_fen": 0,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "total_rounds_once_p60",
+      "precision": 60,
+      "weights": [
+        [
+          100,
+          "0.004"
+        ],
+        [
+          10,
+          "0.004"
+        ],
+        [
+          2,
+          "0.004"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "0.004",
+          "amount_fen": 1,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "0.004",
+          "amount_fen": 0,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "0.004",
+          "amount_fen": 0,
+          "share": "0.333333333333333333333333333333333333333333333333333333333333",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "mixed_scale_remainder_p60",
+      "precision": 60,
+      "weights": [
+        [
+          100,
+          "1.001"
+        ],
+        [
+          10,
+          "1.00900"
+        ],
+        [
+          2,
+          "2.0050"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "2.0050",
+          "amount_fen": 201,
+          "share": "0.499377334993773349937733499377334993773349937733499377334994",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "1.00900",
+          "amount_fen": 101,
+          "share": "0.251307596513075965130759651307596513075965130759651307596513",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "1.001",
+          "amount_fen": 100,
+          "share": "0.249315068493150684931506849315068493150684931506849315068493",
+          "self_covered": false
+        }
+      ]
+    },
+    {
+      "id": "zero_and_tiny_positive_p60",
+      "precision": 60,
+      "weights": [
+        [
+          100,
+          "0E-18"
+        ],
+        [
+          10,
+          "-0.00"
+        ],
+        [
+          2,
+          "1E-70"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1E-70",
+          "amount_fen": 0,
+          "share": "1",
+          "self_covered": true
+        }
+      ]
+    },
+    {
+      "id": "zero_weights_empty_result_p60",
+      "precision": 60,
+      "weights": [
+        [
+          2,
+          "0.00"
+        ],
+        [
+          10,
+          "0E-18"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": []
+    },
+    {
+      "id": "empty_weights_p60",
+      "precision": 60,
+      "weights": [],
+      "creditor_id": 2,
+      "expected": []
+    },
+    {
+      "id": "reduced_fraction_share_p60",
+      "precision": 60,
+      "weights": [
+        [
+          100,
+          "2.34567891E-60"
+        ],
+        [
+          2,
+          "1.23456789E-60"
+        ],
+        [
+          10,
+          "9.87654321E-60"
+        ]
+      ],
+      "creditor_id": 2,
+      "expected": [
+        {
+          "user_id": 2,
+          "consumption": "1.23456789E-60",
+          "amount_fen": 0,
+          "share": "0.0917431192046965738451023060885231128014012904998879446733672",
+          "self_covered": true
+        },
+        {
+          "user_id": 10,
+          "consumption": "9.87654321E-60",
+          "amount_fen": 0,
+          "share": "0.733944960325646041644667085059165607058469659511317587989916",
+          "self_covered": false
+        },
+        {
+          "user_id": 100,
+          "consumption": "2.34567891E-60",
+          "amount_fen": 0,
+          "share": "0.174311920469657384510230608852311280140129049988794467336717",
+          "self_covered": false
+        }
+      ]
+    }
+  ]
+}

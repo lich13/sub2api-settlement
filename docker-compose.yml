@@ -1,0 +1,28 @@
+services:
+  settlement:
+    build: .
+    image: sub2api-settlement:${APP_REVISION:-local}
+    container_name: sub2api-settlement
+    restart: unless-stopped
+    stop_grace_period: 60s
+    env_file: .env
+    ports:
+      - "127.0.0.1:18082:18082"
+    volumes:
+      - ./data:/data
+    networks:
+      - sub2api
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, /app/settlement, healthcheck]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+networks:
+  sub2api:
+    external: true
+    name: sub2api_sub2api-network

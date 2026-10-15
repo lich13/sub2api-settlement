@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "reference_revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+  "data_origin": "synthetic_fixture_only",
+  "cases": [
+    {
+      "input": "2025-01-15T00:00:00Z",
+      "expected": "2025-01-15T00:00:00.000000+00:00"
+    },
+    {
+      "input": "2025-01-15T08:00:00+08:00",
+      "expected": "2025-01-15T00:00:00.000000+00:00"
+    },
+    {
+      "input": "2025-01-14T18:30:00-05:30",
+      "expected": "2025-01-15T00:00:00.000000+00:00"
+    },
+    {
+      "input": "2025-01-15T00:00:00.1+00:00",
+      "expected": "2025-01-15T00:00:00.100000+00:00"
+    },
+    {
+      "input": "2025-01-15T08:00:00.123456+08:00",
+      "expected": "2025-01-15T00:00:00.123456+00:00"
+    },
+    {
+      "input": "2025-01-15T00:00:00.1234567Z",
+      "expected": "2025-01-15T00:00:00.123456+00:00"
+    },
+    {
+      "input": "2025-01-15 00:00:00+00:00",
+      "expected": "2025-01-15T00:00:00.000000+00:00"
+    },
+    {
+      "input": "2025-01-15T00:00:00-00:00",
+      "expected": "2025-01-15T00:00:00.000000+00:00"
+    },
+    {
+      "input": "2024-12-31T23:59:59.999999-01:00",
+      "expected": "2025-01-01T00:59:59.999999+00:00"
+    },
+    {
+      "input": "2025-01-01T00:00:00.000001+01:00",
+      "expected": "2024-12-31T23:00:00.000001+00:00"
+    },
+    {
+      "input": "2025-01-15T00:00:00",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "时间必须包含时区"
+      }
+    },
+    {
+      "input": "2025-01-15",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "时间必须包含时区"
+      }
+    },
+    {
+      "input": "2025-02-30T00:00:00Z",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "day is out of range for month"
+      }
+    },
+    {
+      "input": "fixture-invalid",
+      "expected_error": {
+        "type": "ValueError",
+        "message": "Invalid isoformat string: 'fixture-invalid'"
+      }
+    }
+  ]
+}

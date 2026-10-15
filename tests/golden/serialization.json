@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "reference_revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+  "data_origin": "synthetic_fixture_only",
+  "cases": [
+    {
+      "id": "unicode_controls_and_nested_key_sort",
+      "value": {
+        "z": "引号\"、反斜线\\、换行\n、制表\t、空字符\u0000、分隔  、emoji🙂",
+        "a": [
+          true,
+          false,
+          null,
+          {
+            "z": 1,
+            "a": "fixture/example.invalid"
+          }
+        ]
+      },
+      "integer_key_paths": [],
+      "expected_json": "{\"a\":[true,false,null,{\"a\":\"fixture/example.invalid\",\"z\":1}],\"z\":\"引号\\\"、反斜线\\\\、换行\\n、制表\\t、空字符\\u0000、分隔  、emoji🙂\"}",
+      "expected_sha256": "ce93e3ec67920ae19444385b928fd8a366ff2654b562b81bc548d6879702601c"
+    },
+    {
+      "id": "integer_keys_sort_numerically",
+      "value": {
+        "100": "1.00",
+        "2": "2.000",
+        "10": "3E-18"
+      },
+      "integer_key_paths": [
+        []
+      ],
+      "expected_json": "{\"2\":\"2.000\",\"10\":\"3E-18\",\"100\":\"1.00\"}",
+      "expected_sha256": "fa5f32b871538706cf00b11075f6de31f2980b817da272aba89c12b8f2108820"
+    },
+    {
+      "id": "weights_numeric_sort_nested_in_object",
+      "value": {
+        "weights": {
+          "100": "0.335000",
+          "2": "0.3350",
+          "10": "0.335"
+        },
+        "total": "1.005000",
+        "matched": []
+      },
+      "integer_key_paths": [
+        [
+          "weights"
+        ]
+      ],
+      "expected_json": "{\"matched\":[],\"total\":\"1.005000\",\"weights\":{\"2\":\"0.3350\",\"10\":\"0.335\",\"100\":\"0.335000\"}}",
+      "expected_sha256": "ab013dec5cf637be9b8d15979c0a7d384944a93fa900df915894fcab421f4742"
+    },
+    {
+      "id": "string_keys_sort_lexically",
+      "value": {
+        "100": "1.00",
+        "2": "2.000",
+        "10": "3E-18"
+      },
+      "integer_key_paths": [],
+      "expected_json": "{\"10\":\"3E-18\",\"100\":\"1.00\",\"2\":\"2.000\"}",
+      "expected_sha256": "19ca131339e43750da27886a8d9c3a53a62b5cdc8a8589a6420f49de0a3789a8"
+    },
+    {
+      "id": "array_order_is_significant",
+      "value": [
+        {
+          "id": 100,
+          "version": 1
+        },
+        {
+          "id": 2,
+          "version": 2
+        },
+        {
+          "id": 10,
+          "version": 3
+        }
+      ],
+      "integer_key_paths": [],
+      "expected_json": "[{\"id\":100,\"version\":1},{\"id\":2,\"version\":2},{\"id\":10,\"version\":3}]",
+      "expected_sha256": "a8c60692ad30334b424769743bb4de47cbed0bce681a2fef22d9548209ad8cd5"
+    },
+    {
+      "id": "json_numeric_types_and_empty_collections",
+      "value": {
+        "integer": 999999999999,
+        "zero": 0,
+        "negative": -1,
+        "null": null,
+        "false": false,
+        "array": [],
+        "object": {}
+      },
+      "integer_key_paths": [],
+      "expected_json": "{\"array\":[],\"false\":false,\"integer\":999999999999,\"negative\":-1,\"null\":null,\"object\":{},\"zero\":0}",
+      "expected_sha256": "e2b32e372158991299693a5d3fcb43e67daa99de80c818aa295cd6ff2b2fc50b"
+    }
+  ]
+}

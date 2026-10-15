@@ -1,0 +1,22 @@
+title = "Settlement synthetic fixture exceptions"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Immutable synthetic cryptographic vectors; never runtime credentials"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/golden/fernet\.json$''']
+regexes = [
+  '''^AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB0eH5xU1XFwLPoPA_NiFWdrq3h-haZPOM1VqCtFHrXXyaNJ1vn16n79DX9B5eglwtQd2Q==$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikk=$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB0eH7lsHHyxfZ0A6zs3ugTyQTw0mSDz3WRphH4uIinRa4iv8WffJwALcEkqlKD-Nv3Tj5vKL4KUFXhR_uhEqhsgv6k=$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB0eHw_yHwO9rhrm-typDeRgQ8YryFUnTtBs9K7v5icmMIFuQb8alb-5o87VzN132bJvnXrb7enJsvmm608JfXAfHB4=$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB0eHw_yHwO9rhrm-typDeRgQ8Z4XWw5ZBGpFdJg53eEmg6-egJe5FS1R1heFgCG1mJJTBqwPUVeXkHqc_U9kS_6eQ4=$''',
+  '''^gAAAAAAAAAAAEBESExQVFhcYGRobHB0eHySTqL8veu8TsYFw8gT4G-l52zitC2utWMAsWvKAMlzHfpWhjISJTVjbaAkvAb_5DA==$''',
+  '''^ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB0eH4U-UGFQg9jRdoKPsVHUyg_sNwCKDfFGuYBxBUT6xDIOZXVm1XjVx3ElaQ4ik8hs5JgHty2b9fd8bPFbczkzikg=$''',
+  '''^gAAAAABf7mYAEBESExQVFhcYGRobHB$''',
+  '''^fixture-invalid$''',
+]

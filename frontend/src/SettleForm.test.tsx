@@ -1,0 +1,422 @@
+// @vitest-environment jsdom
+
+import { act, type ComponentProps, type ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SettleForm } from "./main";
+import type { Calculation, Catalog, Cycle, Preview } from "./types";
+
+let root: Root | undefined;
+let host: HTMLDivElement | undefined;
+const nativeShowModal = HTMLDialogElement.prototype.showModal;
+const nativeClose = HTMLDialogElement.prototype.close;
+
+async function render(node: ReactNode) {
+  if (!root) {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  }
+  await act(async () => {
+    root!.render(node);
+  });
+}
+
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+async function click(button: HTMLButtonElement) {
+  await act(async () => {
+    button.click();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function button(text: string) {
+  const found = Array.from(host!.querySelectorAll("button"))
+    .find(element => element.textContent?.trim() === text);
+  if (!found) throw new Error(`button not found: ${text}`);
+  return found;
+}
+
+function response(data: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data,
+  } as Response;
+}
+
+const catalog: Catalog = {
+  accounts: [],
+  users: [{ id: 1, name: "Alice" }, { id: 2, name: "Bob" }],
+  coverage_from: "2026-01-01T00:00:00Z",
+};
+
+function cycle(overrides: Partial<Cycle> = {}): Cycle {
+  return {
+    id: 7,
+    account_id: 1,
+    name: "Shared account",
+    cost_fen: 5_000,
+    creditor_id: 1,
+    start: "2026-09-01T00:00:00Z",
+    end: null,
+    status: "open",
+    version: 1,
+    settlement_id: null,
+    cost_kind: "exact",
+    ...overrides,
+  };
+}
+
+function calculation(value: Cycle, overrides: Partial<Calculation> = {}): Calculation {
+  return {
+    cycle: value,
+    end: "2026-10-01T00:00:00Z",
+    total_consumption: "1.25",
+    allocations: [],
+    record_count: 3,
+    can_settle: true,
+    start_confirmed: true,
+    ...overrides,
+  };
+}
+
+function preview(value: Cycle, id: string): Preview {
+  return {
+    id,
+    expires_at: new Date(Date.now() + 120_000).toISOString(),
+    cycles: [calculation(value)],
+  };
+}
+
+function formProps(overrides: Partial<ComponentProps<typeof SettleForm>> = {}): ComponentProps<typeof SettleForm> {
+  return {
+    ids: [7],
+    cycles: [cycle()],
+    catalog,
+    done: vi.fn(),
+    close: vi.fn(),
+    ...overrides,
+  };
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("input value setter is unavailable");
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  if (!setter) throw new Error("select value setter is unavailable");
+  setter.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function checkbox(labelText: string) {
+  const found = Array.from(host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
+    .find(input => input.closest("label")?.textContent?.includes(labelText));
+  if (!found) throw new Error(`checkbox not found: ${labelText}`);
+  return found;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+beforeEach(() => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+});
+
+afterEach(async () => {
+  if (root) await act(async () => root!.unmount());
+  root = undefined;
+  host?.remove();
+  host = undefined;
+  HTMLDialogElement.prototype.showModal = nativeShowModal;
+  HTMLDialogElement.prototype.close = nativeClose;
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe("SettleForm preview integration", () => {
+  it("keeps an edited renewal draft when a newer preview arrives", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    let previewCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      if (String(input).endsWith("/previews")) {
+        previewCalls += 1;
+        const version = previewCalls;
+        return response(preview(cycle({ version, cost_fen: version === 1 ? 7_100 : 7_500 }), `preview-${version}`));
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const props = formProps({ renewByDefault: true });
+
+    await render(<SettleForm {...props} />);
+    await advance(0);
+
+    expect(previewCalls).toBe(1);
+    const renewalCost = Array.from(host!.querySelectorAll<HTMLInputElement>("input"))
+      .find(input => input.closest("label")?.textContent?.includes("新周期成本（元）"));
+    expect(renewalCost?.value).toBe("71.00");
+    expect(Array.from(host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
+      .some(input => input.checked && input.closest("label")?.textContent?.includes("结算后续期"))).toBe(true);
+
+    setInputValue(renewalCost!, "66.60");
+    expect(renewalCost!.value).toBe("66.60");
+    await render(<SettleForm {...props} cycles={[cycle({ version: 2 })]} />);
+    await advance(0);
+
+    expect(previewCalls).toBe(2);
+    const updatedRenewalCost = Array.from(host!.querySelectorAll<HTMLInputElement>("input"))
+      .find(input => input.closest("label")?.textContent?.includes("新周期成本（元）"));
+    expect(updatedRenewalCost?.value).toBe("66.60");
+  });
+
+  it("shows the bill import entry on the first preview and refreshes after confirming an imported bill", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    let previewCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/bill-previews")) {
+        return response({
+          id: "bill-preview-1",
+          cost_fen: 6_000,
+          total: "60.00",
+          matched_amount: "60.00",
+          unmatched_amount: "0",
+          matched_count: 2,
+          unmatched_count: 0,
+          outside_count: 0,
+          outside_amount: "0",
+          local_unmatched_count: 0,
+          record_count: 2,
+          file_name: "usage.csv",
+          file_hash: "fixture-hash",
+          end: "2026-10-01T00:00:00Z",
+          version: 1,
+          allocations: [],
+          difference_required: false,
+          can_confirm: true,
+        });
+      }
+      if (path.endsWith("/previews")) {
+        previewCalls += 1;
+        return response(preview(cycle({ cost_source: "upstream_bill", bill_import_id: 33 }), `preview-${previewCalls}`));
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm {...formProps({ cycles: [cycle({ cost_source: "upstream_bill", bill_import_id: 33 })] })} />);
+    await advance(0);
+
+    expect(host!.textContent).toContain("上游账单");
+    await click(button("沿用已导入账单"));
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-previews"))).toBe(true);
+    expect(host!.textContent).toContain("确认替换成本");
+
+    await click(button("确认替换成本"));
+    await advance(0);
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-confirm"))).toBe(true);
+    expect(previewCalls).toBe(2);
+  });
+
+  it("posts the selected bill allocation mode, invalidates the old result, and hides proportional confirmation for exact matching", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    let billCalls = 0;
+    let settlementPreviewCalls = 0;
+    const matchedOnlyResponse = deferred<Response>();
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/bill-previews")) {
+        billCalls += 1;
+        if (billCalls === 1) {
+          return response({
+            allocation_mode: "proportional",
+            id: "bill-preview-proportional",
+            cost_fen: 6_000,
+            billable_cost_fen: 6_000,
+            total: "60.00",
+            matched_amount: "50.00",
+            unmatched_amount: "10.00",
+            matched_count: 2,
+            unmatched_count: 1,
+            outside_count: 0,
+            outside_amount: "0",
+            local_unmatched_count: 0,
+            record_count: 3,
+            file_name: "usage.csv",
+            file_hash: "fixture-hash",
+            end: "2026-10-01T00:00:00Z",
+            version: 1,
+            allocations: [],
+            difference_required: true,
+            can_confirm: true,
+          });
+        }
+        return matchedOnlyResponse.promise;
+      }
+      if (path.endsWith("/previews")) {
+        settlementPreviewCalls += 1;
+        return response(preview(cycle({ cost_source: "upstream_bill", bill_import_id: 33, cost_kind: "estimated" }), "settlement-preview-1"));
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm {...formProps({ cycles: [cycle({ cost_source: "upstream_bill", bill_import_id: 33, cost_kind: "estimated" })] })} />);
+    await advance(0);
+    expect(host!.querySelector<HTMLSelectElement>(".bill-import select")?.value).toBe("proportional");
+
+    await click(button("沿用已导入账单"));
+    const proportionalCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
+    expect(JSON.parse(String(proportionalCall?.[1]?.body))).toMatchObject({ allocation_mode: "proportional" });
+    expect(host!.textContent).toContain("确认本地差异，按已匹配扣费比例分摊");
+    expect(host!.textContent).toContain("确认替换成本");
+
+    const mode = host!.querySelector<HTMLSelectElement>(".bill-import select");
+    if (!mode) throw new Error("bill allocation mode select not found");
+    await act(async () => {
+      setSelectValue(mode, "matched_only");
+      await Promise.resolve();
+    });
+    await advance(0);
+
+    expect(billCalls).toBe(2);
+    expect(host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
+    expect(host!.textContent).not.toContain("确认替换成本");
+    expect(host!.textContent).toContain("匹配中…");
+    const matchedOnlyCall = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"))[1];
+    expect(JSON.parse(String(matchedOnlyCall?.[1]?.body))).toMatchObject({ allocation_mode: "matched_only" });
+
+    await act(async () => {
+      matchedOnlyResponse.resolve(response({
+        allocation_mode: "matched_only",
+        id: "bill-preview-matched",
+        cost_fen: 6_000,
+        billable_cost_fen: 5_000,
+        total: "60.00",
+        matched_amount: "50.00",
+        unmatched_amount: "10.00",
+        matched_count: 2,
+        unmatched_count: 1,
+        outside_count: 0,
+        outside_amount: "0",
+        local_unmatched_count: 0,
+        record_count: 3,
+        file_name: "usage.csv",
+        file_hash: "fixture-hash",
+        end: "2026-10-01T00:00:00Z",
+        version: 1,
+        allocations: [],
+        difference_required: false,
+        can_confirm: true,
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(host!.textContent).toContain("上游总扣费");
+    expect(host!.textContent).toContain("本次计费");
+    expect(host!.textContent).toContain("未匹配不计费");
+    expect(host!.textContent).toContain("确认仅按匹配金额计费");
+    expect(host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
+
+    await click(button("确认仅按匹配金额计费"));
+    await advance(0);
+    const billConfirmCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-confirm"));
+    expect(JSON.parse(String(billConfirmCall?.[1]?.body))).toMatchObject({
+      preview_id: "bill-preview-matched",
+      accept_difference: false,
+    });
+    expect(settlementPreviewCalls).toBe(2);
+  });
+
+  it("keeps renewal and deletion mutually exclusive and includes optional delete cycle ids in settlement payload", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/previews")) return response(preview(cycle(), "settlement-preview-delete"));
+      if (path.endsWith("/settlements")) return response({ deletions: [{ id: 12, account_id: 1, account_name: "Shared account", settlement_id: 88, status: "failed", version: 1, error: "upstream unavailable", updated_at: "2026-10-01T00:00:00Z" }] });
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const done = vi.fn();
+
+    await render(<SettleForm {...formProps({ done })} />);
+    await advance(0);
+    const renewal = checkbox("结算后续期");
+    const deletion = checkbox("出单后删除账号");
+
+    await act(async () => {
+      deletion.click();
+      await Promise.resolve();
+    });
+    expect(deletion.checked).toBe(true);
+    expect(renewal.checked).toBe(false);
+    expect(renewal.disabled).toBe(true);
+
+    await click(button("确认结算"));
+    const settlementCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/settlements"));
+    expect(JSON.parse(String(settlementCall?.[1]?.body))).toMatchObject({
+      preview_id: "settlement-preview-delete",
+      delete_cycle_ids: [7],
+    });
+    expect(done).toHaveBeenCalledWith("已出单，删除未完成。请在管理视图中查看。");
+  });
+
+  it("refreshes the settlement preview after confirming an estimated cycle start", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    let previewCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/previews")) {
+        previewCalls += 1;
+        const value = cycle({ start_mode: "minute_estimate", version: previewCalls, start_confirmed: previewCalls > 1 });
+        return response({
+          id: `preview-${previewCalls}`,
+          expires_at: new Date(Date.now() + 120_000).toISOString(),
+          cycles: [calculation(value, { start_mode: "minute_estimate", start_confirmed: previewCalls > 1 })],
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm {...formProps({ cycles: [cycle({ start_mode: "minute_estimate" })] })} />);
+    await advance(0);
+    expect(previewCalls).toBe(1);
+    expect(host!.textContent).toContain("确认起点");
+
+    await click(button("确认起点"));
+    await advance(0);
+
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/start-confirm"))).toBe(true);
+    expect(previewCalls).toBe(2);
+    expect(host!.textContent).not.toContain("确认起点");
+  });
+});

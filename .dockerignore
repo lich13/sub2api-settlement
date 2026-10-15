@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+data
+**/node_modules
+frontend/dist
+**/*.sqlite*
+**/*.db
+**/session.key
+target

@@ -1,0 +1,625 @@
+{
+  "schema_version": 1,
+  "version": "v0.9.0",
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "reference_commit": "d0b39dd4891d42f971f9677da5aa214634f51564",
+  "product_commit": "78a2dfdd4fa0f1390e26beab77c304bf46ba7301",
+  "methodology": {
+    "data": "同机依次运行，12 个虚构账号、64 位虚构用户、50000 行 CSV。",
+    "latency": "HTTP 端到端耗时，单位毫秒；重请求预热 1 次后测量 10 次，概览 5 次，普通查询 50 次。P95 使用线性插值。",
+    "throughput": "串行成功请求数除以请求总耗时；preview 的 units 为消费记录，match 的 units 为 CSV 行，其余为请求。",
+    "memory": "服务进程 RSS，每 100 毫秒采样；不含控制脚本与仿真认证服务。重请求测量阶段关闭后台定时任务。",
+    "authentication": "使用本机仿真上游。内部认证计时精度为毫秒，0 表示小于 1 毫秒；未测真实外部网络延迟。",
+    "revision": "Python revision 是 Git 提交；Rust revision 是 Cargo.toml、Cargo.lock、rust-toolchain.toml 与 src 文件按路径排序后，以路径、NUL、内容、NUL 拼接的 SHA-256。",
+    "final_read_check": "完整性能测量后，账号列表与版本快照的并发一致性修复单独复测概览及账号状态；预览、匹配和同步代码未改变。最终提交仅删除了两个 TOML 文件的末尾空行，语义与复测二进制一致。",
+    "limits": "有限样本反映此仿真场景，不是统计置信区间，也不代表所有部署环境的固定提升。"
+  },
+  "benchmarks": [
+    {
+      "usage_count": 150000,
+      "python": {
+        "engine": "python",
+        "revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+        "binary_sha256": null,
+        "source_sha256": "89afebe52d35f7524e48dcdb67e47048ba2afe041b2cb6253d41e2f0837aab94",
+        "csv_sha256": "c76855d07a1f86e3404c09e519d6f50d3c381668a5fa7c18029c2f61e80cd058",
+        "usage": 150000,
+        "csv": 50000,
+        "operations": {
+          "accounts_state": {
+            "max_ms": 7.431,
+            "min_ms": 2.487,
+            "p50_ms": 3.543,
+            "p95_ms": 5.674,
+            "samples": 50,
+            "throughput_rps": 269.7568,
+            "throughput_units_per_second": 269.76
+          },
+          "match": {
+            "max_ms": 9249.612,
+            "min_ms": 4304.058,
+            "p50_ms": 5149.374,
+            "p95_ms": 8264.576,
+            "samples": 10,
+            "throughput_rps": 0.1725,
+            "throughput_units_per_second": 8624.01
+          },
+          "me": {
+            "max_ms": 4.263,
+            "min_ms": 1.933,
+            "p50_ms": 2.314,
+            "p95_ms": 3.219,
+            "samples": 50,
+            "throughput_rps": 404.192,
+            "throughput_units_per_second": 404.19
+          },
+          "netting": {
+            "max_ms": 6.335,
+            "min_ms": 2.531,
+            "p50_ms": 3.04,
+            "p95_ms": 3.572,
+            "samples": 50,
+            "throughput_rps": 320.0283,
+            "throughput_units_per_second": 320.03
+          },
+          "orders": {
+            "max_ms": 27.845,
+            "min_ms": 2.67,
+            "p50_ms": 3.837,
+            "p95_ms": 14.752,
+            "samples": 50,
+            "throughput_rps": 178.2887,
+            "throughput_units_per_second": 178.29
+          },
+          "overview": {
+            "max_ms": 540.503,
+            "min_ms": 463.445,
+            "p50_ms": 478.539,
+            "p95_ms": 529.698,
+            "samples": 5,
+            "throughput_rps": 2.0479,
+            "throughput_units_per_second": 2.05
+          },
+          "preview": {
+            "max_ms": 5620.986,
+            "min_ms": 2569.119,
+            "p50_ms": 3157.898,
+            "p95_ms": 5309.876,
+            "samples": 10,
+            "throughput_rps": 0.2834,
+            "throughput_units_per_second": 42514.09
+          }
+        },
+        "peak_rss_mib": 806.94
+      },
+      "rust": {
+        "engine": "rust",
+        "revision": "c6bb63fa20321be63790b29ec7d9810989cb33f550edbf21b48796668cda3fbd",
+        "binary_sha256": "2f21daa7b0130c49b4e84dfb78f0aa7bf60b609feea6b446cc228463ab62eda9",
+        "source_sha256": "89afebe52d35f7524e48dcdb67e47048ba2afe041b2cb6253d41e2f0837aab94",
+        "csv_sha256": "c76855d07a1f86e3404c09e519d6f50d3c381668a5fa7c18029c2f61e80cd058",
+        "usage": 150000,
+        "csv": 50000,
+        "operations": {
+          "accounts_state": {
+            "max_ms": 0.561,
+            "min_ms": 0.443,
+            "p50_ms": 0.484,
+            "p95_ms": 0.549,
+            "samples": 50,
+            "throughput_rps": 2030.9343,
+            "throughput_units_per_second": 2030.93
+          },
+          "match": {
+            "max_ms": 1401.367,
+            "min_ms": 1341.292,
+            "p50_ms": 1378.808,
+            "p95_ms": 1397.846,
+            "samples": 10,
+            "throughput_rps": 0.7254,
+            "throughput_units_per_second": 36269.69
+          },
+          "me": {
+            "max_ms": 0.658,
+            "min_ms": 0.447,
+            "p50_ms": 0.529,
+            "p95_ms": 0.604,
+            "samples": 50,
+            "throughput_rps": 1902.4398,
+            "throughput_units_per_second": 1902.44
+          },
+          "netting": {
+            "max_ms": 0.653,
+            "min_ms": 0.477,
+            "p50_ms": 0.521,
+            "p95_ms": 0.594,
+            "samples": 50,
+            "throughput_rps": 1865.9501,
+            "throughput_units_per_second": 1865.95
+          },
+          "orders": {
+            "max_ms": 2.814,
+            "min_ms": 0.492,
+            "p50_ms": 0.526,
+            "p95_ms": 0.687,
+            "samples": 50,
+            "throughput_rps": 1689.741,
+            "throughput_units_per_second": 1689.74
+          },
+          "overview": {
+            "max_ms": 206.046,
+            "min_ms": 190.662,
+            "p50_ms": 195.115,
+            "p95_ms": 204.133,
+            "samples": 5,
+            "throughput_rps": 5.0863,
+            "throughput_units_per_second": 5.09
+          },
+          "preview": {
+            "max_ms": 1426.22,
+            "min_ms": 1345.981,
+            "p50_ms": 1398.927,
+            "p95_ms": 1421.149,
+            "samples": 10,
+            "throughput_rps": 0.7181,
+            "throughput_units_per_second": 107717.78
+          }
+        },
+        "peak_rss_mib": 344.02,
+        "internal_timings": {
+          "simulated_upstream_auth": {
+            "max_ms": 0,
+            "min_ms": 0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "samples": 10,
+            "scope": "local fake auth endpoint via loopback; real upstream network not measured"
+          },
+          "usage_sync": {
+            "max_ms": 1585,
+            "min_ms": 140,
+            "p50_ms": 639.5,
+            "p95_ms": 998.75,
+            "samples": 26,
+            "scope": "all emitted usage_sync events from service startup through semantic checks",
+            "statuses": {
+              "complete": 26
+            }
+          }
+        }
+      }
+    },
+    {
+      "usage_count": 1000000,
+      "python": {
+        "engine": "python",
+        "revision": "d0b39dd4891d42f971f9677da5aa214634f51564",
+        "binary_sha256": null,
+        "source_sha256": "384ff5fad73663b47921bd72a6904c424d0b22adf58daf0f1ce970b98e293677",
+        "csv_sha256": "c76855d07a1f86e3404c09e519d6f50d3c381668a5fa7c18029c2f61e80cd058",
+        "usage": 1000000,
+        "csv": 50000,
+        "operations": {
+          "accounts_state": {
+            "max_ms": 5.708,
+            "min_ms": 2.398,
+            "p50_ms": 2.847,
+            "p95_ms": 3.724,
+            "samples": 50,
+            "throughput_rps": 342.8101,
+            "throughput_units_per_second": 342.81
+          },
+          "match": {
+            "max_ms": 61940.161,
+            "min_ms": 29951.667,
+            "p50_ms": 41582.091,
+            "p95_ms": 59527.849,
+            "samples": 10,
+            "throughput_rps": 0.023,
+            "throughput_units_per_second": 1148.75
+          },
+          "me": {
+            "max_ms": 5.184,
+            "min_ms": 1.772,
+            "p50_ms": 2.007,
+            "p95_ms": 2.843,
+            "samples": 50,
+            "throughput_rps": 462.5015,
+            "throughput_units_per_second": 462.5
+          },
+          "netting": {
+            "max_ms": 4.132,
+            "min_ms": 2.442,
+            "p50_ms": 2.759,
+            "p95_ms": 3.37,
+            "samples": 50,
+            "throughput_rps": 353.6197,
+            "throughput_units_per_second": 353.62
+          },
+          "orders": {
+            "max_ms": 4.364,
+            "min_ms": 2.392,
+            "p50_ms": 2.563,
+            "p95_ms": 2.994,
+            "samples": 50,
+            "throughput_rps": 380.4866,
+            "throughput_units_per_second": 380.49
+          },
+          "overview": {
+            "max_ms": 7785.897,
+            "min_ms": 5636.962,
+            "p50_ms": 5818.212,
+            "p95_ms": 7404.193,
+            "samples": 5,
+            "throughput_rps": 0.1622,
+            "throughput_units_per_second": 0.16
+          },
+          "preview": {
+            "max_ms": 33751.84,
+            "min_ms": 13880.121,
+            "p50_ms": 17315.004,
+            "p95_ms": 27150.275,
+            "samples": 10,
+            "throughput_rps": 0.0543,
+            "throughput_units_per_second": 54307.36
+          }
+        },
+        "peak_rss_mib": 2692.33
+      },
+      "rust": {
+        "engine": "rust",
+        "revision": "c6bb63fa20321be63790b29ec7d9810989cb33f550edbf21b48796668cda3fbd",
+        "binary_sha256": "2f21daa7b0130c49b4e84dfb78f0aa7bf60b609feea6b446cc228463ab62eda9",
+        "source_sha256": "384ff5fad73663b47921bd72a6904c424d0b22adf58daf0f1ce970b98e293677",
+        "csv_sha256": "c76855d07a1f86e3404c09e519d6f50d3c381668a5fa7c18029c2f61e80cd058",
+        "usage": 1000000,
+        "csv": 50000,
+        "operations": {
+          "accounts_state": {
+            "max_ms": 3.25,
+            "min_ms": 0.561,
+            "p50_ms": 0.64,
+            "p95_ms": 0.878,
+            "samples": 50,
+            "throughput_rps": 1402.1853,
+            "throughput_units_per_second": 1402.19
+          },
+          "match": {
+            "max_ms": 16203.292,
+            "min_ms": 10788.437,
+            "p50_ms": 12188.257,
+            "p95_ms": 15082.648,
+            "samples": 10,
+            "throughput_rps": 0.0809,
+            "throughput_units_per_second": 4042.67
+          },
+          "me": {
+            "max_ms": 4.626,
+            "min_ms": 0.561,
+            "p50_ms": 0.651,
+            "p95_ms": 1.018,
+            "samples": 50,
+            "throughput_rps": 1267.9574,
+            "throughput_units_per_second": 1267.96
+          },
+          "netting": {
+            "max_ms": 1.062,
+            "min_ms": 0.572,
+            "p50_ms": 0.657,
+            "p95_ms": 0.976,
+            "samples": 50,
+            "throughput_rps": 1464.1505,
+            "throughput_units_per_second": 1464.15
+          },
+          "orders": {
+            "max_ms": 1.183,
+            "min_ms": 0.59,
+            "p50_ms": 0.663,
+            "p95_ms": 0.81,
+            "samples": 50,
+            "throughput_rps": 1467.1362,
+            "throughput_units_per_second": 1467.14
+          },
+          "overview": {
+            "max_ms": 2000.936,
+            "min_ms": 1673.473,
+            "p50_ms": 1768.706,
+            "p95_ms": 1959.761,
+            "samples": 5,
+            "throughput_rps": 0.5594,
+            "throughput_units_per_second": 0.56
+          },
+          "preview": {
+            "max_ms": 13222.151,
+            "min_ms": 9466.746,
+            "p50_ms": 10145.319,
+            "p95_ms": 12568.889,
+            "samples": 10,
+            "throughput_rps": 0.0946,
+            "throughput_units_per_second": 94597.68
+          }
+        },
+        "peak_rss_mib": 901.91,
+        "internal_timings": {
+          "simulated_upstream_auth": {
+            "max_ms": 0,
+            "min_ms": 0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "samples": 10,
+            "scope": "local fake auth endpoint via loopback; real upstream network not measured"
+          },
+          "usage_sync": {
+            "max_ms": 10231,
+            "min_ms": 1139,
+            "p50_ms": 7138.5,
+            "p95_ms": 9489.5,
+            "samples": 26,
+            "scope": "all emitted usage_sync events from service startup through semantic checks",
+            "statuses": {
+              "complete": 26
+            }
+          }
+        }
+      }
+    }
+  ],
+  "final_read_check": {
+    "engine": "rust",
+    "revision": "665acad484ec4b5cda3e3f2cf01c1bace09d7129b1e033ffcc2548aa98ebbf37",
+    "binary_sha256": "1bae99208efc31d0c63c133d5d67a97d03ff8067d2782474797115f643988008",
+    "source_sha256": "384ff5fad73663b47921bd72a6904c424d0b22adf58daf0f1ce970b98e293677",
+    "csv_sha256": "c76855d07a1f86e3404c09e519d6f50d3c381668a5fa7c18029c2f61e80cd058",
+    "usage": 1000000,
+    "csv": 50000,
+    "operations": {
+      "accounts_state": {
+        "max_ms": 0.902,
+        "min_ms": 0.517,
+        "p50_ms": 0.559,
+        "p95_ms": 0.731,
+        "samples": 50,
+        "throughput_rps": 1703.7732,
+        "throughput_units_per_second": 1703.77
+      },
+      "overview": {
+        "max_ms": 1717.126,
+        "min_ms": 1589.317,
+        "p50_ms": 1601.552,
+        "p95_ms": 1698.324,
+        "samples": 5,
+        "throughput_rps": 0.6157,
+        "throughput_units_per_second": 0.62
+      }
+    },
+    "internal_timings": null,
+    "measurement_scope": "targeted_overview_accounts_state",
+    "targeted_window_peak_rss_mib": 110.11
+  },
+  "account_state_propagation": {
+    "scope": "独立小型虚构数据，真实 Rust 进程与后台账号刷新开启；每 5 秒查询 HTTP 接口，未将该值当作浏览器端到端时间。",
+    "binary_sha256": "1bae99208efc31d0c63c133d5d67a97d03ff8067d2782474797115f643988008",
+    "poll_interval_seconds": 5,
+    "soft_delete_seconds": 5.006,
+    "source_record_removal_seconds": 5.006,
+    "source_error_visible_seconds": 5.006,
+    "historical_usage_preserved": true,
+    "last_good_account_snapshot_preserved_on_source_failure": true,
+    "external_delete_requests": 0,
+    "exit_code": 0
+  },
+  "mixed_load": {
+    "duration_seconds": 3600,
+    "elapsed_seconds": 3600.173,
+    "background_enabled": true,
+    "binary_sha256": "1bae99208efc31d0c63c133d5d67a97d03ff8067d2782474797115f643988008",
+    "source_sha256": "384ff5fad73663b47921bd72a6904c424d0b22adf58daf0f1ce970b98e293677",
+    "csv_sha256": "c76855d07a1f86e3404c09e519d6f50d3c381668a5fa7c18029c2f61e80cd058",
+    "revision": "665acad484ec4b5cda3e3f2cf01c1bace09d7129b1e033ffcc2548aa98ebbf37",
+    "peak_rss_mib": 906.28,
+    "unexpected_errors": 0,
+    "operations": {
+      "accounts_state": {
+        "max_ms": 794.795,
+        "min_ms": 0.64,
+        "p50_ms": 3.034,
+        "p95_ms": 9.919,
+        "samples": 9853,
+        "throughput_rps": 187.3876
+      },
+      "idempotent_write": {
+        "max_ms": 6044.774,
+        "min_ms": 4.236,
+        "p50_ms": 15.626,
+        "p95_ms": 3892.666,
+        "samples": 58,
+        "throughput_rps": 1.9695
+      },
+      "match": {
+        "max_ms": 36721.688,
+        "min_ms": 8406.385,
+        "p50_ms": 14434.631,
+        "p95_ms": 25344.289,
+        "samples": 41,
+        "throughput_rps": 0.0631
+      },
+      "me": {
+        "max_ms": 596.829,
+        "min_ms": 0.586,
+        "p50_ms": 2.982,
+        "p95_ms": 10.119,
+        "samples": 9856,
+        "throughput_rps": 185.6613
+      },
+      "netting": {
+        "max_ms": 1020.87,
+        "min_ms": 0.658,
+        "p50_ms": 3.105,
+        "p95_ms": 10.081,
+        "samples": 9854,
+        "throughput_rps": 188.3069
+      },
+      "orders": {
+        "max_ms": 1002.294,
+        "min_ms": 0.67,
+        "p50_ms": 3.081,
+        "p95_ms": 10.059,
+        "samples": 9854,
+        "throughput_rps": 187.3467
+      },
+      "overview": {
+        "max_ms": 7707.419,
+        "min_ms": 1024.052,
+        "p50_ms": 1812.753,
+        "p95_ms": 6244.293,
+        "samples": 107,
+        "throughput_rps": 0.4044
+      },
+      "preview": {
+        "max_ms": 54492.2,
+        "min_ms": 9960.04,
+        "p50_ms": 16011.884,
+        "p95_ms": 32568.555,
+        "samples": 83,
+        "throughput_rps": 0.0533
+      }
+    },
+    "throughput_rps": 11.0289,
+    "ledger": {
+      "account_deletions": 0,
+      "business_digest": "5fd7b8fb878a238af1973713df5666d8e6c49330fe9d7b2bc51246f22035d621",
+      "expense_count": 58,
+      "foreign_key_errors": 0,
+      "idempotency_count": 58,
+      "integrity": "ok",
+      "orders": 0,
+      "usage_count": 1000000
+    },
+    "faults": [
+      {
+        "elapsed_seconds": 900.062,
+        "name": "auth_outage",
+        "recovered_status": 200,
+        "recovery_seconds": 0.004,
+        "rejected_status": 503
+      },
+      {
+        "degraded_health": 503,
+        "elapsed_seconds": 1800.13,
+        "healthy_source_count": 1000000,
+        "name": "source_outage",
+        "recovered_health": 200,
+        "recovery_seconds": 19.157,
+        "rejected_status": 503
+      },
+      {
+        "committed_state_recovery": {
+          "account_deletions": 0,
+          "business_digest": "47da89a91580e5b3edf98427dcabdc8f8b1be31c21292f52f711cce3cd36cf08",
+          "checkpoint": "HTTP workers drained and synthetic writes already committed",
+          "exit_code": -9,
+          "expense_count": 45,
+          "foreign_key_errors": 0,
+          "idempotency_count": 45,
+          "integrity": "ok",
+          "orders": 0,
+          "original_session_reused": true,
+          "usage_count": 1000000
+        },
+        "elapsed_seconds": 2700.009,
+        "final_ledger": {
+          "account_deletions": 0,
+          "business_digest": "47da89a91580e5b3edf98427dcabdc8f8b1be31c21292f52f711cce3cd36cf08",
+          "expense_count": 45,
+          "foreign_key_errors": 0,
+          "idempotency_count": 45,
+          "integrity": "ok",
+          "orders": 0,
+          "usage_count": 1000000
+        },
+        "interrupted_sync_recovery": {
+          "background_paused_for_staging_checkpoint": true,
+          "background_resumed": true,
+          "checkpoint": "durable partial stage observed before publication and before the HTTP response",
+          "controlled_supervisor_restarts": [
+            {
+              "background_enabled": false,
+              "exit_code": 0
+            },
+            {
+              "background_enabled": true,
+              "exit_code": 0
+            }
+          ],
+          "full_source_restored": true,
+          "interrupted_request_transport_error": "RemoteProtocolError",
+          "ledger_sha256": "ff89e7b42d3d8a0a20d129d2332fbbd466f94368ee22b9a357c516d881e171ec",
+          "ledger_unchanged_after_retry": true,
+          "original_session_reused": true,
+          "partial_stage_rows_after_kill": 6144,
+          "partial_stage_rows_observed": 4096,
+          "preview_result_unpublished": true,
+          "preview_stable_after_background_resume": true,
+          "published_usage_unchanged": true,
+          "restart_rebuilt_stage_rows": 1000000,
+          "retry_repeat_stable": true,
+          "retry_signature_sha256": "f712647a77d53c13815cea859774cc3e1ac4070b3ec77ebbf4f65538d3426d65",
+          "selected_stage_rows": 700000,
+          "sigkill_exit_code": -9
+        },
+        "name": "crash_recovery",
+        "recovery_seconds": 157.619
+      }
+    ],
+    "passed": true,
+    "workers": 6,
+    "exit_code": 0,
+    "result_sha256": "3d0966cfc9c9cbd4cf398eb99fff0d37ecc155f54cce70a38e7a1a7e77247d6d",
+    "background_supervisors": {
+      "enabled": true,
+      "expected_failure_windows": {
+        "auth_outage": {
+          "supervisor_failure_ticks": 0,
+          "usage_sync_failures": 0
+        },
+        "source_outage": {
+          "supervisor_failure_ticks": 0,
+          "usage_sync_failures": 1
+        }
+      },
+      "recovery_sync_completions": {
+        "source_outage_recovery": 1
+      },
+      "ticks": {
+        "accounts": {
+          "expected_failures": 0,
+          "failures": 0,
+          "ticks": 702,
+          "unexpected_failures": 0
+        },
+        "deletions": {
+          "expected_failures": 0,
+          "failures": 0,
+          "ticks": 699,
+          "unexpected_failures": 0
+        },
+        "sync": {
+          "expected_failures": 0,
+          "failures": 0,
+          "ticks": 46,
+          "unexpected_failures": 0
+        }
+      },
+      "unexpected_failures": {
+        "supervisor_failure_ticks": 0,
+        "supervisor_restarts_or_stops": 0,
+        "usage_sync_failures": 0
+      },
+      "usage_sync_runs": {
+        "complete": 179,
+        "failed": 1
+      }
+    },
+    "methodology": "60 分钟测试窗口包含故障注入与恢复；常态启用后台任务。同步发布前的强杀检查暂时暂停后台同步以精确观察部分暂存，恢复后重新开启。operations.throughput_rps 按该类请求累计耗时计算，顶层 throughput_rps 按整个测试窗口计算；未将两者当作同一种吞吐。usage_sync_runs 包括全量和选定范围核对。"
+  }
+}
