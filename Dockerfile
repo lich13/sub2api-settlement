@@ -19,7 +19,7 @@ RUN cargo build --release --locked --bin settlement
 FROM ${RUNTIME_IMAGE}
 ARG APP_REVISION=development
 ENV DATA_DIR=/data APP_REVISION=${APP_REVISION} SETTLEMENT_ASSETS=/app/frontend/dist
-LABEL org.opencontainers.image.title="Sub2API Settlement" org.opencontainers.image.version="0.9.0" org.opencontainers.image.revision=${APP_REVISION}
+LABEL org.opencontainers.image.title="Sub2API Settlement" org.opencontainers.image.version="0.10.0" org.opencontainers.image.revision=${APP_REVISION}
 RUN useradd -u 10002 -M settlement
 WORKDIR /app
 COPY --from=backend /build/target/release/settlement ./settlement
