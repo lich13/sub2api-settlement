@@ -131,18 +131,10 @@ impl Service {
             checkpoint.full();
             snapshot.unrestrict().await?;
         }
-        if checkpoint.reconcile() {
+        if checkpoint.daily() {
             checkpoint.fingerprints = Some(snapshot.fingerprints().await?);
-            if checkpoint.daily() {
-                scopes = Some(
-                    checkpoint
-                        .changed_scopes(&self.store, &roots, &known)
-                        .await?,
-                );
-                snapshot
-                    .restrict(scopes.clone().unwrap_or_default())
-                    .await?;
-            }
+            scopes = Some(checkpoint.changed_scopes(&self.store, &roots, &known).await?);
+            snapshot.restrict(scopes.clone().unwrap_or_default()).await?;
         } else if checkpoint.incremental() {
             // An incremental cursor is not evidence that older records vanished.
             scopes = Some(vec![]);
@@ -154,6 +146,9 @@ impl Service {
             db.commit().await?;
         }
         self.stage(&mut snapshot, &roots, &known).await?;
+        if checkpoint.reconcile() && checkpoint.fingerprints.is_none() {
+            checkpoint.fingerprints = Some(snapshot.fingerprints().await?);
+        }
         let mut db = self.store.write().await?;
         self.inventory.persist(&mut db).await?;
         for u in &snapshot.header.users {
