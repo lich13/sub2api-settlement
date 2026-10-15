@@ -133,8 +133,14 @@ impl Service {
         }
         if checkpoint.daily() {
             checkpoint.fingerprints = Some(snapshot.fingerprints().await?);
-            scopes = Some(checkpoint.changed_scopes(&self.store, &roots, &known).await?);
-            snapshot.restrict(scopes.clone().unwrap_or_default()).await?;
+            scopes = Some(
+                checkpoint
+                    .changed_scopes(&self.store, &roots, &known)
+                    .await?,
+            );
+            snapshot
+                .restrict(scopes.clone().unwrap_or_default())
+                .await?;
         } else if checkpoint.incremental() {
             // An incremental cursor is not evidence that older records vanished.
             scopes = Some(vec![]);
