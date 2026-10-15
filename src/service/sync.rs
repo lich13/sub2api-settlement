@@ -6,6 +6,8 @@ use crate::{
     store::{all, exec, optional},
 };
 use std::{collections::BTreeSet, time::Duration};
+mod schedule;
+use schedule::Checkpoint;
 impl Service {
     pub async fn sync(&self, force: bool) -> Result<()> {
         let mut guard = self.sync_lock.lock().await;
@@ -13,7 +15,7 @@ impl Service {
             return Ok(());
         }
         *guard = Some(Instant::now());
-        self.run_sync(None).await
+        self.run_sync(None, !force).await
     }
     pub async fn sync_selection(
         &self,
@@ -52,11 +54,11 @@ impl Service {
             });
         }
         drop(db);
-        self.run_sync(Some(scopes)).await
+        self.run_sync(Some(scopes), false).await
     }
-    async fn run_sync(&self, scopes: Option<Vec<Scope>>) -> Result<()> {
+    async fn run_sync(&self, scopes: Option<Vec<Scope>>, incremental: bool) -> Result<()> {
         let started = Instant::now();
-        let result = self.run_sync_inner(scopes).await;
+        let result = self.run_sync_inner(scopes, incremental).await;
         if result.is_err() {
             let mut db = self.store.write().await?;
             store::put(
@@ -80,10 +82,21 @@ impl Service {
         }
         result
     }
-    async fn run_sync_inner(&self, mut scopes: Option<Vec<Scope>>) -> Result<()> {
+    async fn run_sync_inner(
+        &self,
+        mut scopes: Option<Vec<Scope>>,
+        incremental: bool,
+    ) -> Result<()> {
         self.inventory.refresh(true).await;
-        let mut snapshot = self.source.snapshot(scopes.clone()).await?;
-        if scopes.is_some() {
+        let mut checkpoint = Checkpoint::load(&self.store, scopes.is_none(), incremental).await?;
+        let mut snapshot = if checkpoint.incremental() {
+            self.source
+                .incremental(checkpoint.watermark, &checkpoint.since()?)
+                .await?
+        } else {
+            self.source.snapshot(scopes.clone()).await?
+        };
+        if scopes.is_some() || checkpoint.incremental() || checkpoint.daily() {
             let mut db = self.store.read().await?;
             let counts = store::meta(&mut db, "cleanup_counts").await?;
             let changed = snapshot.header.cleanups.iter().any(|t| {
@@ -92,6 +105,7 @@ impl Service {
             drop(db);
             if changed {
                 scopes = None;
+                checkpoint.full();
                 drop(snapshot);
                 snapshot = self.source.snapshot(None).await?;
             }
@@ -111,6 +125,28 @@ impl Service {
             .collect();
         drop(db);
         let roots = crate::inventory::roots(&current, &known)?;
+        if (checkpoint.incremental() || checkpoint.daily())
+            && checkpoint.roots_changed(&self.store, &roots).await?
+        {
+            checkpoint.full();
+            snapshot.unrestrict().await?;
+        }
+        if checkpoint.reconcile() {
+            checkpoint.fingerprints = Some(snapshot.fingerprints().await?);
+            if checkpoint.daily() {
+                scopes = Some(
+                    checkpoint
+                        .changed_scopes(&self.store, &roots, &known)
+                        .await?,
+                );
+                snapshot
+                    .restrict(scopes.clone().unwrap_or_default())
+                    .await?;
+            }
+        } else if checkpoint.incremental() {
+            // An incremental cursor is not evidence that older records vanished.
+            scopes = Some(vec![]);
+        }
         {
             let mut db = self.store.write().await?;
             exec(&mut db, "DELETE FROM rust_sync_stage", &[]).await?;
@@ -166,6 +202,7 @@ impl Service {
             .map(|r| int(r, "root_id"))
             .collect::<BTreeSet<_>>();
         let gaps = store::meta(&mut db, "coverage_gaps").await?;
+        checkpoint.publish(&mut db, &roots).await?;
         db.commit().await?;
         let mut db = self.store.read().await?;
         let settlements = all(

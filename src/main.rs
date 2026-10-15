@@ -19,7 +19,7 @@ async fn main() {
         .with_target(false)
         .init();
     if let Err(e) = run().await {
-        tracing::error!(status = e.status, "service stopped");
+        tracing::error!(status = e.status, reason = %e.message, "service stopped");
         std::process::exit(1);
     }
 }

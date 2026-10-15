@@ -2,7 +2,7 @@ use std::{str::FromStr, time::Duration};
 
 use settlement::{
     config::Config,
-    source::{Scope, Source},
+    source::{Fingerprint, Scope, Snapshot, Source},
 };
 use sqlx::{
     ConnectOptions, PgPool, Row,
@@ -67,7 +67,10 @@ async fn run_postgres_source_case(admin_url: &str) -> TestResult<()> {
 
     let setup = create_fixture(&admin, &admin_options, &database, &names).await;
     let result = match setup {
-        Ok(source_url) => exercise_source(&admin, &source_url, &names).await,
+        Ok(source_url) => match exercise_source(&admin, &source_url, &names).await {
+            Ok(()) => verify_schema_startup_validation(&admin, &source_url, &names).await,
+            Err(error) => Err(error),
+        },
         Err(error) => Err(error),
     };
     let cleanup = drop_fixture(&admin, &database, &names).await;
@@ -386,10 +389,13 @@ async fn exercise_source_inner(
         "source cursor was not declared NO SCROLL",
     )?;
     check(
-        ["$1", "$2", "$3", "$4"]
-            .iter()
-            .all(|placeholder| cursor_query.contains(placeholder)),
-        "scoped cursor did not expose all four bound parameters",
+        cursor_query.contains("$1") && cursor_query.contains("$2") && !cursor_query.contains("$3"),
+        "scoped cursor did not bind its ranges and known IDs in two parameters",
+    )?;
+    let cursor_lower = cursor_query.to_ascii_lowercase();
+    check(
+        cursor_lower.contains("jsonb_to_recordset") && cursor_lower.contains("union select unnest"),
+        "scoped cursor did not use the bounded JSON range and known-ID query",
     )?;
     check(
         !cursor_query.contains("2026-01-01T00:00:00"),
@@ -564,9 +570,273 @@ async fn exercise_source_inner(
     )?;
     drop(recheck);
 
+    verify_reconciliation_source(admin, source, names).await?;
     verify_column_and_write_permissions(source_url, names).await?;
     verify_fixture_unchanged_by_source(admin, names).await?;
     Ok(())
+}
+
+async fn verify_reconciliation_source(
+    admin: &PgPool,
+    source: &Source,
+    names: &FixtureNames,
+) -> TestResult<()> {
+    let schema = ident(&names.schema);
+    let precise_amount = "12345678901234567890.1234567890123456789";
+    sqlx::query(&format!(
+        "UPDATE {schema}.usage_logs SET total_cost = $1::numeric WHERE id = 30000"
+    ))
+    .bind(precise_amount)
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("set precise reconciliation fixture amount", &error))?;
+    sqlx::query(&format!(
+        "UPDATE {schema}.usage_logs SET created_at = $1::timestamptz WHERE id = 40000"
+    ))
+    .bind("2026-01-15T12:34:56.123457+00:00")
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("set exclusive reconciliation fixture boundary", &error))?;
+
+    let baseline = source_fingerprints(source).await?;
+    let precise = baseline
+        .iter()
+        .find(|fingerprint| fingerprint.account_id == 103 && fingerprint.day == "2026-01-15")
+        .ok_or_else(|| "precise PostgreSQL daily fingerprint was absent".to_owned())?;
+    check(
+        precise.count == 1 && precise.amount == precise_amount,
+        "daily PostgreSQL fingerprint did not preserve count and full numeric precision",
+    )?;
+
+    sqlx::query(&format!(
+        "UPDATE {schema}.usage_logs SET user_id = 2 WHERE id = 30000"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("change reconciliation fixture user", &error))?;
+    let changed_user = source_fingerprints(source).await?;
+    let user_bucket = changed_user
+        .iter()
+        .find(|fingerprint| fingerprint.account_id == 103 && fingerprint.day == "2026-01-15")
+        .ok_or_else(|| "user-change PostgreSQL fingerprint was absent".to_owned())?;
+    check(
+        user_bucket.count == precise.count
+            && user_bucket.amount == precise.amount
+            && user_bucket.digest != precise.digest,
+        "daily fingerprint did not detect a user change with unchanged count and amount",
+    )?;
+
+    sqlx::query(&format!(
+        "UPDATE {schema}.usage_logs SET input_tokens = 77 WHERE id = 30000"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("change reconciliation fixture token count", &error))?;
+    let changed_tokens = source_fingerprints(source).await?;
+    let token_bucket = changed_tokens
+        .iter()
+        .find(|fingerprint| fingerprint.account_id == 103 && fingerprint.day == "2026-01-15")
+        .ok_or_else(|| "token-change PostgreSQL fingerprint was absent".to_owned())?;
+    check(
+        token_bucket.count == precise.count
+            && token_bucket.amount == precise.amount
+            && token_bucket.digest != user_bucket.digest,
+        "daily fingerprint did not detect a token change with unchanged count and amount",
+    )?;
+
+    let exact_boundary = "2026-01-15T12:34:56.123456+00:00";
+    let mut inclusive = source
+        .incremental(12050, exact_boundary)
+        .await
+        .map_err(|error| {
+            format!(
+                "incremental source open failed with status {}",
+                error.status
+            )
+        })?;
+    let inclusive_ids = snapshot_ids(&mut inclusive).await?;
+    check(
+        inclusive_ids.contains(&12050)
+            && inclusive_ids.contains(&30000)
+            && inclusive_ids.contains(&10001),
+        "incremental cursor did not include the exact lower timestamp, ID watermark, and later known row",
+    )?;
+
+    let mut exclusive = source
+        .incremental(12050, "2026-01-15T12:34:56.123457+00:00")
+        .await
+        .map_err(|error| {
+            format!(
+                "exclusive incremental source open failed with status {}",
+                error.status
+            )
+        })?;
+    let exclusive_ids = snapshot_ids(&mut exclusive).await?;
+    check(
+        exclusive_ids == vec![10001, 30000, 40000],
+        "incremental cursor did not exclude the watermark row just before since while retaining IDs above the watermark",
+    )?;
+
+    let scope = Scope {
+        root: 101,
+        accounts: vec![101, 102],
+        start: exact_boundary.to_owned(),
+        end: "2026-01-15T12:34:56.123457+00:00".to_owned(),
+        known_ids: vec![10001],
+    };
+    let mut restricted = source.snapshot(None).await.map_err(|error| {
+        format!(
+            "unrestricted source open failed with status {}",
+            error.status
+        )
+    })?;
+    restricted
+        .restrict(vec![scope])
+        .await
+        .map_err(|error| format!("source restrict failed with status {}", error.status))?;
+    let scoped_ids = snapshot_ids(&mut restricted).await?;
+    check(
+        scoped_ids.len() == 2050
+            && scoped_ids.contains(&10001)
+            && scoped_ids.contains(&12050)
+            && !scoped_ids.contains(&30000)
+            && !scoped_ids.contains(&40000)
+            && scoped_ids
+                .iter()
+                .all(|id| *id == 10001 || (10002..=12050).contains(id)),
+        "restricted source returned rows outside the scope and known IDs or violated a time boundary",
+    )?;
+    restricted
+        .unrestrict()
+        .await
+        .map_err(|error| format!("source unrestrict failed with status {}", error.status))?;
+    let all_ids = snapshot_ids(&mut restricted).await?;
+    check(
+        all_ids.len() == 2052
+            && all_ids.contains(&10001)
+            && all_ids.contains(&30000)
+            && all_ids.contains(&40000),
+        "unrestrict did not restore the full PostgreSQL usage stream",
+    )
+}
+
+async fn source_fingerprints(source: &Source) -> TestResult<Vec<Fingerprint>> {
+    let mut snapshot = source.snapshot(None).await.map_err(|error| {
+        format!(
+            "fingerprint snapshot open failed with status {}",
+            error.status
+        )
+    })?;
+    snapshot
+        .fingerprints()
+        .await
+        .map_err(|error| format!("fingerprint read failed with status {}", error.status))
+}
+
+async fn snapshot_ids(snapshot: &mut Snapshot) -> TestResult<Vec<i64>> {
+    let mut ids = Vec::new();
+    while let Some(batch) = snapshot
+        .next()
+        .await
+        .map_err(|error| format!("source stream failed with status {}", error.status))?
+    {
+        for row in batch {
+            ids.push(
+                row["id"]
+                    .as_i64()
+                    .ok_or_else(|| "source row ID was not an integer".to_owned())?,
+            );
+        }
+    }
+    Ok(ids)
+}
+
+async fn verify_schema_startup_validation(
+    admin: &PgPool,
+    source_url: &str,
+    names: &FixtureNames,
+) -> TestResult<()> {
+    let schema = ident(&names.schema);
+    let role = ident(&names.role);
+
+    sqlx::query(&format!(
+        "ALTER TABLE {schema}.usage_logs DROP COLUMN requested_model"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("remove required source fixture column", &error))?;
+    expect_source_startup_error(
+        source_url,
+        "源数据库字段缺失或类型不兼容：usage_logs.requested_model",
+    )
+    .await?;
+    sqlx::query(&format!(
+        "ALTER TABLE {schema}.usage_logs ADD COLUMN requested_model TEXT"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("restore required source fixture column", &error))?;
+    sqlx::query(&format!(
+        "GRANT SELECT (requested_model) ON {schema}.usage_logs TO {role}"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("restore source fixture column grant", &error))?;
+
+    sqlx::query(&format!(
+        "ALTER TABLE {schema}.usage_logs ALTER COLUMN requested_model TYPE BIGINT USING NULL::BIGINT"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("change required source fixture column type", &error))?;
+    expect_source_startup_error(
+        source_url,
+        "源数据库字段缺失或类型不兼容：usage_logs.requested_model",
+    )
+    .await?;
+    sqlx::query(&format!(
+        "ALTER TABLE {schema}.usage_logs ALTER COLUMN requested_model TYPE TEXT USING NULL::TEXT"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("restore required source fixture column type", &error))?;
+
+    sqlx::query(&format!(
+        "REVOKE SELECT (requested_model) ON {schema}.usage_logs FROM {role}"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("remove source fixture column grant", &error))?;
+    expect_source_startup_error(
+        source_url,
+        "源数据库缺少字段读取权限：usage_logs.requested_model",
+    )
+    .await?;
+    sqlx::query(&format!(
+        "GRANT SELECT (requested_model) ON {schema}.usage_logs TO {role}"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("restore source fixture column grant", &error))?;
+    Ok(())
+}
+
+async fn expect_source_startup_error(source_url: &str, expected: &str) -> TestResult<()> {
+    match Source::new(&config(source_url)).await {
+        Ok(source) => {
+            source.close().await;
+            Err(format!(
+                "Source::new unexpectedly accepted schema requiring {expected}"
+            ))
+        }
+        Err(error) => check(
+            error.status == 503 && error.message.contains(expected),
+            format!(
+                "Source::new returned an unclear error for {expected}: {}",
+                error.message
+            ),
+        ),
+    }
 }
 
 async fn verify_column_and_write_permissions(

@@ -184,6 +184,9 @@ pub async fn revision(db: &mut SqliteConnection, root: i64) -> Result<i64> {
     .unwrap_or(0))
 }
 async fn migrate(db: &mut SqliteConnection) -> Result<()> {
+    sqlx::raw_sql(include_str!("sync_schema.sql"))
+        .execute(&mut *db)
+        .await?;
     let columns = all(db, "PRAGMA table_info(cycles)", &[]).await?;
     let additions = [
         ("start_mode", "TEXT NOT NULL DEFAULT 'exact'"),

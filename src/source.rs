@@ -21,6 +21,16 @@ use std::{
 };
 use tokio::sync::{Mutex, mpsc};
 
+mod reconciliation;
+mod schema;
+pub use reconciliation::Fingerprint;
+
+#[derive(Clone)]
+enum Filter {
+    Scopes(Option<Vec<Scope>>),
+    Incremental { watermark: i64, since: String },
+}
+
 #[derive(Clone, Default, Deserialize)]
 pub struct Header {
     #[serde(default)]
@@ -88,6 +98,7 @@ impl Source {
                 })
             })
             .connect_lazy_with(opts);
+        schema::validate(&pool).await?;
         Ok(Self {
             fixture: None,
             pool: Some(pool),
@@ -142,25 +153,21 @@ impl Source {
                     .collect::<Result<Vec<_>>>()
             })
             .transpose()?;
+        self.open(Filter::Scopes(scopes)).await
+    }
+    pub async fn incremental(&self, watermark: i64, since: &str) -> Result<Snapshot> {
+        self.open(Filter::Incremental {
+            watermark,
+            since: time::instant(since)?,
+        })
+        .await
+    }
+    async fn open(&self, filter: Filter) -> Result<Snapshot> {
         if let Some(path) = &self.fixture {
             let header = self.fixture_header(path).await?;
-            let path = path.clone();
-            let (sender, receiver) = mpsc::channel(2);
-            let filter = scopes.clone();
-            tokio::task::spawn_blocking(move || {
-                let result = (|| -> Result<()> {
-                    let file = std::fs::File::open(path)?;
-                    let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
-                    read_fixture_usage(&mut reader, &sender, filter.as_deref())?;
-                    Ok(())
-                })();
-                if let Err(error) = result {
-                    let _ = sender.blocking_send(Err(error));
-                }
-            });
             return Ok(Snapshot {
                 header,
-                kind: SnapshotKind::Fixture(receiver),
+                kind: SnapshotKind::Fixture(FixtureStream::open(path.clone(), filter)?),
             });
         }
         let mut tx = self
@@ -175,32 +182,7 @@ impl Source {
         let accounts=sqlx::query("SELECT id,name,platform,status,parent_account_id,created_at,deleted_at FROM accounts ORDER BY id").fetch_all(&mut *tx).await?.iter().map(account).collect::<Result<Vec<_>>>()?;
         let users=sqlx::query("SELECT id,username AS name,role,status,deleted_at FROM users ORDER BY id").fetch_all(&mut *tx).await?.iter().map(|r|->Result<Value>{let id:i64=r.try_get("id")?;let name:Option<String>=r.try_get("name")?;Ok(json!({"id":id,"name":name.filter(|s|!s.is_empty()).unwrap_or_else(||format!("用户 #{id}")),"role":r.try_get::<String,_>("role")?,"status":r.try_get::<String,_>("status")?,"deleted":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("deleted_at")?.is_some()}))}).collect::<Result<Vec<_>>>()?;
         let cleanups=sqlx::query("SELECT id,filters,deleted_rows,finished_at FROM usage_cleanup_tasks WHERE deleted_rows>0 ORDER BY id").fetch_all(&mut *tx).await?.iter().map(|r|->Result<Value>{Ok(json!({"id":r.try_get::<i64,_>("id")?,"filters":r.try_get::<Value,_>("filters")?,"deleted_rows":r.try_get::<i64,_>("deleted_rows")?,"finished_at":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("finished_at")?.map(time::format)}))}).collect::<Result<Vec<_>>>()?;
-        let mut q = sqlx::QueryBuilder::new(
-            "DECLARE settlement_usage NO SCROLL CURSOR FOR SELECT id,account_id,user_id,total_cost::text AS amount,created_at,request_id,upstream_request_id,model,requested_model,upstream_model,upstream_response_model,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens FROM usage_logs",
-        );
-        if let Some(scopes) = &scopes {
-            q.push(" WHERE (");
-            for (i, s) in scopes.iter().enumerate() {
-                if i > 0 {
-                    q.push(" OR ");
-                }
-                q.push("((account_id=ANY(")
-                    .push_bind(s.accounts.clone())
-                    .push(") AND created_at>=")
-                    .push_bind(time::parse(&s.start)?)
-                    .push(" AND created_at<")
-                    .push_bind(time::parse(&s.end)?)
-                    .push(") OR id=ANY(")
-                    .push_bind(s.known_ids.clone())
-                    .push("))");
-            }
-            if scopes.is_empty() {
-                q.push("FALSE");
-            }
-            q.push(")");
-        }
-        q.push(" ORDER BY id");
-        q.build().persistent(false).execute(&mut *tx).await?;
+        declare_cursor(&mut tx, &filter).await?;
         Ok(Snapshot {
             header: Header {
                 accounts,
@@ -219,6 +201,38 @@ impl Source {
         }
     }
 }
+
+async fn declare_cursor(tx: &mut sqlx::PgConnection, filter: &Filter) -> Result<()> {
+    let mut q = sqlx::QueryBuilder::new(
+        "DECLARE settlement_usage NO SCROLL CURSOR FOR SELECT id,account_id,user_id,total_cost::text AS amount,created_at,request_id,upstream_request_id,model,requested_model,upstream_model,upstream_response_model,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens FROM usage_logs",
+    );
+    if let Filter::Scopes(Some(scopes)) = filter {
+        let ranges = scopes
+            .iter()
+            .map(|s| json!({"accounts":s.accounts,"lower":s.start,"upper":s.end}))
+            .collect::<Vec<_>>();
+        let mut known = scopes
+            .iter()
+            .flat_map(|s| s.known_ids.iter().copied())
+            .collect::<Vec<_>>();
+        known.sort_unstable();
+        known.dedup();
+        // Two parameters regardless of bucket count, with indexed range/ID
+        // lookups. UNION prevents duplicate rows when intervals intersect.
+        q.push(" WHERE id IN (SELECT u.id FROM jsonb_to_recordset(")
+            .push_bind(json!(ranges))
+            .push("::jsonb) AS r(accounts bigint[],lower timestamptz,upper timestamptz) JOIN usage_logs u ON u.account_id=ANY(r.accounts) AND u.created_at>=r.lower AND u.created_at<r.upper UNION SELECT unnest(")
+            .push_bind(known).push("::bigint[]))");
+    } else if let Filter::Incremental { watermark, since } = filter {
+        q.push(" WHERE id>")
+            .push_bind(*watermark)
+            .push(" OR created_at>=")
+            .push_bind(time::parse(since)?);
+    }
+    q.push(" ORDER BY id");
+    q.build().persistent(false).execute(tx).await?;
+    Ok(())
+}
 fn account(r: &sqlx::postgres::PgRow) -> Result<Value> {
     Ok(
         json!({"id":r.try_get::<i64,_>("id")?,"name":r.try_get::<String,_>("name")?,"platform":r.try_get::<String,_>("platform")?,"status":r.try_get::<String,_>("status")?,"parent_account_id":r.try_get::<Option<i64>,_>("parent_account_id")?,"created_at":time::format(r.try_get("created_at")?),"deleted":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("deleted_at")?.is_some()}),
@@ -229,13 +243,19 @@ pub struct Snapshot {
     kind: SnapshotKind,
 }
 enum SnapshotKind {
-    Fixture(mpsc::Receiver<Result<Vec<Value>>>),
+    Fixture(FixtureStream),
     Pg(sqlx::Transaction<'static, sqlx::Postgres>),
 }
 impl Snapshot {
     pub async fn next(&mut self) -> Result<Option<Vec<Value>>> {
         match &mut self.kind {
-            SnapshotKind::Fixture(rx) => rx.recv().await.transpose(),
+            SnapshotKind::Fixture(stream) => {
+                let result = stream.receiver.recv().await.transpose()?;
+                if result.is_none() {
+                    stream.unchanged()?;
+                }
+                Ok(result)
+            }
             SnapshotKind::Pg(tx) => {
                 let rows = sqlx::query("FETCH FORWARD 2048 FROM settlement_usage")
                     .fetch_all(&mut **tx)
@@ -261,6 +281,41 @@ impl Snapshot {
                 Ok(Some(output))
             }
         }
+    }
+}
+struct FixtureStream {
+    path: PathBuf,
+    stamp: (SystemTime, u64),
+    receiver: mpsc::Receiver<Result<Vec<Value>>>,
+}
+impl FixtureStream {
+    fn open(path: PathBuf, filter: Filter) -> Result<Self> {
+        let stat = std::fs::metadata(&path)?;
+        let stamp = (stat.modified()?, stat.len());
+        let (sender, receiver) = mpsc::channel(2);
+        let input = path.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = (|| -> Result<()> {
+                let file = std::fs::File::open(input)?;
+                let mut reader = std::io::BufReader::with_capacity(256 * 1024, file);
+                read_fixture_usage(&mut reader, &sender, &filter)
+            })();
+            if let Err(error) = result {
+                let _ = sender.blocking_send(Err(error));
+            }
+        });
+        Ok(Self {
+            path,
+            stamp,
+            receiver,
+        })
+    }
+    fn unchanged(&self) -> Result<()> {
+        let stat = std::fs::metadata(&self.path)?;
+        if (stat.modified()?, stat.len()) != self.stamp {
+            return Err(Error::unavailable());
+        }
+        Ok(())
     }
 }
 struct HeaderVisitor;
@@ -418,7 +473,7 @@ fn peek_nonspace<R: std::io::BufRead>(reader: &mut R) -> Result<Option<u8>> {
 fn read_fixture_usage<R: std::io::BufRead>(
     reader: &mut R,
     sender: &mpsc::Sender<Result<Vec<Value>>>,
-    scopes: Option<&[Scope]>,
+    filter: &Filter,
 ) -> Result<()> {
     expect_byte(reader, b'{')?;
     let mut seen = false;
@@ -440,7 +495,7 @@ fn read_fixture_usage<R: std::io::BufRead>(
                 loop {
                     json_value(reader, &mut raw)?;
                     let row: FixtureUsage = serde_json::from_slice(&raw)?;
-                    let included = if let Some(scopes) = scopes {
+                    let included = if let Filter::Scopes(Some(scopes)) = filter {
                         if scopes
                             .iter()
                             .any(|s| s.known_ids.binary_search(&row.id).is_ok())
@@ -454,6 +509,8 @@ fn read_fixture_usage<R: std::io::BufRead>(
                         } else {
                             false
                         }
+                    } else if let Filter::Incremental { watermark, since } = filter {
+                        row.id > *watermark || time::instant(&row.created_at)? >= *since
                     } else {
                         true
                     };
