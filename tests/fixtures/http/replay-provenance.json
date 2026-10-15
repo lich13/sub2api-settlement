@@ -1,16 +1,16 @@
 {
   "schema_version": "settlement-static-replay-overlay/v1",
-  "scope": "Interpret two capture-time aliases without modifying the frozen workflow JSON or normalized SQL.",
+  "scope": "Interpret two capture-time aliases and one captured DELETE result without modifying the frozen workflow JSON or normalized SQL.",
   "evidence_sources": [
     {
       "path": "freeze/http_diff.py",
       "sha256": "62ff7c8480ebe1f88e7f20aabb983237266ee679ce54e10f15ea68ee1f83ea88",
-      "functions": ["identity_session_boundaries", "mutation_signature", "API.snapshot"]
+      "functions": ["identity_session_boundaries", "mutation_signature", "API.snapshot", "FakeUpstream.start.Handler.do_DELETE"]
     },
     {
       "path": "freeze/capture_fixtures.py",
       "sha256": "4e3cd32c64b920818b348f7c6067de3ba11121018efbae110feccc03164a3e4a",
-      "functions": ["install_capture_hooks.api_snapshot", "request_shape"]
+      "functions": ["install_capture_hooks.api_snapshot", "request_shape", "note_upstream", "install_capture_hooks.api_request"]
     }
   ],
   "request_header_bindings": [
@@ -24,6 +24,24 @@
       "producer": "initial-admin-session",
       "producer_field": "csrf",
       "reason": "The driver saves old_tab_headers before refreshing the expired session. Both CSRF generations were normalized to the same actor alias."
+    }
+  ],
+  "upstream_state_observations": [
+    {
+      "workflow": "deletion-jobs",
+      "step_index": 15,
+      "preceding_step_index": 14,
+      "preceding_label": "retry-deletion",
+      "operation": "upstream_state",
+      "state_sha256": "ea8aa0a63e974182d61f57c908c00040e8520314366b40c675dc676c1b382a38",
+      "state_digest_format": "SHA-256 of the complete state encoded as compact JSON with recursively sorted object keys and unchanged array order",
+      "effect_call": {
+        "method": "DELETE",
+        "path": "/api/v1/admin/accounts/100",
+        "status": 200,
+        "body": {"code": 0}
+      },
+      "reason": "note_upstream runs before the next captured HTTP request and records the source mutation already performed by FakeUpstream.start.Handler.do_DELETE. After retry-deletion, removal of account 100 and descendants 101 and 102 is the successful DELETE result. Await that real mock call and compare the complete source and verifier state; do not apply this observation as an external state input. Other upstream_state steps remain inputs."
     }
   ],
   "runtime_signatures": [

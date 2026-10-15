@@ -103,6 +103,43 @@ pub async fn run_workflow(name: &str) -> TestResult<()> {
     harness.run().await
 }
 
+#[tokio::test]
+async fn deletion_jobs_waits_for_delayed_delete() {
+    let mut harness = Harness::new("deletion-jobs").await.unwrap();
+    harness.upstream.state.inner.lock().await.delete_delay = Duration::from_millis(250);
+    harness
+        .run()
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        harness.pending_upstream_observations > 0,
+        "the observation barrier must run while the successful DELETE is still delayed"
+    );
+
+    let observations =
+        std::mem::take(&mut harness.upstream.state.inner.lock().await.delayed_deletes);
+    assert_eq!(
+        observations.len(),
+        1,
+        "the successful DELETE must be delayed once"
+    );
+    let observation = &observations[0];
+    let before = observation.source_before.as_ref().unwrap();
+    let after = observation.source_after.as_ref().unwrap();
+    assert!(
+        before["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|account| { account["id"].as_i64() == Some(observation.account_id) }),
+        "the account must still exist when the delayed DELETE begins"
+    );
+    assert_eq!(
+        before, after,
+        "the replay must not apply the captured deletion while DELETE is delayed"
+    );
+}
+
 struct Harness {
     name: String,
     root: PathBuf,
@@ -126,6 +163,7 @@ struct Harness {
     csrf_by_sso: HashMap<String, String>,
     signatures: HashMap<(i64, String), SignatureInput>,
     upstream_call_cursor: usize,
+    pending_upstream_observations: usize,
     race_winners: BTreeMap<String, String>,
     upstream: UpstreamServer,
 }
@@ -210,6 +248,7 @@ impl Harness {
             csrf_by_sso: HashMap::new(),
             signatures: HashMap::new(),
             upstream_call_cursor: 0,
+            pending_upstream_observations: 0,
             race_winners: BTreeMap::new(),
             upstream,
         })
@@ -221,13 +260,13 @@ impl Harness {
             .as_array()
             .ok_or_else(|| format!("{}: fixture steps is not an array", self.name))?
             .clone();
-        for step in &steps {
+        for (step_index, step) in steps.iter().enumerate() {
             let label = step["label"].as_str().unwrap_or("unlabelled-step");
             match step["op"].as_str().unwrap_or("") {
                 "http" => self.run_http_step(step).await?,
                 "sso" => self.run_sso_step(step).await?,
                 "db_snapshot" => self.run_db_snapshot(step).await?,
-                "upstream_state" => self.apply_upstream_state(step).await?,
+                "upstream_state" => self.apply_upstream_state(step_index, step).await?,
                 "restart" => self.restart_service().await?,
                 "sql" => self.run_sql_step(step).await?,
                 "race" => self.run_race_step(step).await?,
@@ -397,14 +436,88 @@ impl Harness {
         self.start_service().await
     }
 
-    async fn apply_upstream_state(&mut self, step: &Value) -> TestResult<()> {
+    async fn apply_upstream_state(&mut self, step_index: usize, step: &Value) -> TestResult<()> {
         let label = step["label"].as_str().unwrap_or("upstream-state");
         let state = step
             .get("state")
             .ok_or_else(|| format!("{} / {label}: upstream state missing", self.name))?;
+        let observations = self.replay_overlay["upstream_state_observations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|observation| {
+                observation["workflow"] == self.name
+                    && observation["step_index"].as_u64() == Some(step_index as u64)
+            })
+            .collect::<Vec<_>>();
+        if observations.len() > 1 {
+            return Err(format!(
+                "{} / {label}: duplicate upstream observation overlays at step {step_index}",
+                self.name
+            ));
+        }
+        if let Some(observation) = observations.first() {
+            let preceding = step_index
+                .checked_sub(1)
+                .and_then(|index| self.workflow["steps"].get(index))
+                .ok_or("upstream observation has no preceding step")?;
+            if observation["preceding_step_index"].as_u64() != Some((step_index - 1) as u64)
+                || observation["preceding_label"] != preceding["label"]
+                || observation["operation"] != step["op"]
+                || observation["state_sha256"] != sha256_hex(canonical_json(state).as_bytes())
+                || observation["effect_call"]["method"] != "DELETE"
+                || observation["effect_call"]["status"] != 200
+            {
+                return Err(format!(
+                    "{} / {label}: upstream observation overlay does not match frozen step {step_index}",
+                    self.name
+                ));
+            }
+            let state = self.aliases.expand_value(state)?;
+            let effect_call = self.aliases.expand_value(&observation["effect_call"])?;
+            return self
+                .wait_for_upstream_observation(step_index, &state, &effect_call)
+                .await;
+        }
         let state = self.aliases.expand_value(state)?;
         self.upstream.set_state(&state).await?;
         Ok(())
+    }
+
+    async fn wait_for_upstream_observation(
+        &mut self,
+        step_index: usize,
+        expected_state: &Value,
+        effect_call: &Value,
+    ) -> TestResult<()> {
+        // note_upstream captures this state after the old mock DELETE mutates source.
+        // Leave calls unconsumed: the next HTTP step compares the entire exact sequence.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let calls = self.upstream.calls().await;
+            let effect_observed = calls
+                .as_array()
+                .unwrap()
+                .iter()
+                .skip(self.upstream_call_cursor)
+                .any(|call| call == effect_call);
+            let state = self.upstream.current_state().await?;
+            if effect_observed && state == *expected_state {
+                return Ok(());
+            }
+            if effect_observed {
+                self.pending_upstream_observations += 1;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "{} / upstream-state step {step_index}: timed out awaiting DELETE observation; \
+                     expected effect {effect_call}, observed={effect_observed}; {}",
+                    self.name,
+                    json_difference("upstream state", expected_state, &state)
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     async fn run_sql_step(&self, step: &Value) -> TestResult<()> {
@@ -1704,6 +1817,14 @@ struct MockInner {
     unavailable: bool,
     delete_failures: HashSet<i64>,
     calls: Vec<Value>,
+    delete_delay: Duration,
+    delayed_deletes: Vec<DelayedDeleteObservation>,
+}
+
+struct DelayedDeleteObservation {
+    account_id: i64,
+    source_before: TestResult<Value>,
+    source_after: TestResult<Value>,
 }
 
 struct UpstreamServer {
@@ -1725,6 +1846,8 @@ impl UpstreamServer {
                 unavailable: false,
                 delete_failures: HashSet::new(),
                 calls: Vec::new(),
+                delete_delay: Duration::ZERO,
+                delayed_deletes: Vec::new(),
             })),
         };
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -1795,6 +1918,22 @@ impl UpstreamServer {
 
     async fn calls(&self) -> Value {
         Value::Array(self.state.inner.lock().await.calls.clone())
+    }
+
+    async fn current_state(&self) -> TestResult<Value> {
+        let source = read_json(&self.state.source_path)?;
+        let inner = self.state.inner.lock().await;
+        let mut delete_failures = inner.delete_failures.iter().copied().collect::<Vec<_>>();
+        delete_failures.sort_unstable();
+        Ok(json!({
+            "source": source,
+            "verifier": {
+                "users": inner.users,
+                "status_overrides": inner.status_overrides,
+                "unavailable": inner.unavailable,
+                "delete_failures": delete_failures,
+            }
+        }))
     }
 
     async fn user_id_for_token(&self, token: &str) -> Option<i64> {
@@ -1886,7 +2025,7 @@ async fn upstream_delete_account(
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or("")
         .to_owned();
-    let (actor, status, body) = {
+    let (actor, status, body, delay) = {
         let mut inner = state.inner.lock().await;
         let actor = inner.users.get(&token).cloned().unwrap_or(Value::Null);
         let status = if actor["role"] != "admin" {
@@ -1907,9 +2046,24 @@ async fn upstream_delete_account(
             "status":status,
             "body":{"code":if status == 200 { 0 } else { status }}
         }));
-        (actor, status, body)
+        (actor, status, body, inner.delete_delay)
     };
     let _ = actor;
+    if status == 200 && !delay.is_zero() {
+        let source_before = read_json(&state.source_path);
+        tokio::time::sleep(delay).await;
+        let source_after = read_json(&state.source_path);
+        state
+            .inner
+            .lock()
+            .await
+            .delayed_deletes
+            .push(DelayedDeleteObservation {
+                account_id,
+                source_before,
+                source_after,
+            });
+    }
     if status == 200
         && let Ok(source) = read_json(&state.source_path)
     {
