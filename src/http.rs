@@ -467,6 +467,7 @@ fn route_methods(path: &str) -> Option<&'static [&'static str]> {
         | ["accounts", "state"]
         | ["accounts", _, "deletion-scope"]
         | ["cycles", _, "start-candidate"]
+        | ["cycles", _, "bill-previews", _, "unmatched.csv"]
         | ["netting", "balances"]
         | ["netting", "balances", _, _]
         | ["netting", "payments", _]
@@ -544,6 +545,36 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
                 (
                     "Content-Disposition",
                     "attachment; filename=\"settlement-audit.csv\"",
+                ),
+            ],
+            bytes,
+        )
+            .into_response());
+    }
+    if method == "GET"
+        && let [
+            "cycles",
+            cycle_id,
+            "bill-previews",
+            preview_id,
+            "unmatched.csv",
+        ] = path.split('/').collect::<Vec<_>>().as_slice()
+    {
+        let cycle_id = cycle_id
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| Error::invalid("周期编号无效"))?;
+        let bytes = app
+            .service
+            .unmatched_bill_csv(&actor, cycle_id, preview_id)
+            .await?;
+        return Ok((
+            [
+                ("Content-Type", "text/csv; charset=utf-8"),
+                (
+                    "Content-Disposition",
+                    "attachment; filename=\"settlement-unmatched.csv\"",
                 ),
             ],
             bytes,

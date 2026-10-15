@@ -13,7 +13,10 @@ use settlement::{config::Config, http::App, time};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tempfile::TempDir;
@@ -40,6 +43,9 @@ pub struct Options {
     pub assets: PathBuf,
     #[arg(long)]
     pub netting_fixtures: bool,
+    /// Fail the first synthetic upstream DELETE for recovery tests.
+    #[arg(long)]
+    pub fail_delete_once: bool,
     #[arg(long)]
     pub bill_csv: Option<PathBuf>,
     #[arg(long)]
@@ -139,6 +145,7 @@ pub fn source(clock: &str) -> Result<Value> {
 struct Upstream {
     fixture: PathBuf,
     lock: Arc<Mutex<()>>,
+    fail_delete_once: Arc<AtomicBool>,
 }
 fn actor(headers: &HeaderMap) -> Option<usize> {
     headers
@@ -168,6 +175,9 @@ async fn remove(
 ) -> (StatusCode, Json<Value>) {
     if actor(&headers) != Some(1) {
         return (StatusCode::FORBIDDEN, Json(json!({"code":403})));
+    }
+    if state.fail_delete_once.swap(false, Ordering::AcqRel) {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"code":503})));
     }
     let _guard = state.lock.lock().await;
     let result: Result<bool> = (|| {
@@ -363,6 +373,7 @@ pub async fn start(options: &Options, override_source: Option<Value>) -> Result<
         .with_state(Upstream {
             fixture: fixture.clone(),
             lock: Arc::new(Mutex::new(())),
+            fail_delete_once: Arc::new(AtomicBool::new(options.fail_delete_once)),
         });
     let mut tasks = vec![tokio::spawn(async move {
         let _ = axum::serve(upstream, upstream_router)
@@ -557,6 +568,7 @@ mod tests {
             port: 0,
             assets: PathBuf::from("missing-assets"),
             netting_fixtures: true,
+            fail_delete_once: false,
             bill_csv: None,
             self_check: true,
         };

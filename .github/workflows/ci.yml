@@ -83,6 +83,10 @@ jobs:
         run: |
           cargo run --locked -p settlement-tools -- demo --self-check --netting-fixtures --port 0
           cargo run --locked -p settlement-tools -- load --self-check
+      - name: Install isolated browser test runtime
+        run: pnpm --dir frontend exec playwright install --with-deps chromium
+      - name: End-to-end checks with the Rust demo ledger
+        run: pnpm --dir frontend test:e2e
       - name: Tracked source and whitespace checks
         shell: bash
         run: |

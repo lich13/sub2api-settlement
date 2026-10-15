@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  downloadCsv,
   ApiError,
   setCsrf,
   money,
@@ -789,6 +790,17 @@ function BillImportPanel({
         {preview.coverage_warning && <FormError error={preview.coverage_warning} />}
         {!!preview.local_unmatched_count && <div><span>本地未列入账单</span><b>{preview.local_unmatched_count} 条</b></div>}
         {!!preview.outside_count && <div><span>范围外</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
+        {(preview.unmatched_count > 0 || preview.outside_count > 0) && <button className="text-button" disabled={busy} onClick={async () => {
+          const token = requestVersion.current;
+          setBusy(true); setError("");
+          try {
+            await downloadCsv(`/cycles/${effectiveCycle.id}/bill-previews/${preview.id}/unmatched.csv`, "未匹配账单.csv");
+          } catch (e) {
+            if (token === requestVersion.current) setError((e as Error).message);
+          } finally {
+            if (token === requestVersion.current) setBusy(false);
+          }
+        }}>导出未匹配明细</button>}
         {preview.difference_required && <label className="checkline"><input type="checkbox" checked={acceptDifference} onChange={(e) => setAcceptDifference(e.target.checked)} />确认本地差异，按已匹配扣费比例分摊</label>}
         {!!preview.outside_count && <label className="checkline"><input type="checkbox" checked={acceptOutside} onChange={(e) => setAcceptOutside(e.target.checked)} />确认不计入范围外记录</label>}
         <BillAllocation cycle={effectiveCycle} preview={preview} />

@@ -214,6 +214,7 @@ pub async fn run(mut options: Options) -> Result<()> {
         port: 0,
         assets: PathBuf::from("missing-assets"),
         netting_fixtures: false,
+        fail_delete_once: false,
         bill_csv: None,
         self_check: true,
     };

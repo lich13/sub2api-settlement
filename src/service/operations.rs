@@ -38,6 +38,80 @@ pub fn csv_bytes(headers: &[&str], rows: impl IntoIterator<Item = Vec<String>>) 
 }
 
 impl Service {
+    pub async fn unmatched_bill_csv(
+        &self,
+        actor: &Value,
+        cycle_id: i64,
+        preview_id: &str,
+    ) -> Result<Vec<u8>> {
+        admin(actor)?;
+        let mut db = self.store.read().await?;
+        let preview = store::one(
+            &mut db,
+            "SELECT * FROM bill_previews WHERE id=? AND cycle_id=? AND actor_id=?",
+            &[json!(preview_id), json!(cycle_id), actor["id"].clone()],
+            "账单预览不存在，请重新匹配",
+        )
+        .await?;
+        if text(&preview, "expires_at") <= time::now().as_str() {
+            return Err(Error::conflict("账单预览已过期，请重新匹配"));
+        }
+        let cycle = store::one(
+            &mut db,
+            "SELECT version,status FROM cycles WHERE id=?",
+            &[json!(cycle_id)],
+            "周期不存在",
+        )
+        .await?;
+        let payload: Value = serde_json::from_str(text(&preview, "payload"))?;
+        let result = &payload["result"];
+        if cycle["status"] != "open" || cycle["version"] != result["version"] {
+            return Err(Error::conflict("周期已修改或已出单，请重新匹配"));
+        }
+        csv_bytes(
+            &[
+                "CSV 行号",
+                "请求时间（UTC）",
+                "模型",
+                "请求标识",
+                "输入 Token",
+                "输出 Token",
+                "缓存读取 Token",
+                "缓存创建 Token",
+                "上游扣费（元，原始精度）",
+                "未匹配原因",
+            ],
+            crate::json::array(&result["unmatched"])
+                .iter()
+                .map(|row| (row, false))
+                .chain(
+                    crate::json::array(&result["outside"])
+                        .iter()
+                        .map(|row| (row, true)),
+                )
+                .map(|(row, outside)| {
+                    let reason = if outside {
+                        "周期范围外"
+                    } else if row["reason"] == "ambiguous" {
+                        "存在歧义"
+                    } else {
+                        "未找到本地请求"
+                    };
+                    vec![
+                        int(row, "row").to_string(),
+                        text(row, "created_at").to_owned(),
+                        text(row, "model").to_owned(),
+                        text(row, "request_id").to_owned(),
+                        int(row, "input_tokens").to_string(),
+                        int(row, "output_tokens").to_string(),
+                        int(row, "cache_read_tokens").to_string(),
+                        int(row, "cache_creation_tokens").to_string(),
+                        text(row, "amount").to_owned(),
+                        reason.to_owned(),
+                    ]
+                }),
+        )
+    }
     pub async fn deletion_scope(&self, actor: &Value, account_id: i64) -> Result<Value> {
         admin(actor)?;
         if !self.inventory.refresh(true).await["error"].is_null() {

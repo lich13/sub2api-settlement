@@ -12,10 +12,15 @@ cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 pnpm --dir frontend test
 pnpm --dir frontend build
+cargo build --locked -p settlement-tools
+pnpm --dir frontend exec playwright install chromium
+pnpm --dir frontend test:e2e
 docker build -t settlement-local .
 ```
 
 The PostgreSQL integration test additionally uses `TEST_POSTGRES_URL`, pointing only to a disposable test database. CI provisions this service. Test fixtures must never contain production ledgers, credentials, sessions, request bodies, email addresses or infrastructure addresses.
+
+Playwright starts a separate Rust demo service and temporary ledger for each scenario. It uses only loopback addresses and synthetic identities, and stops each process after the test. The demo-only `--fail-delete-once` switch exercises an upstream deletion failure without making any external request. Property tests cover allocation invariants and ambiguous CSV matches; retain the generated failure seed when reporting a failure.
 
 ## Accounting invariants
 

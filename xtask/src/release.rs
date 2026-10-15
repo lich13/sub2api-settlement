@@ -83,13 +83,32 @@ fn safe_path(path: &Path) -> bool {
             )
         })
         && !path.components().any(|part| {
-            part.as_os_str()
-                .to_str()
-                .is_some_and(|name| name.starts_with(".env") && text != ".env.example")
+            part.as_os_str().to_str().is_some_and(|name| {
+                (name.starts_with(".env") && text != ".env.example")
+                    || name.starts_with("session.keys")
+                    || name.starts_with(".secret-")
+                    || name.starts_with(".backup-")
+                    || name == "settlement.lock"
+            })
         })
-        && ![".sqlite", ".sqlite3", ".db", ".key", ".pem"]
-            .iter()
-            .any(|suffix| text.ends_with(suffix))
+        && ![
+            ".sqlite",
+            ".sqlite3",
+            ".db",
+            ".sqlite-wal",
+            ".sqlite-shm",
+            ".sqlite-journal",
+            ".sqlite3-wal",
+            ".sqlite3-shm",
+            ".sqlite3-journal",
+            ".db-wal",
+            ".db-shm",
+            ".db-journal",
+            ".key",
+            ".pem",
+        ]
+        .iter()
+        .any(|suffix| text.ends_with(suffix))
 }
 
 fn append(builder: &mut tar::Builder<GzEncoder<fs::File>>, relative: &Path) -> Result<()> {
@@ -272,8 +291,16 @@ mod tests {
             "nested/.env",
             "data/source.json",
             "session.key",
+            "nested/session.keys.json",
+            "session.keys.pending.json",
+            "nested/.secret-fixture",
+            ".backup-fixture",
+            "settlement.lock",
             "ledger.db",
             "ledger.sqlite3",
+            "ledger.sqlite3-wal",
+            "ledger.sqlite-shm",
+            "ledger.db-journal",
             "a/../secret",
             "/etc/passwd",
             "a/token.pem",
