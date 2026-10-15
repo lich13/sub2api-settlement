@@ -9,10 +9,11 @@ use settlement::{json::hash, time};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct Options {
     #[arg(long, default_value_t = 150_000)]
     usage: usize,
@@ -23,6 +24,9 @@ pub struct Options {
     /// Run mixed read, preview, matching and idempotent writes for this many seconds.
     #[arg(long, default_value_t = 0)]
     duration: u64,
+    /// Number of concurrent synthetic HTTP workers (1..32).
+    #[arg(long, default_value_t = 1)]
+    workers: usize,
     /// Use a small deterministic data set and exercise source failure/restart recovery.
     #[arg(long)]
     self_check: bool,
@@ -97,7 +101,7 @@ fn percentile(values: &[f64], p: f64) -> f64 {
     sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower as f64)
 }
 fn metrics(values: &[f64]) -> Value {
-    json!({"samples":values.len(),"p50_ms":percentile(values,0.5),"p95_ms":percentile(values,0.95),"operations_per_second":values.len() as f64/(values.iter().sum::<f64>()/1000.0)})
+    json!({"samples":values.len(),"p50_ms":percentile(values,0.5),"p95_ms":percentile(values,0.95),"mean_ms":values.iter().sum::<f64>()/values.len() as f64})
 }
 
 fn units_decimal(units: u128) -> String {
@@ -189,13 +193,17 @@ pub async fn run(mut options: Options) -> Result<()> {
         options.usage = 1200;
         options.csv_rows = 120;
         options.samples = 2;
+        options.workers = 2;
     }
     if options.usage < 12
         || options.csv_rows == 0
         || options.csv_rows > 50_000
         || options.samples == 0
+        || !(1..=32).contains(&options.workers)
     {
-        return Err("Require usage >= 12, 1..50000 CSV rows, and positive samples".into());
+        return Err(
+            "Require usage >= 12, 1..50000 CSV rows, positive samples and 1..32 workers".into(),
+        );
     }
     let (source, csv) = fixtures(options.usage, options.csv_rows)?;
     let source_hash = hash(&serde_json::to_vec(&source)?);
@@ -211,36 +219,63 @@ pub async fn run(mut options: Options) -> Result<()> {
     };
     let server = demo::start(&demo_options, Some(source)).await?;
     let result:Result<Value>=async {
-        let api=Api::login(&server.origin,1).await?;
+        let api=Api::login_with_timeout(&server.origin,1,Duration::from_secs(300)).await?;
         let ids=edit_cycles(&api).await?;
         let cycles=api.request("GET","/overview",Value::Null,"").await?;
         let version=cycles["accounts"].as_array().unwrap().iter().find(|a|a["id"]==2).ok_or("Missing load cycle")?["cycle"]["version"].clone();
         let tasks=[("preview","POST","/previews".to_owned(),json!({"ids":[ids[0]],"end":END})),("matching","POST",format!("/cycles/{}/bill-previews",ids[1]),json!({"version":version,"end":END,"file_name":"load.csv","csv":csv,"allocation_mode":"proportional"})),("overview","GET","/overview".into(),Value::Null),("account_state","GET","/accounts/state".into(),Value::Null),("orders","GET","/orders".into(),Value::Null)];
-        let mut timings:BTreeMap<String,Vec<f64>>=BTreeMap::new();
         let started=Instant::now();
+        let api = Arc::new(api);
+        let tasks = Arc::new(tasks);
+        let mut workers = tokio::task::JoinSet::new();
+        for _ in 0..options.workers {
+            let api = api.clone();
+            let tasks = tasks.clone();
+            let options = options.clone();
+            workers.spawn(async move {
+                let mut timings:BTreeMap<String,Vec<f64>>=BTreeMap::new();
         let mut iteration=0;
         loop {
-            for (name,method,path,payload) in &tasks {
+            for (name,method,path,payload) in tasks.iter() {
                 let timer=Instant::now();
                 let response=api.request(method,path,payload.clone(),"load-preview").await?;
                 let elapsed = timer.elapsed().as_secs_f64()*1000.0;
                 assert_observation(name, &response, options.usage, options.csv_rows)?;
                 timings.entry((*name).into()).or_default().push(elapsed);
             }
-            if options.duration>0 {
+            if options.duration>0 || options.self_check {
                 let payload=json!({"name":"Load retry expense","cost":"0.01","incurred_on":"2025-01-20","creditor_id":1,"allocation_mode":"equal","members":[{"user_id":2,"percent":null} ]});
+                let timer=Instant::now();
                 let first=api.request("POST","/expenses",payload.clone(),"load-stable-write").await?;
+                timings.entry("idempotent_write".into()).or_default().push(timer.elapsed().as_secs_f64()*1000.0);
+                let timer=Instant::now();
                 let repeated=api.request("POST","/expenses",payload,"load-stable-write").await?;
+                timings.entry("idempotent_retry".into()).or_default().push(timer.elapsed().as_secs_f64()*1000.0);
                 if first!=repeated { return Err("Idempotency invariant failed".into()); }
             }
             iteration+=1;
             if (options.duration==0 && iteration>=options.samples) || (options.duration>0 && started.elapsed()>=Duration::from_secs(options.duration)) { break; }
         }
+
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(timings)
+            });
+        }
+        let mut timings:BTreeMap<String,Vec<f64>>=BTreeMap::new();
+        while let Some(worker) = workers.join_next().await {
+            for (name, samples) in worker?? {
+                timings.entry(name).or_default().extend(samples);
+            }
+        }
+        if options.duration>0 || options.self_check {
+            let rows:i64=sqlx::query_scalar("SELECT count(*) FROM expenses WHERE name='Load retry expense'").fetch_one(&server.app.service.store.reads).await?;
+            let writes:i64=sqlx::query_scalar("SELECT count(*) FROM requests WHERE key='load-stable-write'").fetch_one(&server.app.service.store.reads).await?;
+            if rows!=1 || writes!=1 { return Err("Concurrent retries created duplicate durable writes".into()); }
+        }
         let integrity:String=sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&server.app.service.store.reads).await?;
         let foreign=sqlx::query("PRAGMA foreign_key_check").fetch_all(&server.app.service.store.reads).await?;
         let count:i64=sqlx::query_scalar("SELECT count(*) FROM usage").fetch_one(&server.app.service.store.reads).await?;
         if integrity!="ok" || !foreign.is_empty() || count as usize!=options.usage { return Err("Synthetic ledger integrity/count failed".into()); }
-        Ok(json!({"engine":"rust","revision":option_env!("APP_REVISION").unwrap_or("development"),"usage":options.usage,"csv_rows":options.csv_rows,"fixture_sha256":source_hash,"csv_sha256":csv_hash,"platform":std::env::consts::OS,"arch":std::env::consts::ARCH,"process_rss_kib":rss_kib(),"memory_scope":"service and in-process synthetic HTTP harness; Linux high-water VmHWM, a single post-run RSS sample elsewhere","duration_seconds":started.elapsed().as_secs_f64(),"metrics":timings.iter().map(|(k,v)|(k.clone(),metrics(v))).collect::<BTreeMap<_,_>>(),"integrity":"ok"}))
+        Ok(json!({"engine":"rust","revision":option_env!("APP_REVISION").unwrap_or("development"),"usage":options.usage,"csv_rows":options.csv_rows,"workers":options.workers,"fixture_sha256":source_hash,"csv_sha256":csv_hash,"platform":std::env::consts::OS,"arch":std::env::consts::ARCH,"process_rss_kib":rss_kib(),"memory_scope":"service and in-process synthetic HTTP harness; Linux high-water VmHWM, a single post-run RSS sample elsewhere","duration_seconds":started.elapsed().as_secs_f64(),"wall_operations_per_second":timings.values().map(Vec::len).sum::<usize>() as f64/started.elapsed().as_secs_f64(),"metrics":timings.iter().map(|(k,v)|(k.clone(),metrics(v))).collect::<BTreeMap<_,_>>(),"integrity":"ok"}))
     }.await;
     server.close().await;
     let mut report = result?;

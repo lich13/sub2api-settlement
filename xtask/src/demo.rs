@@ -217,10 +217,13 @@ pub struct Api {
 }
 impl Api {
     pub async fn login(origin: &str, uid: i64) -> Result<Self> {
+        Self::login_with_timeout(origin, uid, Duration::from_secs(60)).await
+    }
+    pub async fn login_with_timeout(origin: &str, uid: i64, timeout: Duration) -> Result<Self> {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(60))
+            .timeout(timeout)
             .build()?;
         let response = client
             .get(format!(
