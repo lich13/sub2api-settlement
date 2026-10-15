@@ -1,0 +1,18 @@
+{
+  "schema_version": "settlement-session-vectors/v1",
+  "vectors": [
+    {
+      "synthetic": true,
+      "workflow": "cleanup-gap-restart",
+      "label": "login-1",
+      "actor": 1,
+      "token": "fixture-user-1",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAuDHvxgDqMxsJcjVGe8CofhKvRj2iD9Sud1YtRus8XoxLpvcjSGmCBiJeYBi_8w9-JF_goSZIm1yHIj0mEhDWjA==",
+      "cookie": "NGcEtATASlOprycPk7eLdaeepVfI_T2son6-ECBs6NU",
+      "session_id_sha256": "5b7f8daf2a2049a4cdf8d829fb7dd86d4a7c6bca6b72209e8852caa1a9dd1c86",
+      "csrf": "rcDUdwRPFw9ia23AjkJYWEx1NBolzie-5vfvV3qBdbI",
+      "expires_at_epoch": 1743494400.0
+    }
+  ]
+}

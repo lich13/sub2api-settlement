@@ -1,0 +1,44 @@
+{
+  "schema_version": "settlement-session-vectors/v1",
+  "vectors": [
+    {
+      "synthetic": true,
+      "workflow": "identity-session-boundaries",
+      "label": "expired-session-sso-refresh",
+      "actor": 1,
+      "token": "fixture-user-1",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAuDHvxgDqMxsJcjVGe8CofhKvRj2iD9Sud1YtRus8XoxLpvcjSGmCBiJeYBi_8w9-JF_goSZIm1yHIj0mEhDWjA==",
+      "cookie": "0e1-zqR4Kg4amNlSTzWXYVW94zzo3W8n6-b0A9fwjp4",
+      "session_id_sha256": "f1c0768a5ecc81be5f203c991a0efe6f85fee9847eed8412c044f19706687a49",
+      "csrf": "b-rkBOFwehYUBQG36eBDzVAAkWL-LH1abQHAdSa9Ibw",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "identity-session-boundaries",
+      "label": "switch-payer-session",
+      "actor": 3,
+      "token": "fixture-user-3",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAgv8PfH2ey-LR0EpzNtnRowS3zsHSj2nLrJieM47nDqRIT3vth7YG4d-gbqskNztfLsE1pncIxvFo4G0oNECLgQ==",
+      "cookie": "Zaen22cIZcYnjmNcuyt9rTFV4IvltlhZO2WhwpsSBQY",
+      "session_id_sha256": "36f2a6ae1952e81741ac595e1259003c8b1b7e0ea74aca0ca3590e4d2a1fff0e",
+      "csrf": "F-QzMkUhULrG7vgbkUIrNPBbPIoYRLPFwlgikSCVcoY",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "identity-session-boundaries",
+      "label": "switch-current-session",
+      "actor": 4,
+      "token": "fixture-user-4",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAwYgk-i1hB8eD2E9FIQzegl6ruRbLOjogcThLyufvxV_2xcG51c0g0exf_c7u1Z_6bHus7M3NwKlk2xA9EQ6TyA==",
+      "cookie": "_pRnUQYQaSHZjKUMbSGMEt6qRqrFbNXErsacKP0um7g",
+      "session_id_sha256": "2cc9b4abd5ad6b8c971bf531ff59d484dbd7ceea43d068ed15f2ed6ac161d377",
+      "csrf": "7v-H8rubcp8QIGrq23tfKDyhHnGb8Rp53iuBv9l16Bc",
+      "expires_at_epoch": 1743494400.0
+    }
+  ]
+}

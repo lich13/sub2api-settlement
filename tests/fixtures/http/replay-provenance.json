@@ -1,0 +1,61 @@
+{
+  "schema_version": "settlement-static-replay-overlay/v1",
+  "scope": "Interpret two capture-time aliases without modifying the frozen workflow JSON or normalized SQL.",
+  "evidence_sources": [
+    {
+      "path": "freeze/http_diff.py",
+      "sha256": "62ff7c8480ebe1f88e7f20aabb983237266ee679ce54e10f15ea68ee1f83ea88",
+      "functions": ["identity_session_boundaries", "mutation_signature", "API.snapshot"]
+    },
+    {
+      "path": "freeze/capture_fixtures.py",
+      "sha256": "4e3cd32c64b920818b348f7c6067de3ba11121018efbae110feccc03164a3e4a",
+      "functions": ["install_capture_hooks.api_snapshot", "request_shape"]
+    }
+  ],
+  "request_header_bindings": [
+    {
+      "workflow": "identity-session-boundaries",
+      "step": "expired-old-tab-write-rejected",
+      "method": "POST",
+      "path": "/settlement/api/v1/cycles",
+      "header": "X-CSRF-Token",
+      "frozen_alias": "<csrf:1>",
+      "producer": "initial-admin-session",
+      "producer_field": "csrf",
+      "reason": "The driver saves old_tab_headers before refreshing the expired session. Both CSRF generations were normalized to the same actor alias."
+    }
+  ],
+  "runtime_signatures": [
+    {
+      "workflow": "paid-upgrade",
+      "step": "upgrade-cost-edit",
+      "method": "PATCH",
+      "path": "/settlement/api/v1/cycles/1",
+      "actor_id": 1,
+      "idempotency_key": "upgrade-cost-edit",
+      "legacy_database": {
+        "path": "freeze/runs/capture-27-paid-upgrade/data/settlement.sqlite3",
+        "sha256": "99175c2fd977cf857efcd70ab21e565953ab230e540ca2e6640a313f91dc479a",
+        "clock_query": "SELECT start FROM cycles WHERE id=1",
+        "signature_query": "SELECT signature FROM requests WHERE actor_id=1 AND key='upgrade-cost-edit'",
+        "synthetic": true
+      },
+      "raw_request_json": {
+        "account_id": 300,
+        "name": "Fixture upgraded",
+        "cost": "121.01",
+        "creditor_id": 2,
+        "start": "2026-10-15T04:46:17.082708+00:00",
+        "start_mode": "exact",
+        "version": 1
+      },
+      "raw_signature": "364e1a04fe443043292209091233d4942f12a43f827d2feb9064dfae9edc874a",
+      "clock_aliases": [
+        {"alias": "<clock:paid-since>", "value": "2026-10-15T04:46:17.082708+00:00"},
+        {"alias": "<clock:paid-since-wire>", "value": "2026-10-15T04:46:17.082708Z"}
+      ],
+      "reason": "The capture snapshot temporarily removes clock aliases before hashing saved requests. Verify this original raw hash, then compare both signature payloads with the same named clock aliases."
+    }
+  ]
+}

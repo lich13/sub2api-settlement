@@ -1,0 +1,2686 @@
+{
+  "schema_version": "settlement-http-workflow/v1",
+  "workflow": "cleanup-partial-shadow-scope",
+  "source": {
+    "repository": "sub2api-settlement",
+    "python_ref": "v0.8.0",
+    "python_commit": "d0b39dd4891d42f971f9677da5aa214634f51564",
+    "python_tree": "831e0c49763a6f4621f8a6ef4be5f26212777f87",
+    "compat_harness_commit": "d989862974e8b7ff9e7594e0dff655b888041580",
+    "compat_harness_blobs": {
+      "tests/compat/http_diff.py": "9a93aa350968a316eb5287db2e526cdd76b896a5",
+      "tests/compat/reference_server.py": "7cfc739d3b84eaf31d23deac7c5b21ce584b80d9",
+      "tests/compat/source.json": "cc33264e9aad9b5fe44622bc79d6500cf45b577d",
+      "tests/compat/legacy_schema.sql": "b9715e15f01976a00685346da2fd467d2248431f"
+    }
+  },
+  "seed": {
+    "ledger_sql": "ledger/seed.sql",
+    "upstream_json": "http/upstream/source.initial.json"
+  },
+  "clock": {
+    "mode": "fixed",
+    "value": "2025-04-01T00:00:00.000000+00:00"
+  },
+  "aliases": [
+    {
+      "alias": "<origin>",
+      "kind": "runtime_http_origin"
+    },
+    {
+      "alias": "<cookie:actor:index>",
+      "kind": "synthetic_session_cookie",
+      "equality": "preserve"
+    },
+    {
+      "alias": "<session:actor>",
+      "kind": "sha256(cookie)",
+      "equality": "preserve"
+    },
+    {
+      "alias": "<csrf:actor>",
+      "kind": "csrf_token",
+      "equality": "preserve"
+    },
+    {
+      "alias": "<preview:label>",
+      "kind": "uuid_hex",
+      "producer": "HTTP response expect.body.id"
+    }
+  ],
+  "steps": [
+    {
+      "op": "sso",
+      "label": "login-1",
+      "request": {
+        "method": "GET",
+        "path": "/settlement/sso/start",
+        "query": {
+          "token": "fixture-user-1",
+          "user_id": 1,
+          "theme": "dark"
+        },
+        "actor": 1,
+        "cookie": null
+      },
+      "expect": {
+        "status": 303,
+        "headers": {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "SAMEORIGIN",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'",
+          "location": "/settlement/?theme=dark",
+          "set-cookie": {
+            "name": "settlement_session",
+            "value": "<cookie:1:1>",
+            "httponly": true,
+            "secure": false,
+            "samesite": "lax",
+            "path": "/settlement/",
+            "max_age": 28800
+          }
+        },
+        "body": null
+      },
+      "bind": {
+        "cookie": "<cookie:1:1>",
+        "session_id": "<session:1>",
+        "csrf": "<csrf:1>"
+      },
+      "upstream_calls": [
+        {
+          "method": "GET",
+          "path": "/api/v1/auth/me",
+          "token": "fixture-user-1",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "op": "http",
+      "label": "login-1-me",
+      "request": {
+        "method": "GET",
+        "path": "/settlement/api/v1/me",
+        "query": {},
+        "json": null,
+        "actor": 1,
+        "authenticated": true,
+        "headers": {
+          "Cookie": {
+            "cookie": "<cookie:1:1>"
+          }
+        }
+      },
+      "expect": {
+        "label": "login-1-me",
+        "status": 200,
+        "body": {
+          "id": 1,
+          "name": "Fixture Admin",
+          "role": "admin",
+          "csrf": "<csrf:1>"
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "SAMEORIGIN",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        }
+      },
+      "upstream_calls": [
+        {
+          "method": "GET",
+          "path": "/api/v1/auth/me",
+          "token": "fixture-user-1",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "op": "upstream_state",
+      "state": {
+        "source": {
+          "accounts": [
+            {
+              "id": 100,
+              "name": "Fixture root 100",
+              "platform": "openai",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": null,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            },
+            {
+              "id": 101,
+              "name": "Fixture child 101",
+              "platform": "openai",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": 100,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            },
+            {
+              "id": 102,
+              "name": "Fixture child 102",
+              "platform": "openai",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": 101,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            },
+            {
+              "id": 200,
+              "name": "Fixture root 200",
+              "platform": "openai",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": null,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            },
+            {
+              "id": 300,
+              "name": "Fixture root 300",
+              "platform": "grok",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": null,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            },
+            {
+              "id": 400,
+              "name": "Fixture root 400",
+              "platform": "openai",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": null,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            },
+            {
+              "id": 500,
+              "name": "Fixture root 500",
+              "platform": "openai",
+              "status": "active",
+              "deleted": false,
+              "parent_account_id": null,
+              "created_at": "2024-12-01T00:00:00+00:00"
+            }
+          ],
+          "users": [
+            {
+              "id": 1,
+              "name": "Fixture Admin",
+              "role": "admin",
+              "status": "active",
+              "deleted": false
+            },
+            {
+              "id": 2,
+              "name": "Fixture Creditor",
+              "role": "user",
+              "status": "active",
+              "deleted": false
+            },
+            {
+              "id": 3,
+              "name": "Fixture Payer",
+              "role": "user",
+              "status": "active",
+              "deleted": false
+            },
+            {
+              "id": 4,
+              "name": "Fixture Other",
+              "role": "user",
+              "status": "active",
+              "deleted": false
+            },
+            {
+              "id": 5,
+              "name": "Fixture Stranger",
+              "role": "user",
+              "status": "active",
+              "deleted": false
+            }
+          ],
+          "usage": [
+            {
+              "id": 1,
+              "account_id": 100,
+              "user_id": 2,
+              "amount": "1",
+              "created_at": "2025-01-01T00:00:00+00:00",
+              "request_id": "fixture-1",
+              "model": "fixture-model",
+              "input_tokens": 10,
+              "output_tokens": 20,
+              "cache_read_tokens": 0,
+              "cache_creation_tokens": 0
+            },
+            {
+              "id": 2,
+              "account_id": 100,
+              "user_id": 3,
+              "amount": "3",
+              "created_at": "2025-01-10T00:00:00+00:00",
+              "request_id": "fixture-2",
+              "model": "fixture-model",
+              "input_tokens": 10,
+              "output_tokens": 20,
+              "cache_read_tokens": 0,
+              "cache_creation_tokens": 0
+            },
+            {
+              "id": 4,
+              "account_id": 102,
+              "user_id": 4,
+              "amount": "4",
+              "created_at": "2025-01-20T00:00:00+00:00",
+              "request_id": "fixture-4",
+              "model": "fixture-model",
+              "input_tokens": 10,
+              "output_tokens": 20,
+              "cache_read_tokens": 0,
+              "cache_creation_tokens": 0
+            },
+            {
+              "id": 5,
+              "account_id": 100,
+              "user_id": 3,
+              "amount": "5",
+              "created_at": "2025-02-01T00:00:00+00:00",
+              "request_id": "fixture-5",
+              "model": "fixture-model",
+              "input_tokens": 10,
+              "output_tokens": 20,
+              "cache_read_tokens": 0,
+              "cache_creation_tokens": 0
+            },
+            {
+              "id": 6,
+              "account_id": 200,
+              "user_id": 3,
+              "amount": "2",
+              "created_at": "2025-01-05T00:00:00+00:00",
+              "request_id": "fixture-6",
+              "model": "fixture-model",
+              "input_tokens": 10,
+              "output_tokens": 20,
+              "cache_read_tokens": 0,
+              "cache_creation_tokens": 0
+            },
+            {
+              "id": 7,
+              "account_id": 300,
+              "user_id": 4,
+              "amount": "9",
+              "created_at": "2025-01-05T00:00:00+00:00"
+            },
+            {
+              "id": 8,
+              "account_id": 400,
+              "user_id": 3,
+              "amount": "1.00000001",
+              "created_at": "2025-01-10T06:30:12+00:00"
+            },
+            {
+              "id": 9,
+              "account_id": 500,
+              "user_id": 4,
+              "amount": "2.00000002",
+              "created_at": "2025-01-10T06:30:30+00:00"
+            }
+          ],
+          "cleanups": [
+            {
+              "id": 9001,
+              "filters": {
+                "start_time": "2025-01-09T00:00:00+00:00",
+                "end_time": "2025-01-21T00:00:00+00:00",
+                "account_id": 101
+              },
+              "deleted_rows": 2,
+              "finished_at": "2025-04-01T00:00:00.000000+00:00"
+            }
+          ]
+        },
+        "verifier": {
+          "users": {
+            "fixture-user-1": {
+              "id": 1,
+              "name": "Fixture Admin",
+              "role": "admin",
+              "status": "active",
+              "deleted": false,
+              "username": "Fixture Admin"
+            },
+            "fixture-user-2": {
+              "id": 2,
+              "name": "Fixture Creditor",
+              "role": "user",
+              "status": "active",
+              "deleted": false,
+              "username": "Fixture Creditor"
+            },
+            "fixture-user-3": {
+              "id": 3,
+              "name": "Fixture Payer",
+              "role": "user",
+              "status": "active",
+              "deleted": false,
+              "username": "Fixture Payer"
+            },
+            "fixture-user-4": {
+              "id": 4,
+              "name": "Fixture Other",
+              "role": "user",
+              "status": "active",
+              "deleted": false,
+              "username": "Fixture Other"
+            },
+            "fixture-user-5": {
+              "id": 5,
+              "name": "Fixture Stranger",
+              "role": "user",
+              "status": "active",
+              "deleted": false,
+              "username": "Fixture Stranger"
+            }
+          },
+          "status_overrides": {},
+          "unavailable": false,
+          "delete_failures": []
+        }
+      }
+    },
+    {
+      "op": "restart",
+      "phase": "full-sync-1",
+      "implementation": "python-reference",
+      "preserve": [
+        "sqlite-ledger",
+        "synthetic-fernet-key",
+        "session-cookie-jar"
+      ]
+    },
+    {
+      "op": "http",
+      "label": "cleanup-shadow-scope-affected-root-cycle-blocked",
+      "request": {
+        "method": "POST",
+        "path": "/settlement/api/v1/cycles",
+        "query": {},
+        "json": {
+          "account_id": 100,
+          "name": "Fixture affected root",
+          "cost": "100.00",
+          "creditor_id": 2,
+          "start": "2025-01-01T00:00:00+00:00"
+        },
+        "actor": 1,
+        "authenticated": true,
+        "headers": {
+          "X-Settlement-User": "1",
+          "Origin": "<origin>",
+          "X-CSRF-Token": "<csrf:1>",
+          "Idempotency-Key": "cleanup-shadow-scope-affected-root-cycle-blocked",
+          "Cookie": {
+            "cookie": "<cookie:1:1>"
+          }
+        }
+      },
+      "expect": {
+        "label": "cleanup-shadow-scope-affected-root-cycle-blocked",
+        "status": 422,
+        "body": {
+          "detail": "该周期存在未采集的历史记录，无法确认完整消费"
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "SAMEORIGIN",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        }
+      },
+      "upstream_calls": [
+        {
+          "method": "GET",
+          "path": "/api/v1/auth/me",
+          "token": "fixture-user-1",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "op": "http",
+      "label": "cleanup-shadow-scope-unaffected-account-cycle",
+      "request": {
+        "method": "POST",
+        "path": "/settlement/api/v1/cycles",
+        "query": {},
+        "json": {
+          "account_id": 200,
+          "name": "Fixture public 200",
+          "cost": "20.00",
+          "creditor_id": 2,
+          "start": "2025-01-01T00:00:00+00:00"
+        },
+        "actor": 1,
+        "authenticated": true,
+        "headers": {
+          "X-Settlement-User": "1",
+          "Origin": "<origin>",
+          "X-CSRF-Token": "<csrf:1>",
+          "Idempotency-Key": "cleanup-shadow-scope-unaffected-account-cycle",
+          "Cookie": {
+            "cookie": "<cookie:1:1>"
+          }
+        }
+      },
+      "expect": {
+        "label": "cleanup-shadow-scope-unaffected-account-cycle",
+        "status": 200,
+        "body": {
+          "id": 1
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "SAMEORIGIN",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        }
+      },
+      "upstream_calls": [
+        {
+          "method": "GET",
+          "path": "/api/v1/auth/me",
+          "token": "fixture-user-1",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "op": "http",
+      "label": "cleanup-shadow-scope-unaffected-preview",
+      "request": {
+        "method": "POST",
+        "path": "/settlement/api/v1/previews",
+        "query": {},
+        "json": {
+          "ids": [
+            1
+          ],
+          "end": "2025-02-01T00:00:00+00:00"
+        },
+        "actor": 1,
+        "authenticated": true,
+        "headers": {
+          "X-Settlement-User": "1",
+          "Origin": "<origin>",
+          "X-CSRF-Token": "<csrf:1>",
+          "Idempotency-Key": "cleanup-shadow-scope-unaffected-preview",
+          "Cookie": {
+            "cookie": "<cookie:1:1>"
+          }
+        }
+      },
+      "expect": {
+        "label": "cleanup-shadow-scope-unaffected-preview",
+        "status": 200,
+        "body": {
+          "id": "<preview:cleanup-shadow-scope-unaffected-preview>",
+          "cycles": [
+            {
+              "cycle": {
+                "id": 1,
+                "account_id": 200,
+                "name": "Fixture public 200",
+                "cost_fen": 2000,
+                "creditor_id": 2,
+                "start": "2025-01-01T00:00:00.000000+00:00",
+                "end": null,
+                "status": "open",
+                "version": 1,
+                "settlement_id": null,
+                "start_mode": "exact",
+                "start_lower": "2025-01-01T00:00:00.000000+00:00",
+                "start_upper": null,
+                "start_confirmed": 1,
+                "start_confirmed_by": null,
+                "start_confirmed_at": null,
+                "start_source_usage_id": null,
+                "renewed_from_cycle_id": null,
+                "start_locked": 0,
+                "start_anchor": null,
+                "cost_kind": "exact",
+                "cost_source": "manual",
+                "bill_import_id": null,
+                "bill_end": null,
+                "bill_digest": null,
+                "bill_difference_confirmed": 0,
+                "bill_allocation_mode": "proportional",
+                "billable_cost_fen": null
+              },
+              "end": "2025-02-01T00:00:00.000000+00:00",
+              "total_consumption": "2",
+              "allocations": [
+                {
+                  "user_id": 3,
+                  "consumption": "2",
+                  "amount_fen": 2000,
+                  "share": "1",
+                  "self_covered": false,
+                  "user_name": "Fixture Payer"
+                }
+              ],
+              "digest": "8d0a4725db13482d47753335cf420e8f18efaac28aab6b7c382ae468d975675e",
+              "record_count": 1,
+              "start_mode": "exact",
+              "start_lower": "2025-01-01T00:00:00.000000+00:00",
+              "start_upper": null,
+              "start_confirmed": true,
+              "start_confirmed_by": null,
+              "start_confirmed_at": null,
+              "start_source_usage_id": null,
+              "start_warning": null,
+              "data_quality": "complete",
+              "can_settle": true,
+              "creditor_name": "Fixture Creditor"
+            }
+          ],
+          "expenses": [],
+          "expires_at": "2025-04-01T00:10:00.000000+00:00"
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "SAMEORIGIN",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        }
+      },
+      "upstream_calls": [
+        {
+          "method": "GET",
+          "path": "/api/v1/auth/me",
+          "token": "fixture-user-1",
+          "status": 200
+        }
+      ],
+      "bind": {
+        "<preview:cleanup-shadow-scope-unaffected-preview>": {
+          "from": "expect.body.id"
+        }
+      }
+    },
+    {
+      "op": "http",
+      "label": "cleanup-shadow-scope-unaffected-settlement",
+      "request": {
+        "method": "POST",
+        "path": "/settlement/api/v1/settlements",
+        "query": {},
+        "json": {
+          "preview_id": "<preview:cleanup-shadow-scope-unaffected-preview>"
+        },
+        "actor": 1,
+        "authenticated": true,
+        "headers": {
+          "X-Settlement-User": "1",
+          "Origin": "<origin>",
+          "X-CSRF-Token": "<csrf:1>",
+          "Idempotency-Key": "cleanup-shadow-scope-unaffected-settlement",
+          "Cookie": {
+            "cookie": "<cookie:1:1>"
+          }
+        }
+      },
+      "expect": {
+        "label": "cleanup-shadow-scope-unaffected-settlement",
+        "status": 200,
+        "body": {
+          "settlements": [
+            {
+              "cycle_id": 1,
+              "settlement_id": 1
+            }
+          ]
+        },
+        "headers": {
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-frame-options": "SAMEORIGIN",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        }
+      },
+      "upstream_calls": [
+        {
+          "method": "GET",
+          "path": "/api/v1/auth/me",
+          "token": "fixture-user-1",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "op": "db_snapshot",
+      "label": "cleanup-shadow-scope-database",
+      "expect": {
+        "label": "cleanup-shadow-scope-database",
+        "database": {
+          "meta": [
+            {
+              "key": "archived_deletions",
+              "value": []
+            },
+            {
+              "key": "cleanup_counts",
+              "value": {
+                "9001": 2
+              }
+            },
+            {
+              "key": "coverage_from",
+              "value": "2025-01-01T00:00:00.000000+00:00"
+            },
+            {
+              "key": "coverage_gaps",
+              "value": [
+                {
+                  "end": "2025-01-21T00:00:00.000001+00:00",
+                  "id": 9001,
+                  "root_id": 100,
+                  "start": "2025-01-09T00:00:00.000000+00:00"
+                }
+              ]
+            },
+            {
+              "key": "last_sync",
+              "value": "2025-04-01T00:00:00.000000+00:00"
+            },
+            {
+              "key": "source_count",
+              "value": 8
+            },
+            {
+              "key": "source_ids",
+              "value": [
+                1,
+                2,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9
+              ]
+            },
+            {
+              "key": "sync_error",
+              "value": null
+            }
+          ],
+          "users": [
+            {
+              "id": 1,
+              "name": "Fixture Admin",
+              "role": "admin",
+              "status": "active",
+              "deleted": 0
+            },
+            {
+              "id": 2,
+              "name": "Fixture Creditor",
+              "role": "user",
+              "status": "active",
+              "deleted": 0
+            },
+            {
+              "id": 3,
+              "name": "Fixture Payer",
+              "role": "user",
+              "status": "active",
+              "deleted": 0
+            },
+            {
+              "id": 4,
+              "name": "Fixture Other",
+              "role": "user",
+              "status": "active",
+              "deleted": 0
+            },
+            {
+              "id": 5,
+              "name": "Fixture Stranger",
+              "role": "user",
+              "status": "active",
+              "deleted": 0
+            }
+          ],
+          "accounts": [
+            {
+              "id": 100,
+              "name": "Fixture root 100",
+              "root_id": 100,
+              "platform": "openai",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 101,
+              "name": "Fixture child 101",
+              "root_id": 100,
+              "platform": "openai",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 102,
+              "name": "Fixture child 102",
+              "root_id": 100,
+              "platform": "openai",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 200,
+              "name": "Fixture root 200",
+              "root_id": 200,
+              "platform": "openai",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 300,
+              "name": "Fixture root 300",
+              "root_id": 300,
+              "platform": "grok",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 400,
+              "name": "Fixture root 400",
+              "root_id": 400,
+              "platform": "openai",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 500,
+              "name": "Fixture root 500",
+              "root_id": 500,
+              "platform": "openai",
+              "status": "active",
+              "deleted": 0,
+              "created_at": "2024-12-01T00:00:00.000000+00:00"
+            }
+          ],
+          "profiles": [
+            {
+              "account_id": 200,
+              "name": "Fixture public 200",
+              "kind": "paid",
+              "version": 1
+            }
+          ],
+          "usage": [
+            {
+              "id": 1,
+              "account_id": 100,
+              "root_id": 100,
+              "user_id": 2,
+              "amount": "1",
+              "created_at": "2025-01-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 2,
+              "account_id": 100,
+              "root_id": 100,
+              "user_id": 3,
+              "amount": "3",
+              "created_at": "2025-01-10T00:00:00.000000+00:00"
+            },
+            {
+              "id": 5,
+              "account_id": 100,
+              "root_id": 100,
+              "user_id": 3,
+              "amount": "5",
+              "created_at": "2025-02-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 3,
+              "account_id": 101,
+              "root_id": 100,
+              "user_id": 3,
+              "amount": "2",
+              "created_at": "2025-01-15T00:00:00.000000+00:00"
+            },
+            {
+              "id": 4,
+              "account_id": 102,
+              "root_id": 100,
+              "user_id": 4,
+              "amount": "4",
+              "created_at": "2025-01-20T00:00:00.000000+00:00"
+            },
+            {
+              "id": 6,
+              "account_id": 200,
+              "root_id": 200,
+              "user_id": 3,
+              "amount": "2",
+              "created_at": "2025-01-05T00:00:00.000000+00:00"
+            },
+            {
+              "id": 7,
+              "account_id": 300,
+              "root_id": 300,
+              "user_id": 4,
+              "amount": "9",
+              "created_at": "2025-01-05T00:00:00.000000+00:00"
+            },
+            {
+              "id": 8,
+              "account_id": 400,
+              "root_id": 400,
+              "user_id": 3,
+              "amount": "1.00000001",
+              "created_at": "2025-01-10T06:30:12.000000+00:00"
+            },
+            {
+              "id": 9,
+              "account_id": 500,
+              "root_id": 500,
+              "user_id": 4,
+              "amount": "2.00000002",
+              "created_at": "2025-01-10T06:30:30.000000+00:00"
+            }
+          ],
+          "cycles": [
+            {
+              "id": 1,
+              "account_id": 200,
+              "name": "Fixture public 200",
+              "cost_fen": 2000,
+              "creditor_id": 2,
+              "start": "2025-01-01T00:00:00.000000+00:00",
+              "end": "2025-02-01T00:00:00.000000+00:00",
+              "status": "settled",
+              "version": 2,
+              "settlement_id": 1,
+              "start_mode": "exact",
+              "start_lower": "2025-01-01T00:00:00.000000+00:00",
+              "start_upper": null,
+              "start_confirmed": 1,
+              "start_confirmed_by": null,
+              "start_confirmed_at": null,
+              "start_source_usage_id": null,
+              "renewed_from_cycle_id": null,
+              "start_locked": 0,
+              "start_anchor": null,
+              "cost_kind": "exact",
+              "cost_source": "manual",
+              "bill_import_id": null,
+              "bill_end": null,
+              "bill_digest": null,
+              "bill_difference_confirmed": 0,
+              "bill_allocation_mode": "proportional",
+              "billable_cost_fen": null
+            }
+          ],
+          "previews": [
+            {
+              "id": "<preview:cleanup-shadow-scope-unaffected-preview>",
+              "actor_id": 1,
+              "payload": [
+                {
+                  "allocations": [
+                    {
+                      "amount_fen": 2000,
+                      "consumption": "2",
+                      "self_covered": false,
+                      "share": "1",
+                      "user_id": 3,
+                      "user_name": "Fixture Payer"
+                    }
+                  ],
+                  "can_settle": true,
+                  "creditor_name": "Fixture Creditor",
+                  "cycle": {
+                    "account_id": 200,
+                    "bill_allocation_mode": "proportional",
+                    "bill_difference_confirmed": 0,
+                    "bill_digest": null,
+                    "bill_end": null,
+                    "bill_import_id": null,
+                    "billable_cost_fen": null,
+                    "cost_fen": 2000,
+                    "cost_kind": "exact",
+                    "cost_source": "manual",
+                    "creditor_id": 2,
+                    "end": null,
+                    "id": 1,
+                    "name": "Fixture public 200",
+                    "renewed_from_cycle_id": null,
+                    "settlement_id": null,
+                    "start": "2025-01-01T00:00:00.000000+00:00",
+                    "start_anchor": null,
+                    "start_confirmed": 1,
+                    "start_confirmed_at": null,
+                    "start_confirmed_by": null,
+                    "start_locked": 0,
+                    "start_lower": "2025-01-01T00:00:00.000000+00:00",
+                    "start_mode": "exact",
+                    "start_source_usage_id": null,
+                    "start_upper": null,
+                    "status": "open",
+                    "version": 1
+                  },
+                  "data_quality": "complete",
+                  "digest": "8d0a4725db13482d47753335cf420e8f18efaac28aab6b7c382ae468d975675e",
+                  "end": "2025-02-01T00:00:00.000000+00:00",
+                  "record_count": 1,
+                  "start_confirmed": true,
+                  "start_confirmed_at": null,
+                  "start_confirmed_by": null,
+                  "start_lower": "2025-01-01T00:00:00.000000+00:00",
+                  "start_mode": "exact",
+                  "start_source_usage_id": null,
+                  "start_upper": null,
+                  "start_warning": null,
+                  "total_consumption": "2"
+                }
+              ],
+              "expires_at": "2025-04-01T00:10:00.000000+00:00"
+            }
+          ],
+          "settlements": [
+            {
+              "id": 1,
+              "cycle_id": 1,
+              "expense_id": null,
+              "snapshot": {
+                "allocations": [
+                  {
+                    "amount_fen": 2000,
+                    "consumption": "2",
+                    "self_covered": false,
+                    "share": "1",
+                    "user_id": 3,
+                    "user_name": "Fixture Payer"
+                  }
+                ],
+                "can_settle": true,
+                "cycle": {
+                  "account_id": 200,
+                  "bill_allocation_mode": "proportional",
+                  "bill_difference_confirmed": 0,
+                  "bill_digest": null,
+                  "bill_end": null,
+                  "bill_import_id": null,
+                  "billable_cost_fen": null,
+                  "cost_fen": 2000,
+                  "cost_kind": "exact",
+                  "cost_source": "manual",
+                  "creditor_id": 2,
+                  "end": null,
+                  "id": 1,
+                  "name": "Fixture public 200",
+                  "renewed_from_cycle_id": null,
+                  "settlement_id": null,
+                  "start": "2025-01-01T00:00:00.000000+00:00",
+                  "start_anchor": null,
+                  "start_confirmed": 1,
+                  "start_confirmed_at": null,
+                  "start_confirmed_by": null,
+                  "start_locked": 0,
+                  "start_lower": "2025-01-01T00:00:00.000000+00:00",
+                  "start_mode": "exact",
+                  "start_source_usage_id": null,
+                  "start_upper": null,
+                  "status": "open",
+                  "version": 1
+                },
+                "data_quality": "complete",
+                "digest": "8d0a4725db13482d47753335cf420e8f18efaac28aab6b7c382ae468d975675e",
+                "end": "2025-02-01T00:00:00.000000+00:00",
+                "record_count": 1,
+                "start_confirmed": true,
+                "start_confirmed_at": null,
+                "start_confirmed_by": null,
+                "start_lower": "2025-01-01T00:00:00.000000+00:00",
+                "start_mode": "exact",
+                "start_source_usage_id": null,
+                "start_upper": null,
+                "start_warning": null,
+                "total_consumption": "2"
+              },
+              "digest": "8d0a4725db13482d47753335cf420e8f18efaac28aab6b7c382ae468d975675e",
+              "status": "active",
+              "drift": 0,
+              "created_at": "2025-04-01T00:00:00.000000+00:00"
+            }
+          ],
+          "settlement_usage": [
+            {
+              "settlement_id": 1,
+              "usage_id": 6,
+              "payload": {
+                "account_id": 200,
+                "amount": "2",
+                "created_at": "2025-01-05T00:00:00.000000+00:00",
+                "id": 6,
+                "root_id": 200,
+                "user_id": 3
+              }
+            }
+          ],
+          "batches": [],
+          "orders": [
+            {
+              "id": 1,
+              "settlement_id": 1,
+              "cycle_id": 1,
+              "expense_id": null,
+              "payer_id": 3,
+              "creditor_id": 2,
+              "payer_name": "Fixture Payer",
+              "creditor_name": "Fixture Creditor",
+              "account_name": "Fixture public 200",
+              "amount_fen": 2000,
+              "status": "pending",
+              "batch_id": null,
+              "version": 1,
+              "created_at": "2025-04-01T00:00:00.000000+00:00",
+              "submitted_at": null,
+              "paid_at": null,
+              "netting_payment_id": null
+            }
+          ],
+          "notifications": [
+            {
+              "id": 1,
+              "user_id": 3,
+              "title": "新结算订单",
+              "order_id": 1,
+              "read": 0,
+              "created_at": "2025-04-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 2,
+              "user_id": 2,
+              "title": "新增应收订单",
+              "order_id": 1,
+              "read": 0,
+              "created_at": "2025-04-01T00:00:00.000000+00:00"
+            }
+          ],
+          "audit": [
+            {
+              "id": 1,
+              "actor_id": 1,
+              "action": "create_cycle",
+              "entity_id": 1,
+              "payload": {
+                "cost_fen": 2000,
+                "cost_kind": "exact",
+                "creditor_id": 2,
+                "renewed_from_cycle_id": null,
+                "start": "2025-01-01T00:00:00.000000+00:00",
+                "start_confirmed": 1,
+                "start_confirmed_at": null,
+                "start_confirmed_by": null,
+                "start_lower": "2025-01-01T00:00:00.000000+00:00",
+                "start_mode": "exact",
+                "start_source_usage_id": null,
+                "start_upper": null
+              },
+              "created_at": "2025-04-01T00:00:00.000000+00:00"
+            },
+            {
+              "id": 2,
+              "actor_id": 1,
+              "action": "settle",
+              "entity_id": 1,
+              "payload": {
+                "cost_fen": 2000,
+                "settlement_id": 1
+              },
+              "created_at": "2025-04-01T00:00:00.000000+00:00"
+            }
+          ],
+          "requests": [
+            {
+              "actor_id": 1,
+              "key": "cleanup-shadow-scope-unaffected-account-cycle",
+              "signature": "5dabea93e9d92e81a345e384de08108f7a9cb5a1f656b454a401b70d715837f4",
+              "response": {
+                "id": 1
+              }
+            },
+            {
+              "actor_id": 1,
+              "key": "cleanup-shadow-scope-unaffected-settlement",
+              "signature": "ebc17f2477e3b5a9e0449604d840414d51fb00cf22fec2b517c9c978c8d777d3",
+              "response": {
+                "settlements": [
+                  {
+                    "cycle_id": 1,
+                    "settlement_id": 1
+                  }
+                ]
+              }
+            }
+          ],
+          "sessions": [
+            {
+              "id": "<session:1>",
+              "user_id": 1,
+              "token": "<fernet:fixture-user-1>",
+              "csrf": "<csrf:1>",
+              "expires_at": 1743494400.0
+            }
+          ],
+          "usage_details": [
+            {
+              "usage_id": 1,
+              "payload": {
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "input_tokens": 10,
+                "model": "fixture-model",
+                "output_tokens": 20,
+                "request_id": "fixture-1",
+                "requested_model": null,
+                "upstream_model": null,
+                "upstream_request_id": null,
+                "upstream_response_model": null
+              }
+            },
+            {
+              "usage_id": 2,
+              "payload": {
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "input_tokens": 10,
+                "model": "fixture-model",
+                "output_tokens": 20,
+                "request_id": "fixture-2",
+                "requested_model": null,
+                "upstream_model": null,
+                "upstream_request_id": null,
+                "upstream_response_model": null
+              }
+            },
+            {
+              "usage_id": 3,
+              "payload": {
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "input_tokens": 10,
+                "model": "fixture-model",
+                "output_tokens": 20,
+                "request_id": "fixture-3",
+                "requested_model": null,
+                "upstream_model": null,
+                "upstream_request_id": null,
+                "upstream_response_model": null
+              }
+            },
+            {
+              "usage_id": 4,
+              "payload": {
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "input_tokens": 10,
+                "model": "fixture-model",
+                "output_tokens": 20,
+                "request_id": "fixture-4",
+                "requested_model": null,
+                "upstream_model": null,
+                "upstream_request_id": null,
+                "upstream_response_model": null
+              }
+            },
+            {
+              "usage_id": 5,
+              "payload": {
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "input_tokens": 10,
+                "model": "fixture-model",
+                "output_tokens": 20,
+                "request_id": "fixture-5",
+                "requested_model": null,
+                "upstream_model": null,
+                "upstream_request_id": null,
+                "upstream_response_model": null
+              }
+            },
+            {
+              "usage_id": 6,
+              "payload": {
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "input_tokens": 10,
+                "model": "fixture-model",
+                "output_tokens": 20,
+                "request_id": "fixture-6",
+                "requested_model": null,
+                "upstream_model": null,
+                "upstream_request_id": null,
+                "upstream_response_model": null
+              }
+            }
+          ],
+          "expenses": [],
+          "bill_imports": [],
+          "bill_previews": [],
+          "account_deletions": [],
+          "netting_payments": []
+        },
+        "schema": {
+          "meta": [
+            {
+              "cid": 0,
+              "name": "key",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "value",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "users": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "role",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "deleted",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "0",
+              "pk": 0
+            }
+          ],
+          "accounts": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "root_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "platform",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "deleted",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "profiles": [
+            {
+              "cid": 0,
+              "name": "account_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "kind",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "version",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "1",
+              "pk": 0
+            }
+          ],
+          "usage": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "account_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "root_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "user_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "amount",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "cycles": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "account_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "cost_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "creditor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "start",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "end",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 7,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'open'",
+              "pk": 0
+            },
+            {
+              "cid": 8,
+              "name": "version",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "1",
+              "pk": 0
+            },
+            {
+              "cid": 9,
+              "name": "settlement_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 10,
+              "name": "start_mode",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'exact'",
+              "pk": 0
+            },
+            {
+              "cid": 11,
+              "name": "start_lower",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 12,
+              "name": "start_upper",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 13,
+              "name": "start_confirmed",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "1",
+              "pk": 0
+            },
+            {
+              "cid": 14,
+              "name": "start_confirmed_by",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 15,
+              "name": "start_confirmed_at",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 16,
+              "name": "start_source_usage_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 17,
+              "name": "renewed_from_cycle_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 18,
+              "name": "start_locked",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "0",
+              "pk": 0
+            },
+            {
+              "cid": 19,
+              "name": "start_anchor",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 20,
+              "name": "cost_kind",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'exact'",
+              "pk": 0
+            },
+            {
+              "cid": 21,
+              "name": "cost_source",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'manual'",
+              "pk": 0
+            },
+            {
+              "cid": 22,
+              "name": "bill_import_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 23,
+              "name": "bill_end",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 24,
+              "name": "bill_digest",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 25,
+              "name": "bill_difference_confirmed",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "0",
+              "pk": 0
+            },
+            {
+              "cid": 26,
+              "name": "bill_allocation_mode",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'proportional'",
+              "pk": 0
+            },
+            {
+              "cid": 27,
+              "name": "billable_cost_fen",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "previews": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "actor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "payload",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "expires_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "settlements": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "cycle_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "expense_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "snapshot",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "digest",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'active'",
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "drift",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "0",
+              "pk": 0
+            },
+            {
+              "cid": 7,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "settlement_usage": [
+            {
+              "cid": 0,
+              "name": "settlement_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "usage_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 2
+            },
+            {
+              "cid": 2,
+              "name": "payload",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "batches": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "payer_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "creditor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'active'",
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "orders": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "settlement_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "cycle_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "expense_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "payer_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "creditor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "payer_name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 7,
+              "name": "creditor_name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 8,
+              "name": "account_name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 9,
+              "name": "amount_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 10,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'pending'",
+              "pk": 0
+            },
+            {
+              "cid": 11,
+              "name": "batch_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 12,
+              "name": "version",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "1",
+              "pk": 0
+            },
+            {
+              "cid": 13,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 14,
+              "name": "submitted_at",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 15,
+              "name": "paid_at",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 16,
+              "name": "netting_payment_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "notifications": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "user_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "title",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "order_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "read",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "0",
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "audit": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "actor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "action",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "entity_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "payload",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "requests": [
+            {
+              "cid": 0,
+              "name": "actor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "key",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 2
+            },
+            {
+              "cid": 2,
+              "name": "signature",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "response",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "sessions": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "user_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "token",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "csrf",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "expires_at",
+              "type": "REAL",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "usage_details": [
+            {
+              "cid": 0,
+              "name": "usage_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "payload",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "expenses": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "cost_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "incurred_on",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "creditor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "allocation_mode",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "members",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 7,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'open'",
+              "pk": 0
+            },
+            {
+              "cid": 8,
+              "name": "version",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "1",
+              "pk": 0
+            },
+            {
+              "cid": 9,
+              "name": "settlement_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 10,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "bill_imports": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "cycle_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "file_name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "file_hash",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "rows",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "created_by",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "bill_previews": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "actor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "cycle_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "payload",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "expires_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "account_deletions": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "account_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "settlement_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "account_name",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "account_created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "actor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "session_id",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 7,
+              "name": "status",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": "'queued'",
+              "pk": 0
+            },
+            {
+              "cid": 8,
+              "name": "version",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": "1",
+              "pk": 0
+            },
+            {
+              "cid": 9,
+              "name": "error",
+              "type": "TEXT",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 10,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 11,
+              "name": "updated_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ],
+          "netting_payments": [
+            {
+              "cid": 0,
+              "name": "id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 1
+            },
+            {
+              "cid": 1,
+              "name": "user_a",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 2,
+              "name": "user_b",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 3,
+              "name": "payer_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 4,
+              "name": "creditor_id",
+              "type": "INTEGER",
+              "notnull": 0,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 5,
+              "name": "amount_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 6,
+              "name": "offset_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 7,
+              "name": "a_to_b_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 8,
+              "name": "b_to_a_fen",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 9,
+              "name": "actor_id",
+              "type": "INTEGER",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 10,
+              "name": "created_at",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 11,
+              "name": "digest",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            },
+            {
+              "cid": 12,
+              "name": "snapshot",
+              "type": "TEXT",
+              "notnull": 1,
+              "dflt_value": null,
+              "pk": 0
+            }
+          ]
+        }
+      },
+      "sql": "ledger/workflows/cleanup-partial-shadow-scope/cleanup-shadow-scope-database.sql",
+      "integrity_check": "ok",
+      "foreign_key_check": [],
+      "sequences": [
+        [
+          "audit",
+          2
+        ],
+        [
+          "cycles",
+          1
+        ],
+        [
+          "notifications",
+          2
+        ],
+        [
+          "orders",
+          1
+        ],
+        [
+          "settlements",
+          1
+        ]
+      ],
+      "upstream_calls": []
+    }
+  ],
+  "database": {
+    "mode": "exact",
+    "snapshots": [
+      {
+        "label": "cleanup-shadow-scope-database",
+        "sql": "ledger/workflows/cleanup-partial-shadow-scope/cleanup-shadow-scope-database.sql",
+        "integrity_check": "ok",
+        "foreign_key_check": [],
+        "sequences": [
+          [
+            "audit",
+            2
+          ],
+          [
+            "cycles",
+            1
+          ],
+          [
+            "notifications",
+            2
+          ],
+          [
+            "orders",
+            1
+          ],
+          [
+            "settlements",
+            1
+          ]
+        ]
+      }
+    ]
+  },
+  "capture": {
+    "observations": 7,
+    "exit_code": 0
+  }
+}

@@ -20,3 +20,17 @@ regexes = [
   '''^gAAAAABf7mYAEBESExQVFhcYGRobHB$''',
   '''^fixture-invalid$''',
 ]
+
+[[allowlists]]
+description = "Fixed synthetic key shared by the frozen legacy session vectors"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/fixtures/session/(account-state-overview-role-revision\.json|atomic-rollback\.json|billing-matched-only\.json|billing-proportional\.json|cleanup-before-coverage\.json|cleanup-count-evidence\.json|cleanup-count-exceeds-evidence\.json|cleanup-deferred-restart\.json|cleanup-end-boundary\.json|cleanup-evidence-not-reused\.json|cleanup-gap-drift-locality\.json|cleanup-gap-restart\.json|cleanup-no-account-borrow\.json|cleanup-no-user-borrow\.json|cleanup-partial-nested-shadow-scope\.json|cleanup-partial-parent-scope\.json|cleanup-partial-shadow-scope\.json|cleanup-stale-sync-masks-open\.json|concurrency\.json|deletion-jobs\.json|expenses-netting\.json|identity-errors\.json|identity-session-boundaries\.json|identity-tamper-rejection\.json|identity-token-refresh-expiry\.json|identity-verifier-outage\.json|legacy-restart\.json|old-schema-migration\.json|paid-upgrade\.json|route-boundaries\.json|stale-preview-drift\.json|start-beijing-boundaries\.json|starts-costs\.json)$''']
+regexes = ['''^U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=$''']
+
+[[allowlists]]
+description = "Inbox operation digest in two synthetic SQLite snapshots; not a token"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/fixtures/ledger/workflows/identity-token-refresh-expiry/identity-refreshed-token(-expired)?-database\.sql$''']
+regexes = ['''^bfe0ba494a0689c825ecba0bc8203615c622375500abd4c507302906a2193ef7$''']

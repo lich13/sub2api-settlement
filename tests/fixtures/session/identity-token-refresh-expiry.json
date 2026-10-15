@@ -1,0 +1,18 @@
+{
+  "schema_version": "settlement-session-vectors/v1",
+  "vectors": [
+    {
+      "synthetic": true,
+      "workflow": "identity-token-refresh-expiry",
+      "label": "token-refresh-original-session",
+      "actor": 3,
+      "token": "fixture-refreshed.eyJleHAiOjE3NDM0NjkyMDAuMH0.fixture-signature",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAf71Abl5iZD3aj9D-QBfZH0uokguFQKxz9hVYD1ibw6dCiwMb7jDHaNcnl2qYXVxEj4E4GHvhl7SKt3IW5XGabusHgXsj18Q0T0TFuTnMC08tLyTnoN7i096eqZOE64NAvYohUmUVp77g6h_hdOjxaQ==",
+      "cookie": "NGcEtATASlOprycPk7eLdaeepVfI_T2son6-ECBs6NU",
+      "session_id_sha256": "5b7f8daf2a2049a4cdf8d829fb7dd86d4a7c6bca6b72209e8852caa1a9dd1c86",
+      "csrf": "rcDUdwRPFw9ia23AjkJYWEx1NBolzie-5vfvV3qBdbI",
+      "expires_at_epoch": 1700000000.0
+    }
+  ]
+}

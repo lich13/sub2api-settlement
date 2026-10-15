@@ -345,9 +345,10 @@ async fn prepare_bill(app: &App, cycle_id: i64, payload: &Value) -> Result<Prepa
         .service
         .prepare_bill(&admin(), cycle_id, payload)
         .await?;
-    let mut result = Prepared::default();
-    result.bill = Some(prepared);
-    Ok(result)
+    Ok(Prepared {
+        bill: Some(prepared),
+        ..Prepared::default()
+    })
 }
 
 async fn confirm_bill_on(
@@ -511,7 +512,7 @@ async fn expense_creditor_share_is_self_covered_and_never_becomes_an_order() {
 
     settle_preview(
         &harness,
-        &preview["id"].as_str().unwrap(),
+        preview["id"].as_str().unwrap(),
         "expense-self-settle",
         json!([]),
     )
@@ -546,7 +547,7 @@ async fn periodic_and_fixed_expense_orders_merge_and_net_without_losing_source_r
     let preview = preview(&harness, &[cycle_id], &[expense_id], END).await;
     settle_preview(
         &harness,
-        &preview["id"].as_str().unwrap(),
+        preview["id"].as_str().unwrap(),
         "cycle-expense-settle",
         json!([]),
     )
@@ -645,7 +646,7 @@ async fn fixed_expense_void_splits_batch_but_preserves_cycle_order_and_reopens_e
     let preview = preview(&harness, &[cycle_id], &[expense_id], END).await;
     settle_preview(
         &harness,
-        &preview["id"].as_str().unwrap(),
+        preview["id"].as_str().unwrap(),
         "void-first-settle",
         json!([]),
     )
@@ -791,7 +792,7 @@ async fn regular_user_views_redact_expense_members_and_scope_orders() {
     let preview = preview(&harness, &[], &[expense_id], END).await;
     settle_preview(
         &harness,
-        &preview["id"].as_str().unwrap(),
+        preview["id"].as_str().unwrap(),
         "permission-settle",
         json!([]),
     )

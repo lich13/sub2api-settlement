@@ -1,0 +1,70 @@
+{
+  "schema_version": "settlement-session-vectors/v1",
+  "vectors": [
+    {
+      "synthetic": true,
+      "workflow": "expenses-netting",
+      "label": "login-1",
+      "actor": 1,
+      "token": "fixture-user-1",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAuDHvxgDqMxsJcjVGe8CofhKvRj2iD9Sud1YtRus8XoxLpvcjSGmCBiJeYBi_8w9-JF_goSZIm1yHIj0mEhDWjA==",
+      "cookie": "NGcEtATASlOprycPk7eLdaeepVfI_T2son6-ECBs6NU",
+      "session_id_sha256": "5b7f8daf2a2049a4cdf8d829fb7dd86d4a7c6bca6b72209e8852caa1a9dd1c86",
+      "csrf": "rcDUdwRPFw9ia23AjkJYWEx1NBolzie-5vfvV3qBdbI",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "expenses-netting",
+      "label": "login-2",
+      "actor": 2,
+      "token": "fixture-user-2",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAj5obQ5JCsRksVRUYB6BzwGMuZUSJpOQrwvzvLQ1WAFKg4mYUsw3V-UPRVRxG9tietIaQQ-eNvlZB3xYqhvUJhw==",
+      "cookie": "0e1-zqR4Kg4amNlSTzWXYVW94zzo3W8n6-b0A9fwjp4",
+      "session_id_sha256": "f1c0768a5ecc81be5f203c991a0efe6f85fee9847eed8412c044f19706687a49",
+      "csrf": "b-rkBOFwehYUBQG36eBDzVAAkWL-LH1abQHAdSa9Ibw",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "expenses-netting",
+      "label": "login-3",
+      "actor": 3,
+      "token": "fixture-user-3",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAgv8PfH2ey-LR0EpzNtnRowS3zsHSj2nLrJieM47nDqRIT3vth7YG4d-gbqskNztfLsE1pncIxvFo4G0oNECLgQ==",
+      "cookie": "Zaen22cIZcYnjmNcuyt9rTFV4IvltlhZO2WhwpsSBQY",
+      "session_id_sha256": "36f2a6ae1952e81741ac595e1259003c8b1b7e0ea74aca0ca3590e4d2a1fff0e",
+      "csrf": "F-QzMkUhULrG7vgbkUIrNPBbPIoYRLPFwlgikSCVcoY",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "expenses-netting",
+      "label": "login-4",
+      "actor": 4,
+      "token": "fixture-user-4",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAwYgk-i1hB8eD2E9FIQzegl6ruRbLOjogcThLyufvxV_2xcG51c0g0exf_c7u1Z_6bHus7M3NwKlk2xA9EQ6TyA==",
+      "cookie": "_pRnUQYQaSHZjKUMbSGMEt6qRqrFbNXErsacKP0um7g",
+      "session_id_sha256": "2cc9b4abd5ad6b8c971bf531ff59d484dbd7ceea43d068ed15f2ed6ac161d377",
+      "csrf": "7v-H8rubcp8QIGrq23tfKDyhHnGb8Rp53iuBv9l16Bc",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "expenses-netting",
+      "label": "login-5",
+      "actor": 5,
+      "token": "fixture-user-5",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyA1pPPq8FERMKcfnlOOy3Lq48wnHqChNw59zwAhliyU3OLpmScaaJtuFgJnKdozLgFS-Y2sFBBZxGQTTz6QURd9w==",
+      "cookie": "DQnhyKipzk0DeH7_r_GmTqIi8mfnDMvBkFI1iC6KLds",
+      "session_id_sha256": "2f9d77c1ec946390b4db7188cc1584f570efd78a1eb967aa810c853bcdfba1a9",
+      "csrf": "B1fIjv-utmWoCZP7y8_RCfgIUfcrHBcMMyn-V3dL_Y0",
+      "expires_at_epoch": 1743494400.0
+    }
+  ]
+}

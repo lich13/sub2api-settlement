@@ -1,0 +1,31 @@
+{
+  "schema_version": "settlement-session-vectors/v1",
+  "vectors": [
+    {
+      "synthetic": true,
+      "workflow": "concurrency",
+      "label": "login-1",
+      "actor": 1,
+      "token": "fixture-user-1",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyAuDHvxgDqMxsJcjVGe8CofhKvRj2iD9Sud1YtRus8XoxLpvcjSGmCBiJeYBi_8w9-JF_goSZIm1yHIj0mEhDWjA==",
+      "cookie": "NGcEtATASlOprycPk7eLdaeepVfI_T2son6-ECBs6NU",
+      "session_id_sha256": "5b7f8daf2a2049a4cdf8d829fb7dd86d4a7c6bca6b72209e8852caa1a9dd1c86",
+      "csrf": "rcDUdwRPFw9ia23AjkJYWEx1NBolzie-5vfvV3qBdbI",
+      "expires_at_epoch": 1743494400.0
+    },
+    {
+      "synthetic": true,
+      "workflow": "concurrency",
+      "label": "login-5",
+      "actor": 5,
+      "token": "fixture-user-5",
+      "fernet_key": "U_tCY0rPG56_Z9oTeBAqVmzY5OIblQHdpzOG1MM1VxI=",
+      "fernet_ciphertext": "gAAAAABn6yyA1pPPq8FERMKcfnlOOy3Lq48wnHqChNw59zwAhliyU3OLpmScaaJtuFgJnKdozLgFS-Y2sFBBZxGQTTz6QURd9w==",
+      "cookie": "0e1-zqR4Kg4amNlSTzWXYVW94zzo3W8n6-b0A9fwjp4",
+      "session_id_sha256": "f1c0768a5ecc81be5f203c991a0efe6f85fee9847eed8412c044f19706687a49",
+      "csrf": "b-rkBOFwehYUBQG36eBDzVAAkWL-LH1abQHAdSa9Ibw",
+      "expires_at_epoch": 1743494400.0
+    }
+  ]
+}
