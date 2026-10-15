@@ -100,6 +100,61 @@ fn metrics(values: &[f64]) -> Value {
     json!({"samples":values.len(),"p50_ms":percentile(values,0.5),"p95_ms":percentile(values,0.95),"operations_per_second":values.len() as f64/(values.iter().sum::<f64>()/1000.0)})
 }
 
+fn units_decimal(units: u128) -> String {
+    format!("{}.{:08}", units / 100_000_000, units % 100_000_000)
+}
+
+fn assert_observation(name: &str, value: &Value, usage: usize, csv_rows: usize) -> Result<()> {
+    if name == "preview" {
+        let selected = (1..=usage)
+            .filter(|id| [1, 5, 6].contains(&((id - 1) % 12 + 1)))
+            .collect::<Vec<_>>();
+        let total = selected
+            .iter()
+            .map(|id| (id % 3) as u128 * 100_000_000 + (id % 100_000_000) as u128)
+            .sum::<u128>();
+        let calculation = &value["cycles"][0];
+        let allocated: i64 = calculation["allocations"]
+            .as_array()
+            .ok_or("Missing preview allocations")?
+            .iter()
+            .map(|row| row["amount_fen"].as_i64().unwrap_or_default())
+            .sum();
+        if calculation["can_settle"] != true
+            || calculation["record_count"] != selected.len()
+            || calculation["total_consumption"] != units_decimal(total)
+            || allocated != 10_000
+        {
+            return Err(format!("Synthetic preview invariant: allowed={} count={}/{} amount={}/{} fen={allocated}/10000",calculation["can_settle"],calculation["record_count"],selected.len(),calculation["total_consumption"],units_decimal(total)).into());
+        }
+    }
+    if name == "matching" {
+        let available = (1..=usage)
+            .filter(|id| [2, 7, 8].contains(&((id - 1) % 12 + 1)))
+            .count();
+        let indices = (0..csv_rows)
+            .filter(|index| index % 101 != 0 && *index < available)
+            .collect::<Vec<_>>();
+        let matched = indices
+            .iter()
+            .map(|index| (10001 + index % 997) as u128)
+            .sum::<u128>();
+        let total = (0..csv_rows)
+            .map(|index| (10001 + index % 997) as u128)
+            .sum::<u128>();
+        if value["matched_count"] != indices.len()
+            || value["unmatched_count"] != csv_rows - indices.len()
+            || value["matched_amount"] != units_decimal(matched)
+            || value["total"] != units_decimal(total)
+        {
+            return Err(
+                "Synthetic CSV violates exact matching counts or original-decimal totals".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn rss_kib() -> Option<u64> {
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         return status.lines().find_map(|line| {
@@ -168,8 +223,9 @@ pub async fn run(mut options: Options) -> Result<()> {
             for (name,method,path,payload) in &tasks {
                 let timer=Instant::now();
                 let response=api.request(method,path,payload.clone(),"load-preview").await?;
-                if *name=="preview" && response["cycles"][0]["can_settle"]==false { return Err("Synthetic preview unexpectedly blocked".into()); }
-                timings.entry((*name).into()).or_default().push(timer.elapsed().as_secs_f64()*1000.0);
+                let elapsed = timer.elapsed().as_secs_f64()*1000.0;
+                assert_observation(name, &response, options.usage, options.csv_rows)?;
+                timings.entry((*name).into()).or_default().push(elapsed);
             }
             if options.duration>0 {
                 let payload=json!({"name":"Load retry expense","cost":"0.01","incurred_on":"2025-01-20","creditor_id":1,"allocation_mode":"equal","members":[{"user_id":2,"percent":null} ]});
@@ -184,7 +240,7 @@ pub async fn run(mut options: Options) -> Result<()> {
         let foreign=sqlx::query("PRAGMA foreign_key_check").fetch_all(&server.app.service.store.reads).await?;
         let count:i64=sqlx::query_scalar("SELECT count(*) FROM usage").fetch_one(&server.app.service.store.reads).await?;
         if integrity!="ok" || !foreign.is_empty() || count as usize!=options.usage { return Err("Synthetic ledger integrity/count failed".into()); }
-        Ok(json!({"engine":"rust","revision":option_env!("APP_REVISION").unwrap_or("development"),"usage":options.usage,"csv_rows":options.csv_rows,"fixture_sha256":source_hash,"csv_sha256":csv_hash,"platform":std::env::consts::OS,"arch":std::env::consts::ARCH,"process_peak_rss_kib":rss_kib(),"memory_scope":"service and in-process synthetic HTTP harness; Linux VmHWM, other platforms sampled RSS","duration_seconds":started.elapsed().as_secs_f64(),"metrics":timings.iter().map(|(k,v)|(k.clone(),metrics(v))).collect::<BTreeMap<_,_>>(),"integrity":"ok"}))
+        Ok(json!({"engine":"rust","revision":option_env!("APP_REVISION").unwrap_or("development"),"usage":options.usage,"csv_rows":options.csv_rows,"fixture_sha256":source_hash,"csv_sha256":csv_hash,"platform":std::env::consts::OS,"arch":std::env::consts::ARCH,"process_rss_kib":rss_kib(),"memory_scope":"service and in-process synthetic HTTP harness; Linux high-water VmHWM, a single post-run RSS sample elsewhere","duration_seconds":started.elapsed().as_secs_f64(),"metrics":timings.iter().map(|(k,v)|(k.clone(),metrics(v))).collect::<BTreeMap<_,_>>(),"integrity":"ok"}))
     }.await;
     server.close().await;
     let mut report = result?;
