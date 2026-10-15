@@ -3,6 +3,13 @@ title = "Settlement synthetic fixture exceptions"
 useDefault = true
 
 [[allowlists]]
+description = "Historical empty secret assignment captured the following non-secret configuration line"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^\.env\.example$''']
+regexes = ['''^SETTLEMENT_REMINDER_HOUR=9$''']
+
+[[allowlists]]
 description = "Immutable synthetic cryptographic vectors; never runtime credentials"
 condition = "AND"
 regexTarget = "secret"
