@@ -56,6 +56,7 @@ import type {
 } from "./types";
 import { useAutoPreview } from "./useAutoPreview";
 import { useAccountState } from "./useAccountState";
+import { Select } from "./Select";
 import { NettingList, NettingReceivables, NettingDetails } from "./Netting";
 import { AuditLog, OperationStatus } from "./Operations";
 import { DeletionScope, DeletionTargets, type DeletionScopeValue } from "./DeletionScope";
@@ -156,18 +157,13 @@ function CycleForm({
   done: () => void;
   close: () => void;
 }) {
-  const [aid, setAid] = useState(
+  const [aid] = useState(
     account?.id ||
       cycle?.account_id ||
       catalog.accounts.find(isOperationalAccount)?.id ||
       0,
   );
-  const [name, setName] = useState(
-    cycle?.name ||
-      account?.name ||
-      catalog.accounts.find((a) => a.id === aid && isOperationalAccount(a))?.name ||
-      "",
-  );
+  const name = catalog.accounts.find(a => a.id === aid)?.name || account?.name || cycle?.name || "";
   const [cost, setCost] = useState(cycle ? costInput(cycle.cost_fen) : "");
   const [costKind, setCostKind] = useState<CostKind>(cycle?.cost_kind || "exact");
   const [creditor, setCreditor] = useState(
@@ -225,30 +221,7 @@ function CycleForm({
         <FormError error={error} />
         <label>
           账号
-          <select
-            disabled={!!account || !!cycle}
-            value={aid}
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              setAid(id);
-              setName(catalog.accounts.find((a) => a.id === id)?.name || "");
-            }}
-          >
-            {catalog.accounts.filter(isOperationalAccount).map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name} · #{a.id}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          公开名称
-          <input
-            required
-            maxLength={120}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
+          <input value={name} readOnly />
         </label>
         {!cycle && (
           <label className="checkline">
@@ -278,7 +251,7 @@ function CycleForm({
               </label>
               <label>
                 垫付人
-                <select
+                <Select
                   value={creditor}
                   onChange={(e) => setCreditor(Number(e.target.value))}
                 >
@@ -296,19 +269,19 @@ function CycleForm({
                       {u.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             </div>
-            <label>成本类型<select value={costKind} onChange={(e) => setCostKind(e.target.value as CostKind)}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></select></label>
+            <label>成本类型<Select value={costKind} onChange={(e) => setCostKind(e.target.value as CostKind)}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></Select></label>
             {cycle?.cost_source === "upstream_bill" && cost !== costInput(cycle.cost_fen) && <p className="field-hint">修改金额将改用手动成本分摊，原账单保留。</p>}
             <label>
               起点方式
-              <select value={startMode} onChange={(e) => setStartMode(e.target.value as typeof startMode)}>
+              <Select value={startMode} onChange={(e) => setStartMode(e.target.value as typeof startMode)}>
                 <option value="exact">精确时间</option>
                 <option value="minute_estimate">按时间估算</option>
                 {cycle?.start_mode === "date_estimate" && <option value="date_estimate">按日期估算</option>}
                 <option value="earliest_usage">从最早使用开始</option>
-              </select>
+              </Select>
             </label>
             {startMode !== "earliest_usage" ? (
               <label>
@@ -350,7 +323,7 @@ function UpgradeForm({
   done: () => void;
   close: () => void;
 }) {
-  const [name, setName] = useState(account.name);
+  const name = catalog.accounts.find(a => a.id === account.id)?.name || account.name;
   const [cost, setCost] = useState("");
   const [costKind, setCostKind] = useState<CostKind>("exact");
   const [creditor, setCreditor] = useState(catalog.users[0]?.id || 0);
@@ -385,11 +358,7 @@ function UpgradeForm({
         <FormError error={error} />
         <label>
           账号
-          <input value={account.name} readOnly />
-        </label>
-        <label>
-          公开名称
-          <input required maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
+          <input value={name} readOnly />
         </label>
         <div className="form-columns">
           <label>
@@ -398,17 +367,17 @@ function UpgradeForm({
           </label>
           <label>
             垫付人
-            <select value={creditor} onChange={(e) => setCreditor(Number(e.target.value))}>
+            <Select value={creditor} onChange={(e) => setCreditor(Number(e.target.value))}>
               {catalog.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
+            </Select>
           </label>
         </div>
         <label>
           成本类型
-          <select value={costKind} onChange={(e) => setCostKind(e.target.value as CostKind)}>
+          <Select value={costKind} onChange={(e) => setCostKind(e.target.value as CostKind)}>
             <option value="exact">准确成本</option>
             <option value="estimated">模糊成本</option>
-          </select>
+          </Select>
         </label>
         <p className="field-hint">保存时开始计费，升级前用量不计入。</p>
         <footer>
@@ -517,10 +486,10 @@ function ExpenseForm({
         </div>
         <label>
           垫付人
-          <select value={creditor} onChange={(e) => setCreditor(Number(e.target.value))}>
+          <Select value={creditor} onChange={(e) => setCreditor(Number(e.target.value))}>
             {source && !catalog.users.some((u) => u.id === source.creditor_id) && <option value={source.creditor_id}>{expense?.creditor_name}（历史用户）</option>}
             {catalog.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
+          </Select>
         </label>
         <fieldset className="member-picker">
           <legend>参与人</legend>
@@ -580,7 +549,7 @@ function Allocation({ value }: { value: Calculation | ExpenseCalculation }) {
         </div>
         <strong className="amount">{money(amount)}</strong>
       </div>
-      {!isExpense && <div className="detail-facts"><span>周期总消费 <b>{consumption(cycleValue.total_consumption)}</b></span><span>调用 <b>{cycleValue.record_count.toLocaleString()}</b></span></div>}
+      {!isExpense && <div className="detail-facts"><span>周期总消费 <b>{consumption(cycleValue.total_consumption)}</b></span><span>调用 <b>{cycleValue.record_count.toLocaleString()}</b></span><span title="本次计费（元）÷ 周期原始总消费">{cycleValue.display?.settled ? "结算倍率" : "预估倍率"} <b>{cycleValue.display?.cost_multiplier != null ? `${cycleValue.display.cost_multiplier}×` : "—"}</b></span></div>}
       {!isExpense && cycleValue.bill && <div className="detail-facts"><span>{cycleValue.bill.allocation_mode === "matched_only" ? "精准匹配" : "上游扣费分摊"}</span><span>上游总扣费 <b>{money(cycleValue.cycle.cost_fen)}</b></span><span>本次计费 <b>{money(amount)}</b></span><span>已匹配 <b>{cycleValue.bill.matched_count} 条</b></span><span>{cycleValue.bill.allocation_mode === "matched_only" ? "未匹配不计费" : "未匹配"} <b>{cycleValue.bill.unmatched_count} 条 · {billedMoney(cycleValue.bill.unmatched_amount)}</b></span></div>}
       <AllocationRows allocations={value.allocations} />
     </section>
@@ -632,10 +601,10 @@ function StartConfirmation({ calculation, onConfirmed }: { calculation: Calculat
   }
   return <div className="start-confirm">
     <div className="form-columns">
-      <label>确认方式<select value={method} disabled={busy} onChange={(e) => { setMethod(e.target.value as typeof method); setCandidate(null); }}>
+      <label>确认方式<Select value={method} disabled={busy} onChange={(e) => { setMethod(e.target.value as typeof method); setCandidate(null); }}>
         <option value="provided_time">直接填写准确时间</option>
         <option value="first_usage_after">充值后的首个请求</option>
-      </select></label>
+      </Select></label>
       <label>{method === "first_usage_after" ? "充值时间（北京时间）" : "准确起点（北京时间）"}<input type="datetime-local" step="1" value={value} onChange={(e) => { setValue(e.target.value); setCandidate(null); }} /></label>
     </div>
     {candidate && <p className="candidate-result">{candidate.usage ? `首请求：${date(candidate.usage.created_at)}` : "充值时间后没有已采集请求"}</p>}
@@ -757,11 +726,11 @@ function BillImportPanel({
   return (
     <div className="bill-import">
       <div className="bill-import-head"><strong>上游账单</strong><span>{effectiveCycle.cost_source === "upstream_bill" ? "替换账单" : "模糊成本"}</span></div>
-      <label>分摊方式<select value={mode} disabled={busy} onChange={(e) => {
+      <label>分摊方式<Select value={mode} disabled={busy} onChange={(e) => {
         const next = e.target.value as BillMode;
         setMode(next); ++requestVersion.current; setPreview(null); setAcceptDifference(false); setAcceptOutside(false);
         if (csv.trim() || effectiveCycle.bill_import_id) void inspect(!csv.trim(), next);
-      }}><option value="proportional">比例分摊</option><option value="matched_only">精准匹配</option></select></label>
+      }}><option value="proportional">比例分摊</option><option value="matched_only">精准匹配</option></Select></label>
       <label>CSV 文件
         <input type="file" accept=".csv,text/csv" onChange={async (e) => {
           const file = e.target.files?.[0];
@@ -779,7 +748,7 @@ function BillImportPanel({
       </label>
       <div className="start-actions">
         <button className="button" disabled={busy || !csv.trim() || !end} onClick={() => inspect()}>{busy && !preview ? "匹配中…" : "账单预览"}</button>
-        {effectiveCycle.bill_import_id && <button className="button" disabled={busy} onClick={() => inspect(true)}>沿用已导入账单</button>}
+        {!!effectiveCycle.bill_import_id && <button className="button" disabled={busy} onClick={() => inspect(true)}>沿用已导入账单</button>}
       </div>
       {preview && <div className="bill-stats">
         <div><span>文件</span><b>{preview.file_name}</b></div>
@@ -861,6 +830,10 @@ export function SettleForm({
     const current = cycleMap.get(calculation.cycle.id);
     if (!current || current.version <= calculation.cycle.version) cycleMap.set(calculation.cycle.id, calculation.cycle);
   }
+  for (const [id, cycle] of cycleMap) {
+    const name = catalog.accounts.find(a => a.id === cycle.account_id)?.name;
+    if (name) cycleMap.set(id, { ...cycle, name });
+  }
   const billCycles = [...cycleMap.values()].filter(canImportBill);
   const calculations = new Map((preview?.cycles || []).map((calculation) => [calculation.cycle.id, calculation]));
   async function settle() {
@@ -940,7 +913,7 @@ export function SettleForm({
         )}
         {displayPreview?.cycles.map((c) => (
           <div key={c.cycle.id}>
-            <Allocation value={c} />
+            <Allocation value={{ ...c, cycle: { ...c.cycle, name: cycleMap.get(c.cycle.id)?.name || c.cycle.name } }} />
             {!c.start_confirmed && (c.start_mode === "date_estimate" || c.start_mode === "minute_estimate") && (
               <StartConfirmation calculation={c} onConfirmed={() => inspect()} />
             )}
@@ -971,7 +944,7 @@ export function SettleForm({
             {deleteIds.includes(c.cycle.id) && <DeletionScope accountId={c.cycle.account_id} onConfirmed={value=>setDeleteScopes(prev=>({...prev,[c.cycle.id]:value}))}/>}
             {renew[c.cycle.id] && (
               <div className="form-columns">
-                <label>新周期成本类型<select value={renew[c.cycle.id].cost_kind} onChange={(e) => setRenew({...renew, [c.cycle.id]: {...renew[c.cycle.id], cost_kind: e.target.value as CostKind}})}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></select></label>
+                <label>新周期成本类型<Select value={renew[c.cycle.id].cost_kind} onChange={(e) => setRenew({...renew, [c.cycle.id]: {...renew[c.cycle.id], cost_kind: e.target.value as CostKind}})}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></Select></label>
                 <label>
                   新周期成本（元）
                   <input
@@ -990,7 +963,7 @@ export function SettleForm({
                 </label>
                 <label>
                   垫付人
-                  <select
+                  <Select
                     value={renew[c.cycle.id].creditor_id}
                     onChange={(e) =>
                       setRenew({
@@ -1007,7 +980,7 @@ export function SettleForm({
                         {u.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               </div>
             )}
@@ -1049,7 +1022,7 @@ export function App() {
   const [balances, setBalances] = useState<NetBalance[]>([]);
   const [payments, setPayments] = useState<NetPayment[]>([]);
   const [expenses, setExpenses] = useState<ExpenseCalculation[]>([]);
-  const [historySource, setHistory] = useState<{ cycles: Cycle[]; audit: any[] }>({
+  const [historySource, setHistory] = useState<{ cycles: Cycle[]; audit: any[]; account_revision?: string }>({
     cycles: [],
     audit: [],
   });
@@ -1082,9 +1055,13 @@ export function App() {
   const [deletions, setDeletions] = useState<DeletionJob[]>([]);
   const { state: accountState, refresh: refreshAccountState } = useAccountState(me?.id);
   const active = accountState?.revision ? new Set(accountState.active_ids) : null;
-  const overview = overviewSource && { ...overviewSource, accounts: overviewSource.accounts.filter(a => !active || active.has(a.id)) };
-  const catalog = catalogSource && { ...catalogSource, accounts: catalogSource.accounts.filter(a => !active || active.has(a.id)) };
-  const history = { ...historySource, cycles: historySource.cycles.filter(c => !active || active.has(c.account_id)) };
+  const latestNames = new Map((accountState?.accounts || []).map(a => [a.id, a.name]));
+  const currentName = (id: number, fallback: string, revision = "") =>
+    accountState && accountState.revision >= revision ? latestNames.get(id) ?? fallback : fallback;
+  const currentCycle = (c: Cycle, revision = "") => c.status === "open" ? { ...c, name: currentName(c.account_id, c.name, revision) } : c;
+  const overview = overviewSource && { ...overviewSource, accounts: overviewSource.accounts.filter(a => !active || active.has(a.id)).map(a => ({ ...a, name: currentName(a.id, a.name, overviewSource.account_revision), cycle: a.cycle ? currentCycle(a.cycle, overviewSource.account_revision) : null })) };
+  const catalog = catalogSource && { ...catalogSource, accounts: catalogSource.accounts.filter(a => !active || active.has(a.id)).map(a => ({ ...a, name: currentName(a.id, a.name, catalogSource.account_revision) })) };
+  const history = { ...historySource, cycles: historySource.cycles.filter(c => !active || active.has(c.account_id)).map(c => currentCycle(c, historySource.account_revision)) };
   const refreshSequence = useRef(0);
 
   useEffect(() => {
@@ -1158,10 +1135,13 @@ export function App() {
           api<{balances: NetBalance[]}>("/netting/balances?scope=" + scope),
           api<{payments: NetPayment[]}>("/netting/payments?scope=" + scope),
         ]);
+        if (sequence !== refreshSequence.current) return;
         setOrders(raw.orders); setBalances(net.balances); setPayments(paid.payments);
       }
       if (tab === "accounts") {
-        setExpenses((await api<{ expenses: ExpenseCalculation[] }>("/expenses")).expenses);
+        const result = await api<{ expenses: ExpenseCalculation[] }>("/expenses");
+        if (sequence !== refreshSequence.current) return;
+        setExpenses(result.expenses);
       }
       if (isAdmin && tab === "manage") {
         const [past, jobs] = await Promise.all([api("/history"), api<{items: DeletionJob[]}>("/account-deletions")]);
@@ -1188,6 +1168,14 @@ export function App() {
       document.removeEventListener("visibilitychange", visible);
     };
   }, [me, tab, manageTab, costView]);
+  const discoveredAccounts = useRef("");
+  useEffect(() => {
+    if (!accountState?.accounts || !overviewSource || accountState.error) return;
+    const known = new Set(overviewSource.accounts.map(a => a.id));
+    const added = accountState.active_ids.filter(id => !known.has(id)).sort((a, b) => a - b).join(",");
+    if (added && added !== discoveredAccounts.current) void refresh();
+    discoveredAccounts.current = added;
+  }, [accountState, overviewSource]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 3500);
@@ -1273,7 +1261,7 @@ export function App() {
   const filteredAccounts = (overview?.accounts || []).filter(
     (a) =>
       isOperationalAccount(a) &&
-      (a.kind !== "free" || (isAdmin && filter === "free")) &&
+      (isAdmin || a.kind === "paid") &&
       (!query ||
         `${a.name} ${a.id}`.toLowerCase().includes(query.toLowerCase())) &&
       (filter === "all" || filter === "open"
@@ -1413,7 +1401,7 @@ export function App() {
                     onChange={(e) => setQuery(e.target.value)}
                   />
                 </div>
-                {(tab !== "accounts" || costView === "accounts") && <select
+                {(tab !== "accounts" || costView === "accounts") && <Select
                     className="filter"
                     aria-label="状态筛选"
                     value={filter}
@@ -1438,26 +1426,16 @@ export function App() {
                     ).map(([v, label]) => (
                       <option value={v} key={v}>{label}</option>
                     ))}
-                  </select>}
+                  </Select>}
                 <div className="toolbar-actions">
-                  {tab === "accounts" && costView === "accounts" && isAdmin && (
-                    <>
-                      <button
-                        className="button"
-                        disabled={!selected.length || !catalog}
-                        onClick={() => { setSettleRenewDefault(false); setSettleIds(selected); }}
-                      >
-                        结算{selected.length > 0 ? ` (${selected.length})` : ""}
-                      </button>
+                  {tab === "accounts" && costView === "accounts" && isAdmin && selected.length > 0 && (
                       <button
                         className="button primary"
                         disabled={!catalog}
-                        onClick={() => setForm({})}
+                        onClick={() => { setSettleRenewDefault(false); setSettleIds(selected); }}
                       >
-                        <Plus size={16} />
-                        配置账号
+                        批量结算 ({selected.length})
                       </button>
-                    </>
                   )}
                   {tab === "accounts" && costView === "expenses" && isAdmin && (
                     <button className="button primary" disabled={!catalog} onClick={() => setForm({newExpense: true})}>
@@ -1488,22 +1466,17 @@ export function App() {
                   </thead>
                   <tbody>
                     {filteredAccounts.map((a) => (
-                      <tr key={a.id}>
+                      <tr key={a.id} className={a.kind !== "paid" ? "compact-account" : undefined}>
                         {isAdmin && (
                           <td className="check-cell">
-                            <input
+                            {a.kind === "paid" && a.cycle?.status === "open" && <input
                               aria-label={`选择 ${a.name}`}
                               type="checkbox"
-                              disabled={
-                                a.kind !== "paid" ||
-                                !a.cycle ||
-                                a.cycle.status !== "open"
-                              }
                               checked={
                                 !!a.cycle && selected.includes(a.cycle.id)
                               }
                               onChange={() => a.cycle && toggle(a.cycle.id)}
-                            />
+                            />}
                           </td>
                         )}
                         <td data-label="账号" className="account-name">
@@ -1554,7 +1527,7 @@ export function App() {
                           <strong className="amount">
                             {a.kind === "free"
                               ? money(0)
-                              : !a.cycle ||
+                              : !a.cycle || a.data_error ||
                                   (overview.sync_error &&
                                     a.cycle.status === "open")
                                 ? "—"
@@ -1565,7 +1538,11 @@ export function App() {
                           )}
                         </td>
                         <td data-label="状态">
-                          {a.data_error ? (
+                          {a.kind === "unconfigured" ? (
+                            <span className="status neutral">待配置</span>
+                          ) : a.kind === "free" ? (
+                            <span className="status neutral">免费</span>
+                          ) : a.data_error ? (
                             <span className="status warning">
                               <CircleAlert size={12} />
                               记录不完整
@@ -1582,10 +1559,6 @@ export function App() {
                               <CircleAlert size={12} />
                               记录有差异
                             </span>
-                          ) : a.kind === "unconfigured" ? (
-                            <span className="status neutral">待配置</span>
-                          ) : a.kind === "free" ? (
-                            <span className="status neutral">免费</span>
                           ) : (
                             <Status value={a.cycle?.status || "open"} />
                           )}
@@ -1679,11 +1652,13 @@ export function App() {
                           </small>
                         </td>
                         <td data-label="成本" className="numeric amount">
+                          <span className="cost-kind">{c.cost_kind === "estimated" ? "模糊成本" : "准确成本"}</span>
                           {money(c.cost_fen)}
                         </td>
                         <td data-label="垫付人">{c.creditor_name}</td>
                         <td data-label="状态">
                           <Status value={c.status} />
+                          {c.status === "open" && !c.start_confirmed && <small className="warning-text">起点未确认</small>}
                           {!!c.start_locked && <small className="locked-start">起点已锁定</small>}
                           {!!c.drift && (
                             <small className="warning-text">
@@ -1823,8 +1798,8 @@ export function App() {
                 <Status value={detail.order.status} />
               </div>
             )}
-            <Allocation value={detail.snapshot} />
-            {detail.snapshot.cycle?.start_locked && (
+            <Allocation value={detail.snapshot.display?.settled === false && detail.snapshot.cycle ? { ...detail.snapshot, cycle: currentCycle(detail.snapshot.cycle) } : detail.snapshot} />
+            {!!detail.snapshot.cycle?.start_locked && (
               <p className="detail-time">付费起点已锁定 · {date(detail.snapshot.cycle.start)}</p>
             )}
             {detail.order?.submitted_at && (

@@ -31,7 +31,10 @@ impl AccountSnapshot {
             .collect()
     }
     pub fn state(&self) -> Value {
-        json!({"revision":self.revision,"checked_at":self.checked_at,"error":self.error,"active_ids":self.active().iter().map(|v|int(v,"id")).collect::<Vec<_>>()})
+        let active = self.active();
+        json!({"revision":self.revision,"checked_at":self.checked_at,"error":self.error,
+            "active_ids":active.iter().map(|v|int(v,"id")).collect::<Vec<_>>(),
+            "accounts":active.iter().map(|v|json!({"id":v["id"],"name":v["name"]})).collect::<Vec<_>>()})
     }
 }
 #[derive(Clone)]

@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+#[path = "presentation_contract.rs"]
+mod presentation_contract;
 #[path = "http_contract_races.rs"]
 mod races;
 
@@ -159,6 +161,7 @@ struct Harness {
     service_generation: usize,
     client: reqwest::Client,
     aliases: AliasRegistry,
+    presentation: presentation_contract::PresentationContract,
     actor_cookies: HashMap<i64, String>,
     csrf_by_sso: HashMap<String, String>,
     signatures: HashMap<(i64, String), SignatureInput>,
@@ -225,6 +228,8 @@ impl Harness {
 
         let mut aliases = AliasRegistry::default();
         aliases.bind("<origin>", origin.clone())?;
+        let mut presentation = presentation_contract::PresentationContract::default();
+        presentation.set_source_state(&read_json(&source_fixture)?);
         Ok(Self {
             name: name.to_owned(),
             root,
@@ -244,6 +249,7 @@ impl Harness {
             service_generation: 0,
             client,
             aliases,
+            presentation,
             actor_cookies: HashMap::new(),
             csrf_by_sso: HashMap::new(),
             signatures: HashMap::new(),
@@ -474,12 +480,14 @@ impl Harness {
                 ));
             }
             let state = self.aliases.expand_value(state)?;
+            self.presentation.set_source_state(&state);
             let effect_call = self.aliases.expand_value(&observation["effect_call"])?;
             return self
                 .wait_for_upstream_observation(step_index, &state, &effect_call)
                 .await;
         }
         let state = self.aliases.expand_value(state)?;
+        self.presentation.set_source_state(&state);
         self.upstream.set_state(&state).await?;
         Ok(())
     }
@@ -624,11 +632,44 @@ impl Harness {
     async fn run_http_step(&mut self, step: &Value) -> TestResult<()> {
         let request = self.replay_request(step)?;
         self.wait_for_deletion_http_state(step).await?;
+        let source_state = self.upstream.current_state().await?;
+        self.presentation.set_source_state(&source_state);
+        let prior_settlement_ids =
+            if request["method"] == "POST" && request["path"] == "/settlement/api/v1/settlements" {
+                self.current_settlement_ids().await?
+            } else {
+                HashSet::new()
+            };
         let response = self.send_request(&request, false).await?;
         self.bind_http_aliases(step, &response.body).await?;
         self.bind_clock_aliases_from_response(step, &response.body)?;
         self.bind_runtime_usage_digests(step, &response.body)
             .await?;
+        self.bind_netting_balance_digest(step, &response.body)
+            .await?;
+        self.presentation.record_preview(step)?;
+        self.presentation.record_settlement(
+            step,
+            &request,
+            &response.body,
+            response.status,
+            &prior_settlement_ids,
+        )?;
+        if request["method"] == "POST"
+            && request["path"] == "/settlement/api/v1/settlements"
+            && response.status == 200
+        {
+            let order_rows = self.current_order_settlement_ids().await?;
+            self.presentation.record_order_ids(&order_rows);
+        }
+        if request["method"] == "GET"
+            && request["path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with("/settlement/api/v1/cycles/"))
+        {
+            self.presentation
+                .set_settled_cycle_ids(self.current_settled_cycle_ids().await?);
+        }
         self.compare_response(step, &response, false)?;
         self.record_signature(&request, &response)?;
         self.compare_upstream_calls(step).await?;
@@ -1247,6 +1288,147 @@ impl Harness {
         Ok(())
     }
 
+    async fn bind_netting_balance_digest(&mut self, step: &Value, body: &Value) -> TestResult<()> {
+        let request = &step["request"];
+        let path = request["path"].as_str().unwrap_or("");
+        if request["method"] != "GET" || step["expect"]["status"] != 200 {
+            return Ok(());
+        }
+        if path == "/settlement/api/v1/netting/balances" {
+            let actual_balances = body["balances"]
+                .as_array()
+                .ok_or_else(|| format!("{}: netting balance list is missing", self.name))?;
+            let fixture_balances = step["expect"]["body"]["balances"]
+                .as_array()
+                .ok_or_else(|| format!("{}: fixture netting balance list is missing", self.name))?;
+            for actual in actual_balances {
+                let a = actual["user_a"].as_i64().ok_or_else(|| {
+                    format!("{}: netting balance list user_a is missing", self.name)
+                })?;
+                let b = actual["user_b"].as_i64().ok_or_else(|| {
+                    format!("{}: netting balance list user_b is missing", self.name)
+                })?;
+                let fixture = fixture_balances
+                    .iter()
+                    .find(|item| item["user_a"] == a && item["user_b"] == b)
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: fixture has no netting balance for pair {a}/{b}",
+                            self.name
+                        )
+                    })?;
+                self.bind_netting_pair_digest(
+                    step["label"].as_str().unwrap_or("netting-balance-list"),
+                    a,
+                    b,
+                    fixture["digest"].as_str().ok_or_else(|| {
+                        format!("{}: fixture netting balance digest is missing", self.name)
+                    })?,
+                    actual["digest"].as_str().ok_or_else(|| {
+                        format!("{}: response netting balance digest is missing", self.name)
+                    })?,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        let Some(pair_path) = path.strip_prefix("/settlement/api/v1/netting/balances/") else {
+            return Ok(());
+        };
+        let mut pair = pair_path.split('/');
+        let a = pair
+            .next()
+            .and_then(|id| id.parse::<i64>().ok())
+            .ok_or_else(|| format!("{}: netting balance user_a path id is invalid", self.name))?;
+        let b = pair
+            .next()
+            .and_then(|id| id.parse::<i64>().ok())
+            .ok_or_else(|| format!("{}: netting balance user_b path id is invalid", self.name))?;
+        if pair.next().is_some() {
+            return Err(format!(
+                "{}: netting balance path has more than two user ids",
+                self.name
+            ));
+        }
+        let label = step["label"].as_str().unwrap_or("netting-balance-digest");
+        let fixture_digest = step["expect"]["body"]["digest"]
+            .as_str()
+            .ok_or_else(|| format!("{} / {label}: fixture netting digest is missing", self.name))?;
+        let actual_digest = body["digest"].as_str().ok_or_else(|| {
+            format!(
+                "{} / {label}: response netting digest is missing",
+                self.name
+            )
+        })?;
+
+        self.bind_netting_pair_digest(label, a, b, fixture_digest, actual_digest)
+            .await
+    }
+
+    async fn bind_netting_pair_digest(
+        &mut self,
+        label: &str,
+        a: i64,
+        b: i64,
+        fixture_digest: &str,
+        actual_digest: &str,
+    ) -> TestResult<()> {
+        let mut connection = open_read_only(&self.data_dir.join("settlement.sqlite3")).await?;
+        let rows = sqlx::query(
+            "SELECT * FROM orders WHERE status='pending' AND ((payer_id=? AND creditor_id=?) OR (payer_id=? AND creditor_id=?)) ORDER BY id",
+        )
+        .bind(a)
+        .bind(b)
+        .bind(b)
+        .bind(a)
+        .fetch_all(&mut connection)
+        .await
+        .map_err(display_error)?;
+        let mut rows = rows
+            .iter()
+            .map(|row| {
+                Ok(json!({
+                    "id":row.try_get::<i64,_>("id").map_err(display_error)?,
+                    "settlement_id":row.try_get::<i64,_>("settlement_id").map_err(display_error)?,
+                    "cycle_id":row.try_get::<Option<i64>,_>("cycle_id").map_err(display_error)?,
+                    "expense_id":row.try_get::<Option<i64>,_>("expense_id").map_err(display_error)?,
+                    "payer_id":row.try_get::<i64,_>("payer_id").map_err(display_error)?,
+                    "creditor_id":row.try_get::<i64,_>("creditor_id").map_err(display_error)?,
+                    "payer_name":row.try_get::<String,_>("payer_name").map_err(display_error)?,
+                    "creditor_name":row.try_get::<String,_>("creditor_name").map_err(display_error)?,
+                    "account_name":row.try_get::<String,_>("account_name").map_err(display_error)?,
+                    "amount_fen":row.try_get::<i64,_>("amount_fen").map_err(display_error)?,
+                    "status":row.try_get::<String,_>("status").map_err(display_error)?,
+                    "batch_id":row.try_get::<Option<i64>,_>("batch_id").map_err(display_error)?,
+                    "netting_payment_id":row.try_get::<Option<i64>,_>("netting_payment_id").map_err(display_error)?,
+                    "version":row.try_get::<i64,_>("version").map_err(display_error)?,
+                    "created_at":row.try_get::<String,_>("created_at").map_err(display_error)?,
+                    "submitted_at":row.try_get::<Option<String>,_>("submitted_at").map_err(display_error)?,
+                    "paid_at":row.try_get::<Option<String>,_>("paid_at").map_err(display_error)?,
+                }))
+            })
+            .collect::<TestResult<Vec<_>>>()?;
+        connection.close().await.map_err(display_error)?;
+
+        let exact_rows = Value::Array(rows.clone());
+        let exact_digest = sha256_hex(canonical_json(&exact_rows).as_bytes());
+        if exact_digest != actual_digest {
+            return Err(format!(
+                "{} / {label}: response digest does not hash the complete selected pending orders (rows {exact_digest}, response {actual_digest})",
+                self.name,
+            ));
+        }
+        self.presentation.restore_fixture_order_names(&mut rows);
+        let fixture_rows = self.aliases.normalize_value(&Value::Array(rows));
+        if sha256_hex(canonical_json(&fixture_rows).as_bytes()) != fixture_digest {
+            return Err(format!(
+                "{} / {label}: source-name-reversed orders do not reproduce the frozen fixture digest",
+                self.name
+            ));
+        }
+        self.aliases.bind(fixture_digest, actual_digest.to_owned())
+    }
+
     fn compare_expected_value(
         &self,
         expected: &Value,
@@ -1357,8 +1539,11 @@ impl Harness {
                 self.name, actual.status, expected_status
             ));
         }
+        let mut expected_body = expected["body"].clone();
+        self.presentation
+            .adapt_response_body(step, &mut expected_body)?;
         self.compare_expected_value(
-            &expected["body"],
+            &expected_body,
             &actual.body,
             &format!("{} / {label} body", self.name),
         )?;
@@ -1536,6 +1721,9 @@ impl Harness {
         let label = step["label"].as_str().unwrap_or("db-snapshot");
         let mut expected = step["expect"].clone();
         self.normalize_runtime_signature_expectations(&mut expected)?;
+        self.presentation
+            .set_source_state(&self.upstream.current_state().await?);
+        self.presentation.adapt_database_snapshot(&mut expected);
         let expected = &expected;
         self.wait_for_deletion_snapshot_state(expected).await?;
         let sql_path = step.get("sql").and_then(Value::as_str).or_else(|| {
@@ -1608,6 +1796,55 @@ impl Harness {
         }
         self.compare_upstream_calls(step).await?;
         Ok(())
+    }
+
+    async fn current_settlement_ids(&self) -> TestResult<HashSet<i64>> {
+        let mut connection = open_read_only(&self.data_dir.join("settlement.sqlite3")).await?;
+        let rows = sqlx::query("SELECT id FROM settlements")
+            .fetch_all(&mut connection)
+            .await
+            .map_err(display_error)?;
+        let ids = rows
+            .iter()
+            .map(|row| row.try_get::<i64, _>("id").map_err(display_error))
+            .collect::<TestResult<HashSet<_>>>()?;
+        connection.close().await.map_err(display_error)?;
+        Ok(ids)
+    }
+
+    async fn current_order_settlement_ids(&self) -> TestResult<Vec<(i64, i64)>> {
+        let mut connection = open_read_only(&self.data_dir.join("settlement.sqlite3")).await?;
+        let rows =
+            sqlx::query("SELECT id,settlement_id FROM orders WHERE settlement_id IS NOT NULL")
+                .fetch_all(&mut connection)
+                .await
+                .map_err(display_error)?;
+        let rows = rows
+            .iter()
+            .map(|row| {
+                Ok((
+                    row.try_get::<i64, _>("id").map_err(display_error)?,
+                    row.try_get::<i64, _>("settlement_id")
+                        .map_err(display_error)?,
+                ))
+            })
+            .collect::<TestResult<Vec<_>>>()?;
+        connection.close().await.map_err(display_error)?;
+        Ok(rows)
+    }
+
+    async fn current_settled_cycle_ids(&self) -> TestResult<HashSet<i64>> {
+        let mut connection = open_read_only(&self.data_dir.join("settlement.sqlite3")).await?;
+        let rows = sqlx::query("SELECT id FROM cycles WHERE status='settled'")
+            .fetch_all(&mut connection)
+            .await
+            .map_err(display_error)?;
+        let ids = rows
+            .iter()
+            .map(|row| row.try_get::<i64, _>("id").map_err(display_error))
+            .collect::<TestResult<HashSet<_>>>()?;
+        connection.close().await.map_err(display_error)?;
+        Ok(ids)
     }
 
     fn normalize_runtime_signature_expectations(&self, expected: &mut Value) -> TestResult<()> {

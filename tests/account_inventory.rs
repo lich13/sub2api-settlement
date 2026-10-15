@@ -84,6 +84,17 @@ fn account_ids(rows: &[Value]) -> BTreeSet<i64> {
     rows.iter().map(|row| row["id"].as_i64().unwrap()).collect()
 }
 
+fn account_names(rows: &[Value]) -> BTreeMap<i64, String> {
+    rows.iter()
+        .map(|row| {
+            (
+                row["id"].as_i64().unwrap(),
+                row["name"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
 async fn deleted_flag(app: &App, id: i64) -> i64 {
     let mut db = app.service.store.read().await.unwrap();
     let deleted = sqlx::query_scalar::<_, i64>("SELECT deleted FROM accounts WHERE id=?")
@@ -358,6 +369,126 @@ async fn catalog_and_overview_bind_rows_to_their_account_revision() {
         account_ids(&retained_pairs[1].1),
         BTreeSet::from([100, 300])
     );
+
+    app.service.source.close().await;
+    app.service.store.close().await;
+}
+
+#[tokio::test]
+async fn account_state_and_overview_share_role_scoped_accounts_and_revision() {
+    let temporary = TempDir::new().unwrap();
+    let fixture = temporary.path().join("source.json");
+    write_fixture(
+        &fixture,
+        vec![
+            account(100, "Source paid account", None, false),
+            account(200, "Source free account", None, false),
+            account(300, "Source unconfigured account", None, false),
+        ],
+        json!([]),
+    );
+    let app = App::new(config(temporary.path(), fixture.clone()))
+        .await
+        .unwrap();
+
+    let initial = app.service.inventory.refresh(true).await;
+    assert_eq!(active_ids(&initial), BTreeSet::from([100, 200, 300]));
+    assert!(initial["error"].is_null());
+    refresh_until_persisted(&app).await;
+
+    let mut db = app.service.store.write().await.unwrap();
+    sqlx::query(
+        "INSERT INTO profiles(account_id,name,kind) VALUES(100,'Paid legacy alias','paid')",
+    )
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO profiles(account_id,name,kind) VALUES(200,'Free legacy alias','free')",
+    )
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+
+    // This account arrives after the first inventory publication and has no
+    // usage rows. Inventory and overview must still publish it to admins.
+    write_fixture(
+        &fixture,
+        vec![
+            account(100, "Source paid account", None, false),
+            account(200, "Source free account", None, false),
+            account(300, "Source unconfigured account", None, false),
+            account(400, "Source new account without usage", None, false),
+        ],
+        json!([]),
+    );
+    let refreshed = app.service.inventory.refresh(true).await;
+    assert_eq!(active_ids(&refreshed), BTreeSet::from([100, 200, 300, 400]));
+    assert!(refreshed["error"].is_null());
+    refresh_until_persisted(&app).await;
+    assert_eq!(usage_count(&app).await, 0);
+
+    let admin = json!({"id": 1, "name": "Fixture Admin", "role": "admin"});
+    let user = json!({"id": 2, "name": "Fixture User", "role": "user"});
+    let admin_state = app.service.account_state(&admin).await.unwrap();
+    let user_state = app.service.account_state(&user).await.unwrap();
+    let admin_overview = app.service.overview(&admin).await.unwrap();
+    let user_overview = app.service.overview(&user).await.unwrap();
+
+    let all_ids = BTreeSet::from([100, 200, 300, 400]);
+    let paid_ids = BTreeSet::from([100]);
+    let all_names = BTreeMap::from([
+        (100, "Source paid account".to_owned()),
+        (200, "Source free account".to_owned()),
+        (300, "Source unconfigured account".to_owned()),
+        (400, "Source new account without usage".to_owned()),
+    ]);
+    let paid_names = BTreeMap::from([(100, "Source paid account".to_owned())]);
+
+    assert_eq!(admin_state["revision"], user_state["revision"]);
+    assert_eq!(admin_state["revision"], admin_overview["account_revision"]);
+    assert_eq!(user_state["revision"], user_overview["account_revision"]);
+    assert_eq!(
+        account_ids(admin_state["accounts"].as_array().unwrap()),
+        all_ids
+    );
+    assert_eq!(active_ids(&admin_state), all_ids);
+    assert_eq!(
+        account_names(admin_state["accounts"].as_array().unwrap()),
+        all_names
+    );
+    assert_eq!(
+        account_ids(user_state["accounts"].as_array().unwrap()),
+        paid_ids
+    );
+    assert_eq!(active_ids(&user_state), paid_ids);
+    assert_eq!(
+        account_names(user_state["accounts"].as_array().unwrap()),
+        paid_names
+    );
+
+    assert_eq!(
+        account_ids(admin_overview["accounts"].as_array().unwrap()),
+        all_ids
+    );
+    assert_eq!(
+        account_ids(user_overview["accounts"].as_array().unwrap()),
+        paid_ids
+    );
+    assert_eq!(
+        account_names(admin_overview["accounts"].as_array().unwrap()),
+        all_names
+    );
+    assert_eq!(
+        account_names(user_overview["accounts"].as_array().unwrap()),
+        paid_names
+    );
+    let overview_by_id = snapshot_rows(admin_overview["accounts"].as_array().unwrap().to_vec());
+    assert_eq!(overview_by_id[&100]["kind"], "paid");
+    assert_eq!(overview_by_id[&200]["kind"], "free");
+    assert_eq!(overview_by_id[&300]["kind"], "unconfigured");
+    assert_eq!(overview_by_id[&400]["kind"], "unconfigured");
 
     app.service.source.close().await;
     app.service.store.close().await;

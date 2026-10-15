@@ -71,10 +71,10 @@ describe("useAccountState", () => {
     const fetcher = vi.fn<typeof fetch>(async () => {
       calls += 1;
       if (calls === 1) {
-        return response({ revision: "2026-10-01T00:00:00.000Z", active_ids: [1], checked_at: "2026-10-01T00:00:00.000Z", error: null });
+        return response({ revision: "2026-10-01T00:00:00.000Z", accounts: [{ id: 1, name: "Alpha" }], active_ids: [1], checked_at: "2026-10-01T00:00:00.000Z", error: null });
       }
       if (calls === 2) {
-        return response({ revision: "2026-10-02T00:00:00.000Z", active_ids: [1, 2], checked_at: "2026-10-02T00:00:00.000Z", error: null });
+        return response({ revision: "2026-10-02T00:00:00.000Z", accounts: [{ id: 1, name: "Alpha renamed" }, { id: 2, name: "Beta" }], active_ids: [1, 2], checked_at: "2026-10-02T00:00:00.000Z", error: null });
       }
       throw new Error("network unavailable");
     });
@@ -83,13 +83,21 @@ describe("useAccountState", () => {
     await mount(9);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(current().state).toMatchObject({ revision: "2026-10-01T00:00:00.000Z", active_ids: [1] });
+    expect(current().state).toMatchObject({
+      revision: "2026-10-01T00:00:00.000Z",
+      accounts: [{ id: 1, name: "Alpha" }],
+      active_ids: [1],
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(current().state).toMatchObject({ revision: "2026-10-02T00:00:00.000Z", active_ids: [1, 2] });
+    expect(current().state).toMatchObject({
+      revision: "2026-10-02T00:00:00.000Z",
+      accounts: [{ id: 1, name: "Alpha renamed" }, { id: 2, name: "Beta" }],
+      active_ids: [1, 2],
+    });
 
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     await act(async () => {
@@ -105,6 +113,7 @@ describe("useAccountState", () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
     expect(current().state).toMatchObject({
       revision: "2026-10-02T00:00:00.000Z",
+      accounts: [{ id: 1, name: "Alpha renamed" }, { id: 2, name: "Beta" }],
       active_ids: [1, 2],
       error: "账号状态核对失败，暂保留最近列表",
     });
@@ -127,15 +136,15 @@ describe("useAccountState", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      second.resolve(response({ revision: "2026-10-02T00:00:00.000Z", active_ids: [2], checked_at: "2026-10-02T00:00:00.000Z", error: null }));
+      second.resolve(response({ revision: "2026-10-02T00:00:00.000Z", accounts: [{ id: 2, name: "Newest" }], active_ids: [2], checked_at: "2026-10-02T00:00:00.000Z", error: null }));
       await refreshPromise;
     });
-    expect(current().state).toMatchObject({ revision: "2026-10-02T00:00:00.000Z", active_ids: [2] });
+    expect(current().state).toMatchObject({ revision: "2026-10-02T00:00:00.000Z", accounts: [{ id: 2, name: "Newest" }], active_ids: [2] });
 
     await act(async () => {
-      first.resolve(response({ revision: "2026-10-01T00:00:00.000Z", active_ids: [1], checked_at: "2026-10-01T00:00:00.000Z", error: null }));
+      first.resolve(response({ revision: "2026-10-01T00:00:00.000Z", accounts: [{ id: 1, name: "Older" }], active_ids: [1], checked_at: "2026-10-01T00:00:00.000Z", error: null }));
       await Promise.resolve();
     });
-    expect(current().state).toMatchObject({ revision: "2026-10-02T00:00:00.000Z", active_ids: [2] });
+    expect(current().state).toMatchObject({ revision: "2026-10-02T00:00:00.000Z", accounts: [{ id: 2, name: "Newest" }], active_ids: [2] });
   });
 });

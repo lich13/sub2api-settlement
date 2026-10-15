@@ -368,6 +368,9 @@ impl Service {
         )
         .await?;
         write.commit().await?;
+        for calculation in &mut cycles {
+            *calculation = self.present_calculation(calculation.take(), false).await;
+        }
         Ok(json!({"id":id,"cycles":cycles,"expenses":expenses,"expires_at":expiry}))
     }
     pub async fn bill_preview(&self, actor: &Value, cid: i64, data: &Value) -> Result<Value> {

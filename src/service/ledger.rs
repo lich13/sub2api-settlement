@@ -376,7 +376,7 @@ impl Service {
                 continue;
             }
             let cid = int(&snap["cycle"], "id");
-            let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
+            let mut c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
             if c["status"] != "open" || c["version"] != snap["cycle"]["version"] {
                 return Err(Error::conflict("成本或周期已修改，请重新预览"));
             }
@@ -417,6 +417,16 @@ impl Service {
             {
                 return Err(Error::conflict("消费记录已更新，请重新预览"));
             }
+            // Freeze the current upstream name with this new settlement, without rewriting history.
+            let renewal_name = c["name"].clone();
+            let account = one(
+                db,
+                "SELECT name FROM accounts WHERE id=?",
+                &[c["account_id"].clone()],
+            )
+            .await?;
+            c["name"] = account["name"].clone();
+            calc["cycle"]["name"] = c["name"].clone();
             let records = calc["records"].take();
             let calc = without(calc, &["records"]);
             let sid = exec(
@@ -440,7 +450,7 @@ impl Service {
                 });
                 q.build().execute(&mut *db).await?;
             }
-            exec(db,"UPDATE cycles SET status='settled',end=?,settlement_id=?,version=version+1 WHERE id=?",&[snap["end"].clone(),json!(sid),json!(cid)]).await?;
+            exec(db,"UPDATE cycles SET name=?,status='settled',end=?,settlement_id=?,version=version+1 WHERE id=?",&[c["name"].clone(),snap["end"].clone(),json!(sid),json!(cid)]).await?;
             Self::create_orders(db, sid, &calc["allocations"], &c, false).await?;
             audit(
                 db,
@@ -495,7 +505,7 @@ impl Service {
                         } else {
                             c["cost_kind"].as_str().unwrap_or("exact")
                         });
-                let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":c["name"],"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":kind,"start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;
+                let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":renewal_name,"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":kind,"start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;
                 result["next_cycle"] = next["id"].clone();
             }
             results.push(result);

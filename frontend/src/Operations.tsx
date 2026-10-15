@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { useEffect, useRef, useState } from "react";
 import { api, date, downloadCsv, fromInput, money } from "./api";
 
@@ -49,7 +50,7 @@ export function AuditLog() {
   async function download(){setBusy(true);setError("");try{await downloadCsv(`/audit.csv?${search}`,"settlement-audit.csv");}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
   return <section aria-label="操作记录">
     <div className="audit-filters">
-      <label>操作<select value={action} onChange={e=>setAction(e.target.value)}><option value="">全部操作</option>{Object.entries(actions).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label>
+      <label>操作<Select value={action} onChange={e=>setAction(e.target.value)}><option value="">全部操作</option>{Object.entries(actions).map(([key,label])=><option key={key} value={key}>{label}</option>)}</Select></label>
       <label>开始时间<input type="datetime-local" value={from} onChange={e=>setFrom(e.target.value)}/></label>
       <label>结束时间<input type="datetime-local" value={to} onChange={e=>setTo(e.target.value)}/></label>
       <button className="button" disabled={busy||invalid} onClick={download}>导出 CSV</button>

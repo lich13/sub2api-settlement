@@ -146,7 +146,7 @@ small {
   font-size: 13px;
 }
 .identity small {
-  font-size: 10px;
+  font-size: 11px;
   border: 1px solid var(--line);
   padding: 2px 5px;
   border-radius: 4px;
@@ -176,7 +176,7 @@ small {
   color: var(--surface);
   border-radius: 12px;
   padding: 1px 4px;
-  font-size: 10px;
+  font-size: 11px;
   min-width: 16px;
 }
 .tabs {
@@ -282,6 +282,30 @@ input::placeholder {
   color: var(--ink);
   font-size: 13px;
 }
+.select-control {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.select-control > select {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding-right: 36px;
+}
+.form .select-control > select,
+.audit-filters .select-control > select { padding-right: 36px; }
+.select-arrow {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.select-control:has(select:disabled) .select-arrow { opacity: 0.6; }
+.select-filter { min-width: 124px; }
+.toolbar-actions:empty { display: none; }
 .toolbar-actions {
   margin-left: auto;
   display: flex;
@@ -379,7 +403,7 @@ td small {
 .start-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .start-actions select { min-height: 38px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; }
 .cost-tabs { margin-bottom: 18px; }
-.cost-kind { display: block; font-size: 10px; font-weight: 500; color: var(--muted); margin-bottom: 4px; }
+.cost-kind { display: block; font-size: 11px; font-weight: 500; color: var(--muted); margin-bottom: 4px; }
 .valid-hint { color: var(--accent); }
 .member-picker { border: 0; padding: 0; margin: 0 0 17px; }
 .member-picker legend { color: var(--muted); font-size: 12px; margin-bottom: 9px; }
@@ -397,6 +421,16 @@ td small {
 .bill-import > label { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; }
 .bill-import label { margin-bottom: 12px; }
 .bill-import input[type="file"] { padding: 8px; }
+.bill-import input[type="file"]::file-selector-button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 9px;
+  margin-right: 9px;
+  cursor: pointer;
+}
 .bill-allocation { margin-top: 9px; }
 .bill-stats { display: grid; gap: 8px; border-top: 1px solid var(--line); margin-top: 13px; padding-top: 13px; }
 .bill-stats > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
@@ -445,7 +479,7 @@ td small {
   overflow-wrap: anywhere;
 }
 .account-title small {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
 }
 .platform {
@@ -661,7 +695,7 @@ td small {
   overflow-wrap: anywhere;
 }
 .allocation-head span {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.6;
 }
@@ -671,6 +705,7 @@ td small {
 }
 .detail-facts {
   display: flex;
+  flex-wrap: wrap;
   gap: 20px;
   font-size: 11px;
   padding: 13px 16px;
@@ -704,7 +739,7 @@ td small {
 }
 .self {
   margin-left: 7px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--accent);
   display: inline-block;
 }
@@ -1142,7 +1177,7 @@ td small {
     font-size: 18px;
   }
   .balance-strip span {
-    font-size: 10px;
+    font-size: 11px;
   }
   .toolbar {
     gap: 8px;
@@ -1161,7 +1196,7 @@ td small {
   }
   .filter {
     font-size: 12px;
-    max-width: 110px;
+    max-width: none;
   }
   .table-shell {
     background: none;
@@ -1208,7 +1243,7 @@ td small {
     content: attr(data-label);
     display: block;
     color: var(--muted);
-    font-size: 10px;
+    font-size: 11px;
     margin-bottom: 6px;
   }
   .accounts-table td.account-name::before {
@@ -1240,7 +1275,7 @@ td small {
   }
   .account-title small {
     max-width: none;
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.8;
   }
   .share-meter {
@@ -1261,6 +1296,24 @@ td small {
     flex-direction: column;
     align-items: stretch;
     gap: 3px;
+  }
+  .accounts-table .compact-account .check-cell,
+  .accounts-table .compact-account td[data-label]:not(.account-name):not([data-label="状态"]) {
+    display: none;
+  }
+  .accounts-table .compact-account .account-name {
+    border-bottom: 0;
+    padding-bottom: 6px !important;
+    margin-bottom: 0;
+  }
+  .compact-account .account-title { padding-right: 0; }
+  .accounts-table .compact-account td[data-label="状态"]::before { display: none; }
+  .accounts-table .compact-account .action-cell {
+    grid-column: 2;
+    align-self: center;
+    border-top: 0;
+    margin: 0;
+    padding: 0 !important;
   }
   .action-cell .text-button {
     min-height: 35px;
@@ -1399,10 +1452,10 @@ td small {
   .self {
     display: block;
     margin: 4px 0 0;
-    font-size: 9px;
+    font-size: 11px;
   }
   .allocation-head span {
-    font-size: 9px;
+    font-size: 11px;
   }
   .detail-facts {
     gap: 12px;

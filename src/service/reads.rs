@@ -28,6 +28,13 @@ impl Service {
                     .cloned()
                     .collect::<Vec<_>>()
             );
+            state["accounts"] = json!(
+                array(&state["accounts"])
+                    .iter()
+                    .filter(|a| configured.contains(&int(a, "id")))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            );
         }
         Ok(state)
     }
@@ -65,11 +72,14 @@ impl Service {
         }
         for a in accounts {
             let p=store::optional(&mut db,"SELECT name AS public_name,kind,version AS profile_version FROM profiles WHERE account_id=?",&[a["id"].clone()]).await?.unwrap_or(json!({"public_name":null,"kind":null,"profile_version":null}));
-            if p["kind"].is_null() && text(actor, "role") != "admin" {
+            if p["kind"] != "paid" && text(actor, "role") != "admin" {
                 continue;
             }
             let c=store::optional(&mut db,"SELECT * FROM cycles WHERE account_id=? ORDER BY (status='open') DESC,start DESC,id DESC LIMIT 1",&[a["id"].clone()]).await?;
-            let mut row = json!({"id":a["id"],"name":p["public_name"].as_str().unwrap_or(text(&a,"name")),"platform":a["platform"],"kind":p["kind"].as_str().unwrap_or("unconfigured"),"deleted":flag(&a,"deleted"),"profile_version":p["profile_version"],"cycle":c});
+            let mut row = json!({"id":a["id"],"name":a["name"],"platform":a["platform"],"kind":p["kind"].as_str().unwrap_or("unconfigured"),"deleted":flag(&a,"deleted"),"profile_version":p["profile_version"],"cycle":c});
+            if row["cycle"]["status"] == "open" {
+                row["cycle"]["name"] = a["name"].clone();
+            }
             if let Some(c) = c {
                 let calc = if c["status"] == "settled" {
                     let s = one(
@@ -227,9 +237,13 @@ impl Service {
             &[o["settlement_id"].clone()],
         )
         .await?;
-        Ok(
-            json!({"order":o,"snapshot":Self::redact(serde_json::from_str(text(&s,"snapshot"))?,actor),"drift":flag(&s,"drift")}),
-        )
+        let snapshot = self
+            .present_calculation(
+                Self::redact(serde_json::from_str(text(&s, "snapshot"))?, actor),
+                true,
+            )
+            .await;
+        Ok(json!({"order":o,"snapshot":snapshot,"drift":flag(&s,"drift")}))
     }
     pub async fn netting_payments(
         &self,
@@ -297,7 +311,7 @@ impl Service {
         let active = array(&state["active_ids"]);
         let mut db = self.store.read().await?;
         let mut cycles = Vec::new();
-        for mut c in all(&mut db,"SELECT c.*,s.drift FROM cycles c JOIN accounts a ON a.id=c.account_id AND a.deleted=0 LEFT JOIN settlements s ON s.id=c.settlement_id ORDER BY c.id DESC",&[]).await?{if !active.contains(&c["account_id"]){continue;}c["creditor_name"]=json!(name(&mut db,int(&c,"creditor_id")).await?);cycles.push(c);}
+        for mut c in all(&mut db,"SELECT c.*,s.drift FROM cycles c JOIN accounts a ON a.id=c.account_id AND a.deleted=0 LEFT JOIN settlements s ON s.id=c.settlement_id ORDER BY c.id DESC",&[]).await?{if !active.contains(&c["account_id"]){continue;}c["creditor_name"]=json!(name(&mut db,int(&c,"creditor_id")).await?);self.present_cycle(&mut c).await;cycles.push(c);}
         let mut audit = all(
             &mut db,
             "SELECT * FROM audit ORDER BY id DESC LIMIT 100",
@@ -345,7 +359,9 @@ impl Service {
             }
             r
         };
-        Ok(Self::redact(result, actor))
+        Ok(self
+            .present_calculation(Self::redact(result, actor), !c["settlement_id"].is_null())
+            .await)
     }
     pub async fn inbox(&self, actor: &Value) -> Result<Value> {
         let mut db = self.store.read().await?;

@@ -44,6 +44,14 @@ function button(text: string) {
   return found;
 }
 
+function inputForLabel(labelText: string) {
+  const label = Array.from(host!.querySelectorAll("label"))
+    .find(element => element.textContent?.includes(labelText));
+  const input = label?.querySelector("input");
+  if (!input) throw new Error(`input not found for label: ${labelText}`);
+  return input as HTMLInputElement;
+}
+
 function response(data: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -190,6 +198,126 @@ describe("SettleForm preview integration", () => {
     const updatedRenewalCost = Array.from(host!.querySelectorAll<HTMLInputElement>("input"))
       .find(input => input.closest("label")?.textContent?.includes("新周期成本（元）"));
     expect(updatedRenewalCost?.value).toBe("66.60");
+  });
+
+  it("keeps renewal and bill-import drafts when the open cycle is renamed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const cycleValue = cycle({ cost_source: "upstream_bill", bill_import_id: 33, cost_kind: "estimated" });
+    const csv = "timestamp,cost\n2026-09-20T00:00:00Z,1.25\n";
+    let previewCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/previews")) {
+        previewCalls += 1;
+        return response(preview(cycle({ ...cycleValue, version: previewCalls }), `rename-preview-${previewCalls}`));
+      }
+      if (path.endsWith("/bill-previews")) return response({
+        allocation_mode: "proportional",
+        id: "bill-draft-preview",
+        cost_fen: 5_000,
+        billable_cost_fen: 5_000,
+        total: "50.00",
+        matched_amount: "50.00",
+        unmatched_amount: "0",
+        matched_count: 1,
+        unmatched_count: 0,
+        outside_count: 0,
+        outside_amount: "0",
+        local_unmatched_count: 0,
+        record_count: 1,
+        file_name: "draft.csv",
+        file_hash: "fixture-hash",
+        end: "2026-10-01T00:00:00Z",
+        version: 1,
+        allocations: [],
+        difference_required: false,
+        can_confirm: true,
+      });
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const initialProps = formProps({ cycles: [cycleValue], renewByDefault: true });
+
+    await render(<SettleForm {...initialProps} />);
+    await advance(0);
+    const renewal = inputForLabel("新周期成本（元）");
+    setInputValue(renewal, "66.60");
+
+    const fileInput = host!.querySelector<HTMLInputElement>(".bill-import input[type=file]");
+    if (!fileInput) throw new Error("bill import file input not found");
+    const file = { name: "draft.csv", size: csv.length, text: async () => csv } as File;
+    Object.defineProperty(fileInput, "files", { configurable: true, value: [file] });
+    await act(async () => {
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const renamedCycle = { ...cycleValue, name: "Renamed billing account" };
+    const renamedCatalog: Catalog = {
+      ...catalog,
+      accounts: [{ id: 1, name: "Renamed billing account", platform: "claude", status: "active", deleted: false, created_at: "2026-01-01T00:00:00Z" }],
+    };
+    await render(<SettleForm {...initialProps} cycles={[renamedCycle]} catalog={renamedCatalog} />);
+    await advance(0);
+
+    expect(host!.textContent).toContain("Renamed billing account");
+    expect(inputForLabel("新周期成本（元）").value).toBe("66.60");
+    const importButton = Array.from(host!.querySelectorAll<HTMLButtonElement>(".bill-import button"))
+      .find(value => value.textContent?.trim() === "账单预览");
+    expect(importButton?.disabled).toBe(false);
+    if (!importButton) throw new Error("bill preview button not found");
+    await click(importButton as HTMLButtonElement);
+    const importCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
+    expect(JSON.parse(String(importCall?.[1]?.body))).toMatchObject({ csv, file_name: "draft.csv" });
+    expect(previewCalls).toBe(1);
+  });
+
+  it("renders multiplier metadata with its status and preserves backend precision", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    let previewCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      if (String(input).endsWith("/previews")) {
+        previewCalls += 1;
+        const value = cycle({ version: previewCalls });
+        const metadata = previewCalls === 1
+          ? { cost_multiplier: "0.1367", settled: false }
+          : previewCalls === 2
+            ? { cost_multiplier: "<0.0001", settled: true }
+            : { cost_multiplier: null, settled: false };
+        const result = preview(value, `multiplier-preview-${previewCalls}`);
+        return response({
+          ...result,
+          cycles: [{ ...calculation(value), display: metadata }],
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const props = formProps();
+
+    await render(<SettleForm {...props} />);
+    await advance(0);
+    expect(host!.textContent).toContain("预估倍率");
+    expect(host!.textContent).toContain("0.1367×");
+
+    await render(<SettleForm {...props} cycles={[cycle({ version: 2 })]} />);
+    await advance(0);
+    expect(host!.textContent).toContain("结算倍率");
+    expect(host!.textContent).toContain("<0.0001×");
+
+    await render(<SettleForm {...props} cycles={[cycle({ version: 3 })]} />);
+    await advance(0);
+    const multiplier = Array.from(host!.querySelectorAll(".detail-facts span"))
+      .find(value => value.textContent?.includes("倍率"));
+    expect(multiplier?.textContent).toContain("预估倍率");
+    expect(multiplier?.textContent).toContain("—");
+    expect(multiplier?.textContent).not.toContain("×");
+    expect(previewCalls).toBe(3);
   });
 
   it("shows the bill import entry on the first preview and refreshes after confirming an imported bill", async () => {

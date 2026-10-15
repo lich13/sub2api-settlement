@@ -1,7 +1,7 @@
 export type StartMode = "exact" | "date_estimate" | "minute_estimate" | "earliest_usage";
 export type CostKind = "exact" | "estimated";
 export type BillMode = "proportional" | "matched_only";
-export type AccountState = { revision: string; active_ids: number[]; checked_at: string | null; error: string | null };
+export type AccountState = { revision: string; active_ids: number[]; accounts?: { id: number; name: string }[]; checked_at: string | null; error: string | null };
 export type DeletionJob = { id: number; account_id: number; account_name: string; settlement_id: number; status: string; version: number; error: string | null; updated_at: string };
 export type Actor = {
   id: number;
@@ -136,6 +136,7 @@ export type ReceivableOrder = {
   status: string;
 };
 export type Calculation = {
+  display?: { cost_multiplier: string | null; settled: boolean };
   cycle: Cycle;
   end: string;
   total_consumption: string;
