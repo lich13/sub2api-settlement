@@ -661,6 +661,7 @@ async fn verify_reconciliation_source(
             && inclusive_ids.contains(&10001),
         "incremental cursor did not include the exact lower timestamp, ID watermark, and later known row",
     )?;
+    drop(inclusive);
 
     let mut exclusive = source
         .incremental(12050, "2026-01-15T12:34:56.123457+00:00")
@@ -676,6 +677,7 @@ async fn verify_reconciliation_source(
         exclusive_ids == vec![10001, 30000, 40000],
         "incremental cursor did not exclude the watermark row just before since while retaining IDs above the watermark",
     )?;
+    drop(exclusive);
 
     let scope = Scope {
         root: 101,
@@ -717,7 +719,22 @@ async fn verify_reconciliation_source(
             && all_ids.contains(&30000)
             && all_ids.contains(&40000),
         "unrestrict did not restore the full PostgreSQL usage stream",
-    )
+    )?;
+    drop(restricted);
+
+    sqlx::query(&format!(
+        "UPDATE {schema}.usage_logs SET total_cost = 7.0000, user_id = 1, input_tokens = NULL WHERE id = 30000"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("restore reconciliation usage fixture", &error))?;
+    sqlx::query(&format!(
+        "UPDATE {schema}.usage_logs SET created_at = '2026-03-15T12:00:00+00:00'::timestamptz WHERE id = 40000"
+    ))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("restore reconciliation timestamp fixture", &error))?;
+    Ok(())
 }
 
 async fn source_fingerprints(source: &Source) -> TestResult<Vec<Fingerprint>> {
