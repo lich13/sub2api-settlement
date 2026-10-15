@@ -424,6 +424,12 @@ pub async fn start(options: &Options, override_source: Option<Value>) -> Result<
         if options.netting_fixtures && state["netting_seeded"] != true {
             for (index,(cost,creditor,payer)) in [("100.00",2,1),("60.00",1,2),("20.00",3,1),("20.00",1,3),("5.00",3,2)].into_iter().enumerate() {
                 let expense = api.request("POST","/expenses",json!({"name":format!("演示账单 {}",index+1),"cost":cost,"incurred_on":&clock[..10],"creditor_id":creditor,"allocation_mode":"equal","members":[{"user_id":payer,"percent":null}]}),&format!("qa-netting-expense-{index}")).await?;
+                // The process may have stopped after settlement committed but before
+                // the seed marker was saved. The ledger is the durable authority.
+                let settled: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM settlements WHERE expense_id=? AND status='active')")
+                    .bind(expense["id"].as_i64().ok_or("Missing demo expense ID")?)
+                    .fetch_one(&running.app.service.store.reads).await?;
+                if settled { continue; }
                 let preview = api.request("POST","/previews",json!({"ids":[],"expense_ids":[expense["id"]],"end":time::now()}),"qa-preview").await?;
                 api.request("POST","/settlements",json!({"preview_id":preview["id"],"renewals":[]}),&format!("qa-netting-settle-{index}")).await?;
             }
@@ -565,6 +571,10 @@ mod tests {
             .unwrap();
         assert_eq!(rows["orders"].as_array().unwrap().len(), 5);
         server.close().await;
+        let marker = temp.path().join("qa-fixture.json");
+        let mut state: Value = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        state["netting_seeded"] = json!(false);
+        atomic_json(&marker, &state).unwrap();
         let server = start(&options, None).await.unwrap();
         let api = Api::login(&server.origin, 1).await.unwrap();
         let after = api
