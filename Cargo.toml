@@ -14,7 +14,7 @@ resolver = "3"
 axum = { version = "0.8", features = ["json", "query", "tokio", "http1"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tower-http = { version = "0.6", features = ["fs", "limit", "timeout"] }
+tower-http = { version = "0.7", features = ["fs", "limit", "timeout"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "chrono", "json"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
