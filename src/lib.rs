@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod billing;
 pub mod config;
 pub mod deletions;

@@ -1851,6 +1851,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hex",
+ "libsqlite3-sys",
  "mimalloc",
  "num-bigint",
  "num-integer",

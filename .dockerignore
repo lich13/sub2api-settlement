@@ -10,4 +10,5 @@ frontend/dist
 **/session.keys*.json
 **/settlement.lock
 **/.secret-*
+**/.backup-*
 target

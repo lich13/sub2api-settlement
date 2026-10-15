@@ -25,6 +25,36 @@ async fn main() {
 }
 async fn run() -> Result<()> {
     let config = Config::env()?;
+    let arguments = std::env::args().collect::<Vec<_>>();
+    let ledger = config.data_dir.join("settlement.sqlite3");
+    if arguments.get(1).is_some_and(|command| command == "backup") {
+        if arguments.len() != 4 || arguments[2] != "--output" {
+            return Err(settlement::error::Error::invalid(
+                "用法：settlement backup --output FILE",
+            ));
+        }
+        settlement::backup::create(&ledger, std::path::Path::new(&arguments[3])).await?;
+        println!("{{\"status\":\"backed_up\",\"integrity\":\"ok\"}}");
+        return Ok(());
+    }
+    if arguments.get(1).is_some_and(|command| command == "migrate") {
+        if arguments.len() == 3 && arguments[2] == "--check" {
+            println!(
+                "{}",
+                serde_json::to_string(&settlement::store::migrations::inspect(&ledger).await?)?
+            );
+        } else if arguments.len() == 2 {
+            let _lock = settlement::keys::LedgerLock::acquire(&config.data_dir)?;
+            let store = settlement::store::Store::open(&ledger).await?;
+            store.close().await;
+            println!("{{\"status\":\"migrated\"}}");
+        } else {
+            return Err(settlement::error::Error::invalid(
+                "用法：settlement migrate [--check]",
+            ));
+        }
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("rotate-session-key") {
         let arguments = std::env::args().collect::<Vec<_>>();
         if arguments.len() != 4 || arguments[2] != "--id" {
@@ -56,6 +86,11 @@ async fn run() -> Result<()> {
             return Err(settlement::error::Error::unavailable());
         }
         return Ok(());
+    }
+    if arguments.len() != 1 {
+        return Err(settlement::error::Error::invalid(
+            "命令无效，可用命令：healthcheck、backup、migrate、rotate-session-key",
+        ));
     }
     let app = App::new(config).await?;
     app.recover_deletions().await?;

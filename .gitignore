@@ -6,6 +6,7 @@ session.key
 session.keys*.json
 settlement.lock
 .secret-*
+.backup-*
 *.sqlite*
 *.db
 frontend/node_modules/
