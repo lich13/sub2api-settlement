@@ -374,12 +374,15 @@ impl App {
                 }
                 "bill-confirm" => {
                     admin(actor)?;
-                    prepared.bill = Some(s.prepare_bill(actor, entity.unwrap(), &payload).await?);
+                    prepared.bill = Some(
+                        s.prepare_bill(actor, required_entity(entity)?, &payload)
+                            .await?,
+                    );
                 }
                 "start-confirm" => {
                     admin(actor)?;
                     s.sync_selection(
-                        &[json!(entity.unwrap())],
+                        &[json!(required_entity(entity)?)],
                         &time::now(),
                         payload["start"]
                             .as_str()
@@ -410,11 +413,16 @@ impl App {
         }
         if kind == "delete-retry" {
             self.deletion_wake.notify_one();
-            let items = self.deletion_list(actor, Some(&[entity.unwrap()])).await?;
+            let items = self
+                .deletion_list(actor, Some(&[required_entity(entity)?]))
+                .await?;
             return Ok(items["items"][0].clone());
         }
         Ok(result)
     }
+}
+fn required_entity(entity: Option<i64>) -> Result<i64> {
+    entity.ok_or_else(|| Error::new(400, "缺少记录编号"))
 }
 fn header<'a>(h: &'a HeaderMap, k: &str) -> &'a str {
     h.get(k).and_then(|v| v.to_str().ok()).unwrap_or("")
@@ -614,4 +622,15 @@ async fn security(request: Request, next: Next) -> Response {
             .insert(k, HeaderValue::from_static(v));
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_entity_is_a_bad_request() {
+        assert_eq!(required_entity(None).unwrap_err().status, 400);
+        assert_eq!(required_entity(Some(42)).unwrap(), 42);
+    }
 }

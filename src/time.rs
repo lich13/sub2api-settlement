@@ -75,10 +75,10 @@ pub fn date_bounds(s: &str) -> Result<(String, String)> {
     };
     let d = date
         .and_hms_opt(0, 0, 0)
-        .unwrap()
+        .ok_or_else(|| Error::invalid("按日期估算需要有效日期"))?
         .and_local_timezone(offset)
         .single()
-        .unwrap()
+        .ok_or_else(|| Error::invalid("按日期估算需要有效日期"))?
         .with_timezone(&Utc);
     Ok((format(d), format(d + chrono::Duration::days(1))))
 }

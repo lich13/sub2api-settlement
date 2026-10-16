@@ -78,8 +78,8 @@ pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
             .await?;
             let names = columns
                 .iter()
-                .map(|r| r["name"].as_str().unwrap())
-                .collect::<Vec<_>>()
+                .map(|r| r["name"].as_str().ok_or_else(Error::unavailable))
+                .collect::<Result<Vec<_>>>()?
                 .join(",");
             exec(
                 db,

@@ -253,12 +253,11 @@ impl Service {
             .iter()
             .filter(|s| s.get("cycle").is_some())
             .collect();
-        if !cycles.is_empty() {
+        if let Some(end) = cycles.iter().map(|s| text(s, "end")).max() {
             let ids = cycles
                 .iter()
                 .map(|s| s["cycle"]["id"].clone())
                 .collect::<Vec<_>>();
-            let end = cycles.iter().map(|s| text(s, "end")).max().unwrap();
             self.sync_selection(&ids, end, None).await?;
         }
         let mut db = self.store.read().await?;

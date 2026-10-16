@@ -205,15 +205,13 @@ impl Service {
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
             let mut shares = allocate(int(&e, "cost_fen"), &weights, int(&e, "creditor_id"), 28)?;
+            let items = shares.as_array_mut().ok_or_else(Error::unavailable)?;
             for member in array(&e["members"]) {
                 if int(member, "weight") == 0 {
-                    shares.as_array_mut().unwrap().push(json!({"user_id":member["user_id"],"consumption":"0","amount_fen":0,"share":"0","self_covered":member["user_id"]==e["creditor_id"]}));
+                    items.push(json!({"user_id":member["user_id"],"consumption":"0","amount_fen":0,"share":"0","self_covered":member["user_id"]==e["creditor_id"]}));
                 }
             }
-            shares
-                .as_array_mut()
-                .unwrap()
-                .sort_by_key(|a| int(a, "user_id"));
+            items.sort_by_key(|a| int(a, "user_id"));
             Self::apply_names(&mut shares, &names);
             Ok(json!({"source_type":"fixed_expense","expense":e,"allocations":shares,"can_settle":true,"creditor_name":creditor_name,"digest":digest(&e)}))
         })

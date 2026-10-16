@@ -253,7 +253,9 @@ pub fn allocate(
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let remainder = cost - amounts.values().sum::<i64>();
     for (u, _) in ranked.iter().take(remainder as usize) {
-        *amounts.get_mut(u).unwrap() += 1;
+        *amounts
+            .get_mut(u)
+            .expect("ranked users come from the same allocation map") += 1;
     }
     let total_decimal = from_ratio(&total, precision);
     Ok(Value::Array(exact.iter().map(|(uid,v)|{
@@ -290,7 +292,9 @@ pub fn allocate_matched(weights: &BTreeMap<i64, Decimal>, creditor: i64) -> Resu
     ranks.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     let remainder = target - amounts.values().sum::<i64>();
     for (uid, _) in ranks.iter().take(remainder as usize) {
-        *amounts.get_mut(uid).unwrap() += 1;
+        *amounts
+            .get_mut(uid)
+            .expect("matched ranks and amounts are inserted together") += 1;
     }
     Ok(Value::Array(exact.iter().map(|(uid,v)|json!({"user_id":uid,"consumption":weights[uid].to_string(),"amount_fen":amounts[uid],"share":from_ratio(&(v/&total),28).to_string(),"self_covered":*uid==creditor})).collect()))
 }

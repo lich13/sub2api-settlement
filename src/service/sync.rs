@@ -250,12 +250,12 @@ impl Service {
             for r in batch {
                 let aid = int(&r, "account_id");
                 let root = *roots.get(&aid).or(known.get(&aid)).unwrap_or(&aid);
-                let mut detail = json!({});
+                let mut detail = serde_json::Map::new();
                 for k in crate::billing::DETAIL_FIELDS {
-                    detail[k] = r[k].clone();
+                    detail.insert(k.to_owned(), r[k].clone());
                 }
-                let detail = if detail.as_object().unwrap().values().any(|v| !v.is_null()) {
-                    Some(dumps(&detail))
+                let detail = if detail.values().any(|v| !v.is_null()) {
+                    Some(dumps(&Value::Object(detail)))
                 } else {
                     None
                 };

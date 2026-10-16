@@ -91,6 +91,7 @@ fn positive(v: &mut Value, k: &str) -> Result<()> {
     Ok(())
 }
 fn choice(v: &Value, k: &str, values: &[&str], nullable: bool) -> Result<()> {
+    let (last, preceding) = values.split_last().ok_or_else(Error::unavailable)?;
     if nullable && v[k].is_null() {
         return Ok(());
     }
@@ -102,12 +103,12 @@ fn choice(v: &Value, k: &str, values: &[&str], nullable: bool) -> Result<()> {
     } else {
         format!(
             "{} or '{}'",
-            values[..values.len() - 1]
+            preceding
                 .iter()
                 .map(|s| format!("'{s}'"))
                 .collect::<Vec<_>>()
                 .join(", "),
-            values.last().unwrap()
+            last
         )
     };
     Err(issue(
@@ -297,7 +298,10 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         "member" => (&["user_id", "percent"], json!({"percent":null})),
         _ => return Ok(json!({})),
     };
-    for (k, val) in v.as_object().unwrap() {
+    let Some(object) = v.as_object() else {
+        return Err(Error::invalid("请求必须是对象"));
+    };
+    for (k, val) in object {
         if !fields.contains(&k.as_str()) {
             return Err(issue(
                 "extra_forbidden",
@@ -308,7 +312,10 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             ));
         }
     }
-    for (k, val) in defaults.as_object().unwrap() {
+    let Some(defaults) = defaults.as_object() else {
+        return Err(Error::unavailable());
+    };
+    for (k, val) in defaults {
         if v.get(k).is_none() {
             v[k] = val.clone();
         }
@@ -488,7 +495,9 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             }
             v["renewals"] = json!(r);
             if array(&v["delete_cycle_ids"]).is_empty() {
-                v.as_object_mut().unwrap().remove("delete_cycle_ids");
+                v.as_object_mut()
+                    .ok_or_else(|| Error::invalid("请求必须是对象"))?
+                    .remove("delete_cycle_ids");
             }
         }
         "transition" => choice(
@@ -558,6 +567,26 @@ pub fn query_choices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_objects_and_empty_choice_definitions_return_errors() {
+        for value in [Value::Null, json!([]), json!(42), json!("object")] {
+            let error = normalize("create", value).unwrap_err();
+            assert_eq!(error.status, 422);
+            assert_eq!(error.message, "请求必须是对象");
+        }
+        let error = normalize(
+            "create-expense",
+            json!({
+                "name": "Fixture", "cost": "1.00", "incurred_on": "2026-01-01",
+                "creditor_id": 1, "members": [null]
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(error.status, 422);
+        assert_eq!(error.message, "请求必须是对象");
+        assert!(choice(&json!({"state": "x"}), "state", &[], false).is_err());
+    }
 
     #[test]
     fn cached_patterns_preserve_validation_boundaries_and_error_details() {
