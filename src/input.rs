@@ -3,9 +3,19 @@ use crate::{
     json::{array, int, text},
     time,
 };
+use regex::Regex;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
-const COST: &str = r"^(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$";
+use std::{collections::BTreeSet, sync::LazyLock};
+
+static COST: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$").expect("fixed cost validation expression")
+});
+static PERCENT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(0|[1-9][0-9]{0,2})(\.[0-9]{1,2})?$")
+        .expect("fixed percent validation expression")
+});
+static DIGEST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[0-9a-f]{64}$").expect("fixed SHA-256 validation expression"));
 fn issue(kind: &str, field: &str, message: &str, value: &Value, ctx: Option<Value>) -> Error {
     let mut d = json!({"type":kind,"loc":if field.is_empty(){json!(["body"])}else{json!(["body",field])},"msg":message,"input":value});
     if let Some(ctx) = ctx {
@@ -108,9 +118,10 @@ fn choice(v: &Value, k: &str, values: &[&str], nullable: bool) -> Result<()> {
         Some(json!({"expected":expected})),
     ))
 }
-fn cost(v: &Value, k: &str, pattern: &str) -> Result<()> {
+fn cost(v: &Value, k: &str, regex: &Regex) -> Result<()> {
     string(v, k, 0, usize::MAX)?;
-    if !regex::Regex::new(pattern).unwrap().is_match(text(v, k)) {
+    if !regex.is_match(text(v, k)) {
+        let pattern = regex.as_str();
         return Err(issue(
             "string_pattern_mismatch",
             k,
@@ -334,7 +345,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         string(&v, "name", 1, 120)?;
     }
     if fields.contains(&"cost") {
-        cost(&v, "cost", COST)?;
+        cost(&v, "cost", &COST)?;
     }
     if fields.contains(&"cost_kind") {
         choice(
@@ -408,7 +419,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         }
         "member" => {
             if !v["percent"].is_null() {
-                cost(&v, "percent", r"^(0|[1-9][0-9]{0,2})(\.[0-9]{1,2})?$")?;
+                cost(&v, "percent", &PERCENT)?;
             }
         }
         "bill-preview" => {
@@ -487,7 +498,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             false,
         )?,
         "netting-payment" => {
-            cost(&v, "digest", r"^[0-9a-f]{64}$")?;
+            cost(&v, "digest", &DIGEST)?;
             for (key, max) in [("note", 500), ("reference", 128)] {
                 if v.get(key).is_some() {
                     string(&v, key, 0, max)?;
@@ -501,7 +512,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         }
         "delete-retry" => {
             if v.get("scope_digest").is_some() {
-                cost(&v, "scope_digest", r"^[0-9a-f]{64}$")?;
+                cost(&v, "scope_digest", &DIGEST)?;
             }
         }
         "merge" => {
@@ -541,5 +552,55 @@ pub fn query_choices(
         Ok(())
     } else {
         Err(Error::validation(json!(errors)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_patterns_preserve_validation_boundaries_and_error_details() {
+        for value in ["0", "100", "9999999999.99", "0.01"] {
+            cost(&json!({"cost": value}), "cost", &COST).unwrap();
+        }
+        for value in ["01", "-1", "1.001", "10000000000", "1\n"] {
+            let error = cost(&json!({"cost": value}), "cost", &COST).unwrap_err();
+            assert_eq!(error.status, 422);
+            assert_eq!(
+                error.detail,
+                Some(json!([{
+                    "type": "string_pattern_mismatch", "loc": ["body", "cost"],
+                    "msg": "String should match pattern '^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,2})?$'",
+                    "input": value, "ctx": {"pattern": "^(0|[1-9][0-9]{0,9})(\\.[0-9]{1,2})?$"}
+                }]))
+            );
+        }
+        for value in ["0", "33.33", "100.00", "999.99"] {
+            normalize("member", json!({"user_id": 1, "percent": value})).unwrap();
+        }
+        for value in ["0.001", "1000", "01"] {
+            assert!(normalize("member", json!({"user_id": 1, "percent": value})).is_err());
+        }
+        for kind in ["netting-payment", "delete-retry"] {
+            let key = if kind == "netting-payment" {
+                "digest"
+            } else {
+                "scope_digest"
+            };
+            let payload = if kind == "netting-payment" {
+                json!({"user_a": 1, "user_b": 2, key: "a".repeat(64)})
+            } else {
+                json!({"version": 1, key: "a".repeat(64)})
+            };
+            normalize(kind, payload.clone()).unwrap();
+            for invalid in ["a".repeat(63), "a".repeat(65), "A".repeat(64)] {
+                let mut invalid_payload = payload.clone();
+                invalid_payload[key] = json!(invalid);
+                let error = normalize(kind, invalid_payload).unwrap_err();
+                assert_eq!(error.status, 422);
+                assert_eq!(error.detail.unwrap()[0]["ctx"]["pattern"], "^[0-9a-f]{64}$");
+            }
+        }
     }
 }
