@@ -4,6 +4,35 @@ Rust stable（当前 1.99.0）、Node 24.21.0 LTS、pnpm 12.11.2。运行镜像�
 
 创建 `.env`（参考 `.env.example`，权限 0600）和 `data/`（UID/GID 10002，权限 0700）。SQLite、WAL 及 `session.key` 属于持久数据，备份时使用 SQLite backup API，保留同一密钥。单实例运行，不挂载网络文件系统。
 
+## 环境变量
+
+以下默认值以直接运行 Rust 可执行文件为准；镜像覆盖值另列。应用不会自行加载 `.env`，Compose 通过 `env_file` 注入，直接运行时需在进程环境中设置。
+
+| 变量 | 默认值与用途 |
+| --- | --- |
+| `SOURCE_DATABASE_URL` | 空；正式运行必须配置专用只读 PostgreSQL 连接。 |
+| `PUBLIC_ORIGIN` | `https://example.invalid`；改为主站完整来源地址，不包含 `/settlement/`，用于写入 Origin 校验和 Cookie 安全属性。 |
+| `SUB2API_VERIFY_URL` | `http://sub2api:8080`；服务端可访问的主站内部地址，用于身份校验和已授权删除。 |
+| `DATA_DIR` | `data`；镜像为 `/data`，保存账本、密钥及备份。 |
+| `SETTLEMENT_BIND` | `0.0.0.0:18082`；容器内部监听。Compose 仅向主机回环地址映射端口。 |
+| `SETTLEMENT_ASSETS` | `frontend/dist`；镜像为 `/app/frontend/dist`。 |
+| `APP_REVISION` | `development`；镜像来自同名构建参数，示例 `.env` 为 `local`，发布部署需设置对应提交。 |
+| `SETTLEMENT_ENV` | `production`；只有精确值 `test` 启用隔离测试配置，正式环境不要使用。 |
+| `SETTLEMENT_BACKGROUND` | `true`；只有 `false` 关闭定时任务，不取消启动同步或请求触发的处理，也不能替代外部写入开关。 |
+| `SETTLEMENT_READ_ONLY` | `false`；只有 `true` 拒绝业务写入并禁用外部写入；认证、同步和启动迁移仍可能写 SQLite，不能理解为文件系统只读。 |
+| `SETTLEMENT_EXTERNAL_WRITES` | `true`；只有 `false` 禁用外部删除和提醒；业务只读模式也会强制禁用。 |
+| `RUST_LOG` | 未配置或无法解析时为 `settlement=info`；由日志组件读取，避免开启第三方库的敏感调试日志。 |
+| `SETTLEMENT_SSO_PER_MINUTE` / `SETTLEMENT_WRITES_PER_MINUTE` | `30` / `120`；各为 1–100000，分别限制客户端 SSO 与用户写入。 |
+| `SETTLEMENT_TRUSTED_PROXIES` | 空；最多 32 个以逗号分隔的明确 IP，不接受 CIDR。 |
+| `SETTLEMENT_METRICS_ENABLED` / `SETTLEMENT_METRICS_TOKEN` | `false` / 空；精确值 `true` 启用监控；非空令牌须为 32–1024 个无空白 ASCII 字符。 |
+| `SETTLEMENT_REMINDERS_ENABLED` | `false`；精确值 `true` 开启提醒，仍受测试、只读及外部写入限制。 |
+| `SETTLEMENT_REMINDER_URL` / `SETTLEMENT_REMINDER_SECRET` | 空；开启提醒后须配置 HTTPS Webhook 和 32–1024 字节签名密钥。 |
+| `SETTLEMENT_REMINDER_HOUR` | `9`；北京时间 0–23 点，仅在提醒启用时读取。 |
+
+`SOURCE_FIXTURE` 无默认文件，非空时要求 `SETTLEMENT_ENV=test`；`SETTLEMENT_TEST_NOW` 只在该测试环境中接受有效的带时区时间，用于固定测试时钟。这两个变量只用于临时虚构账本，生产 `.env` 不应设置。测试环境还会绕过生产限流并默认关闭监控和外部提醒。
+
+## 数据库与入口
+
 `SOURCE_DATABASE_URL` 使用专用只读角色，仅授予以下字段 SELECT：
 
 - `accounts`: id, name, platform, status, parent_account_id, created_at, deleted_at

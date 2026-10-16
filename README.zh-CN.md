@@ -22,6 +22,8 @@ cargo run --locked -p settlement-tools -- demo --netting-fixtures
 
 正式部署请复制 `.env.example` 为 `.env`，配置专用只读数据库角色、持久目录及主站同域 Nginx 路由。完成[部署指南](docs/deploy.md)后运行 `docker compose up -d --build`。
 
+环境变量、默认值和测试专用配置均见部署指南。凭据和账本文件不要提交到 Git。
+
 - [结算规则](docs/rules.md) · [部署与 Sub2API 字段兼容](docs/deploy.md)
 - [升级与回滚](docs/upgrade.md) · [参与开发](CONTRIBUTING.md)
 - [更新日志](CHANGELOG.md) · [发布流程](RELEASING.zh-CN.md) · [MIT 许可](LICENSE)

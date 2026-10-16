@@ -22,6 +22,8 @@ Open the loopback URL printed by the command. The demo includes three fictional 
 
 For a deployment, copy `.env.example` to `.env`, provide a dedicated read-only Sub2API PostgreSQL role, prepare the persistent data directory, and configure the same-origin Nginx route. Follow the [deployment guide](docs/deploy.md) before starting `docker compose up -d --build`.
 
+Runtime variables, defaults and test-only settings are listed in the deployment guide. Keep credentials and ledger files outside Git.
+
 - [Settlement rules](docs/rules.md) · [Deployment and Sub2API schema compatibility](docs/deploy.md)
 - [Upgrade and rollback](docs/upgrade.md) · [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md) · [Release process](RELEASING.zh-CN.md) · [MIT license](LICENSE)
