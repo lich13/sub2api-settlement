@@ -103,7 +103,7 @@ impl Reminders {
             return Ok(());
         };
         let now = time::parse(&time::now())?;
-        let local = now.with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap());
+        let local = now.with_timezone(&time::LOCAL_OFFSET);
         if local.hour() >= config.hour {
             let day = local.format("%Y-%m-%d").to_string();
             let cutoff = time::format(now - chrono::Duration::hours(24));

@@ -1,5 +1,7 @@
 use crate::error::{Error, Result};
 use chrono::{DateTime, FixedOffset, NaiveDate, SecondsFormat, Utc};
+pub const LOCAL_OFFSET: FixedOffset =
+    FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid fixed offset");
 pub fn parse(s: &str) -> Result<DateTime<Utc>> {
     if let Ok(d) = DateTime::parse_from_rfc3339(&s.replace(' ', "T")) {
         return Ok(d.with_timezone(&Utc));
@@ -66,7 +68,7 @@ pub fn minute(s: &str) -> Result<(String, String)> {
     Ok((format(d), format(d + chrono::Duration::minutes(1))))
 }
 pub fn date_bounds(s: &str) -> Result<(String, String)> {
-    let offset = FixedOffset::east_opt(8 * 3600).unwrap();
+    let offset = LOCAL_OFFSET;
     let date = if let Ok(d) = parse(s) {
         d.with_timezone(&offset).date_naive()
     } else {
@@ -105,6 +107,18 @@ fn is_expired_at(expires_at: &serde_json::Value, now: f64) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn date_boundaries_share_the_beijing_offset_with_reminders() {
+        assert_eq!(LOCAL_OFFSET.local_minus_utc(), 28_800);
+        assert_eq!(
+            date_bounds("2026-01-01T16:00:00+00:00").unwrap(),
+            (
+                "2026-01-01T16:00:00.000000+00:00".into(),
+                "2026-01-02T16:00:00.000000+00:00".into()
+            )
+        );
+    }
 
     #[test]
     fn session_expiry_is_exclusive_and_missing_values_fail_closed() {
