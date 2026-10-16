@@ -103,7 +103,7 @@ pub fn row(r: &SqliteRow) -> Result<Value> {
 fn query<'a>(
     sql: &'a str,
     args: &'a [Value],
-) -> sqlx::query::Query<'a, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'a>> {
+) -> Result<sqlx::query::Query<'a, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'a>>> {
     let mut q = sqlx::query(sql);
     for arg in args {
         q = match arg {
@@ -113,17 +113,27 @@ fn query<'a>(
                 if let Some(i) = n.as_i64() {
                     q.bind(i)
                 } else {
-                    q.bind(n.as_f64().unwrap_or(0.0))
+                    let number = n
+                        .as_f64()
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| {
+                            tracing::error!("database numeric argument cannot be represented");
+                            Error::unavailable()
+                        })?;
+                    // Financial values are integer fen before reaching this
+                    // generic binder. REAL remains necessary for session epochs.
+                    debug_assert!(number.is_finite());
+                    q.bind(number)
                 }
             }
             Value::String(s) => q.bind(s.as_str()),
             _ => q.bind(dumps(arg)),
         };
     }
-    q
+    Ok(q)
 }
 pub async fn all(db: &mut SqliteConnection, sql: &str, args: &[Value]) -> Result<Vec<Value>> {
-    let mut stream = query(sql, args).fetch(db);
+    let mut stream = query(sql, args)?.fetch(db);
     let mut rows = Vec::new();
     while let Some(item) = stream.try_next().await? {
         rows.push(row(&item)?);
@@ -135,7 +145,7 @@ pub async fn optional(
     sql: &str,
     args: &[Value],
 ) -> Result<Option<Value>> {
-    query(sql, args)
+    query(sql, args)?
         .fetch_optional(db)
         .await?
         .as_ref()
@@ -157,7 +167,7 @@ pub async fn exec(
     sql: &str,
     args: &[Value],
 ) -> Result<sqlx::sqlite::SqliteQueryResult> {
-    Ok(query(sql, args).execute(db).await?)
+    Ok(query(sql, args)?.execute(db).await?)
 }
 pub async fn meta(db: &mut SqliteConnection, key: &str) -> Result<Value> {
     let r = optional(db, "SELECT value FROM meta WHERE key=?", &[json!(key)]).await?;
@@ -184,4 +194,62 @@ pub async fn revision(db: &mut SqliteConnection, root: i64) -> Result<i64> {
     .await?
     .map(|v| v["version"].as_i64().unwrap_or(0))
     .unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn numeric_arguments_preserve_integer_and_real_bindings() {
+        use sqlx::Connection;
+        let mut db = SqliteConnection::connect(":memory:").await.unwrap();
+        for number in [i64::MIN, 0, 1, i64::MAX] {
+            let row = one(
+                &mut db,
+                "SELECT ? AS value, typeof(?) AS kind",
+                &[json!(number), json!(number)],
+                "missing",
+            )
+            .await
+            .unwrap();
+            assert_eq!(row["value"], json!(number));
+            assert_eq!(row["kind"], "integer");
+        }
+        for number in [0.125, -0.5, 1_800_000_000.125, 1e308] {
+            let row = one(
+                &mut db,
+                "SELECT ? AS value, typeof(?) AS kind",
+                &[json!(number), json!(number)],
+                "missing",
+            )
+            .await
+            .unwrap();
+            assert_eq!(row["value"].as_f64(), Some(number));
+            assert_eq!(row["kind"], "real");
+        }
+        // Preserve the existing generic binder's unsigned-overflow conversion;
+        // monetary inputs are independently bounded to i64 before binding.
+        let row = one(
+            &mut db,
+            "SELECT ? AS value, typeof(?) AS kind",
+            &[json!(u64::MAX), json!(u64::MAX)],
+            "missing",
+        )
+        .await
+        .unwrap();
+        assert_eq!(row["value"].as_f64(), Some(u64::MAX as f64));
+        assert_eq!(row["kind"], "real");
+        db.close().await.unwrap();
+    }
+
+    #[test]
+    fn invalid_nonfinite_numbers_are_rejected_before_binding() {
+        // The current serde_json feature set cannot represent these as Numbers.
+        for number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(serde_json::Number::from_f64(number).is_none());
+        }
+        assert!(serde_json::from_str::<Value>("1e400").is_err());
+        assert!(serde_json::from_str::<Value>("NaN").is_err());
+    }
 }
