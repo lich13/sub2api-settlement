@@ -280,7 +280,7 @@ impl App {
         let Some(session) = session else {
             return Some("登录已失效，请重新进入后重试删除");
         };
-        if session["expires_at"].as_f64().unwrap_or(0.0) <= time::epoch() {
+        if time::is_expired(&session["expires_at"]) {
             return Some("登录已失效，请重新进入后重试删除");
         }
         let result = async {

@@ -122,7 +122,7 @@ impl App {
         let mut db = self.service.store.read().await?;
         let session = store::optional(&mut db, "SELECT * FROM sessions WHERE id=?", &[json!(sid)])
             .await?
-            .filter(|s| s["expires_at"].as_f64().unwrap_or(0.0) > time::epoch())
+            .filter(|s| !time::is_expired(&s["expires_at"]))
             .ok_or_else(|| Error::new(401, "请从 Sub2API 进入结算中心"))?;
         drop(db);
         let token = self.decrypt(text(&session, "token"))?;

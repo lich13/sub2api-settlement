@@ -89,3 +89,37 @@ pub fn epoch() -> f64 {
         .timestamp_micros() as f64
         / 1_000_000.0
 }
+
+pub fn is_expired(expires_at: &serde_json::Value) -> bool {
+    is_expired_at(expires_at, epoch())
+}
+
+fn is_expired_at(expires_at: &serde_json::Value, now: f64) -> bool {
+    expires_at
+        .as_f64()
+        .filter(|expiry| expiry.is_finite())
+        .is_none_or(|expiry| expiry <= now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn session_expiry_is_exclusive_and_missing_values_fail_closed() {
+        let now = 1_800_000_000.125;
+        assert!(!is_expired_at(&json!(now + 0.000001), now));
+        assert!(is_expired_at(&json!(now), now));
+        assert!(is_expired_at(&json!(now - 0.000001), now));
+        for value in [
+            json!(null),
+            json!("future"),
+            json!({}),
+            json!([]),
+            json!(-1),
+        ] {
+            assert!(is_expired_at(&value, now));
+        }
+    }
+}
