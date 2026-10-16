@@ -1,8 +1,9 @@
 use axum::{
     Json, Router,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     routing::get,
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use settlement::{
     config::Config,
@@ -16,6 +17,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::Path,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -25,6 +27,7 @@ const SOURCE_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/http/upstream/source.initial.json"
 );
+const EIGHT_HOURS: i64 = 8 * 60 * 60;
 
 fn private_file(path: &Path) {
     #[cfg(unix)]
@@ -404,6 +407,100 @@ async fn fake_auth(headers: HeaderMap) -> (StatusCode, Json<Value>) {
     }
 }
 
+async fn fake_jwt_auth(headers: HeaderMap) -> (StatusCode, Json<Value>) {
+    let accepted = headers
+        .get("Authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| {
+            let mut segments = token.split('.');
+            segments.next().is_some()
+                && segments.next().is_some()
+                && segments.next() == Some("accepted")
+                && segments.next().is_none()
+        });
+    if accepted {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "code": 0,
+                "data": {"id": 7, "username": "Fixture", "role": "user", "status": "active"}
+            })),
+        )
+    } else {
+        (StatusCode::UNAUTHORIZED, Json(json!({"code": 1})))
+    }
+}
+
+fn synthetic_jwt(payload: &str, accepted: bool) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(payload.as_bytes());
+    format!(
+        "{header}.{payload}.{}",
+        if accepted { "accepted" } else { "rejected" }
+    )
+}
+
+fn unix_now() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64()
+}
+
+async fn request_sso(
+    client: &reqwest::Client,
+    address: SocketAddr,
+    token: &str,
+) -> reqwest::Response {
+    client
+        .get(format!("http://{address}/settlement/sso/start"))
+        .query(&[("token", token), ("user_id", "7")])
+        .send()
+        .await
+        .unwrap()
+}
+
+fn sso_session_id(response: &reqwest::Response) -> String {
+    let value = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .split_once('=')
+        .unwrap()
+        .1;
+    hash(value.as_bytes())
+}
+
+fn sso_cookie_max_age(response: &reqwest::Response) -> i64 {
+    response
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .find_map(|part| part.trim().strip_prefix("Max-Age="))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+async fn session_count(store: &Store) -> i64 {
+    let mut db = store.read().await.unwrap();
+    let value = store::optional(&mut db, "SELECT COUNT(*) AS total FROM sessions", &[])
+        .await
+        .unwrap()
+        .unwrap();
+    db.commit().await.unwrap();
+    value["total"].as_i64().unwrap()
+}
+
 fn app_config(directory: &Path, verify_url: String) -> Config {
     Config {
         data_dir: directory.join("data"),
@@ -479,6 +576,110 @@ async fn sso_route_uses_limiter_and_sets_retry_after_for_429() {
         .await
         .unwrap();
     assert_eq!(other_ip.status(), StatusCode::SEE_OTHER);
+
+    app_task.abort();
+    let _ = app_task.await;
+    verify_task.abort();
+    let _ = verify_task.await;
+    app.service.source.close().await;
+    app.service.store.close().await;
+}
+
+#[tokio::test]
+async fn sso_session_expiry_respects_a_validated_jwt_claim_and_eight_hour_cap() {
+    let verify_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let verify_address = verify_listener.local_addr().unwrap();
+    let verify_task = tokio::spawn(async move {
+        axum::serve(
+            verify_listener,
+            Router::new().route("/api/v1/auth/me", get(fake_jwt_auth)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let temporary = TempDir::new().unwrap();
+    let mut app = App::new(app_config(
+        temporary.path(),
+        format!("http://{verify_address}"),
+    ))
+    .await
+    .unwrap();
+    app.limiter = Arc::new(Limiter::new(32, 32, vec![]));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = app
+        .router()
+        .into_make_service_with_connect_info::<SocketAddr>();
+    let app_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    let fallback_cases = [
+        ("large exp", r#"{"exp":9999999999}"#),
+        ("missing exp", "{}"),
+        ("negative exp", r#"{"exp":-1}"#),
+        ("wrong exp type", r#"{"exp":"9999999999"}"#),
+        // NaN and Infinity are not valid JSON number literals.
+        ("NaN literal", r#"{"exp":NaN}"#),
+        ("overflowing number", r#"{"exp":1e999}"#),
+        ("unparseable payload", "not-json"),
+    ];
+    for (label, payload) in fallback_cases {
+        let token = synthetic_jwt(payload, true);
+        let request_started = unix_now();
+        let response = request_sso(&client, address, &token).await;
+        let response_finished = unix_now();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER, "{label}");
+
+        let max_age = sso_cookie_max_age(&response);
+        let session = read_session(&app.service.store, &sso_session_id(&response)).await;
+        let expires_at = session["expires_at"].as_f64().unwrap();
+        assert!((1..=EIGHT_HOURS).contains(&max_age), "{label}: {max_age}");
+        assert!(
+            expires_at >= request_started + EIGHT_HOURS as f64 - 5.0,
+            "{label}: fallback expiry was unexpectedly shortened"
+        );
+        assert!(
+            expires_at <= response_finished + EIGHT_HOURS as f64,
+            "{label}: database expiry exceeded the eight-hour window"
+        );
+        assert!(
+            (expires_at - response_finished - max_age as f64).abs()
+                <= response_finished - request_started + 1.0,
+            "{label}: cookie Max-Age does not match the stored expiry"
+        );
+    }
+
+    let short_exp = unix_now() as i64 + 600;
+    let short_token = synthetic_jwt(&format!(r#"{{"exp":{short_exp}}}"#), true);
+    let request_started = unix_now();
+    let response = request_sso(&client, address, &short_token).await;
+    let response_finished = unix_now();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let max_age = sso_cookie_max_age(&response);
+    let session = read_session(&app.service.store, &sso_session_id(&response)).await;
+    let expires_at = session["expires_at"].as_f64().unwrap();
+    assert_eq!(expires_at, short_exp as f64);
+    assert!((1..EIGHT_HOURS).contains(&max_age));
+    assert!(max_age as f64 <= short_exp as f64 - request_started + 1.0);
+    assert!(
+        (expires_at - response_finished - max_age as f64).abs()
+            <= response_finished - request_started + 1.0,
+        "cookie Max-Age does not match the short JWT expiry"
+    );
+
+    let rejected_token = synthetic_jwt(r#"{"exp":9999999999}"#, false);
+    let sessions_before = session_count(&app.service.store).await;
+    let response = request_sso(&client, address, &rejected_token).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(response.headers().get(header::SET_COOKIE).is_none());
+    assert_eq!(session_count(&app.service.store).await, sessions_before);
 
     app_task.abort();
     let _ = app_task.await;

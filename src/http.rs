@@ -159,12 +159,17 @@ impl App {
             return Err(Error::new(403, "登录用户不匹配"));
         }
         let mut expires = time::epoch() + 8.0 * 3600.0;
+        // validate() has already verified this token through Sub2API. Decoding
+        // the payload here does not authenticate it: exp can only shorten the
+        // local eight-hour session, never extend it or bypass upstream checks.
         if let Some(claims) = token
             .split('.')
             .nth(1)
             .and_then(|s| URL_SAFE_NO_PAD.decode(s.trim_end_matches('=')).ok())
             .and_then(|s| serde_json::from_slice::<Value>(&s).ok())
-            && let Some(exp) = claims["exp"].as_f64()
+            && let Some(exp) = claims["exp"]
+                .as_f64()
+                .filter(|exp| exp.is_finite() && *exp >= 0.0)
         {
             expires = expires.min(exp);
         }
