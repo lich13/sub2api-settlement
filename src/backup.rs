@@ -13,11 +13,13 @@ impl Database {
         let path = CString::new(path.as_os_str().as_encoded_bytes())
             .map_err(|_| Error::invalid("备份路径无效"))?;
         let mut handle = std::ptr::null_mut();
-        // SAFETY: SQLite owns the returned handle; Database closes it once.
+        // SAFETY: path is NUL-terminated and lives for the call; handle is a
+        // writable out-pointer. Database owns and closes even a failed-open
+        // handle, when SQLite returns one. No handle crosses worker threads.
         let code =
             unsafe { sqlite::sqlite3_open_v2(path.as_ptr(), &mut handle, flags, std::ptr::null()) };
         let db = Self(handle);
-        if code != sqlite::SQLITE_OK {
+        if code != sqlite::SQLITE_OK || handle.is_null() {
             return Err(Error::new(503, "无法打开备份账本"));
         }
         Ok(db)
@@ -27,34 +29,24 @@ impl Database {
             (c"PRAGMA integrity_check", Some("ok")),
             (c"PRAGMA foreign_key_check", None),
         ] {
-            let mut statement = std::ptr::null_mut();
-            // SAFETY: statements borrow a live database; SQL strings are static.
-            let prepared = unsafe {
-                sqlite::sqlite3_prepare_v2(
-                    self.0,
-                    sql.as_ptr(),
-                    -1,
-                    &mut statement,
-                    std::ptr::null_mut(),
-                )
-            };
-            if prepared != sqlite::SQLITE_OK {
-                return Err(Error::new(503, "备份完整性检查失败"));
-            }
-            let code = unsafe { sqlite::sqlite3_step(statement) };
+            let statement = Statement::prepare(self, sql)?;
+            // SAFETY: prepare returned a non-null live statement borrowing self.
+            let code = unsafe { sqlite::sqlite3_step(statement.raw) };
             let passed = match expected {
                 Some(expected) if code == sqlite::SQLITE_ROW => {
-                    let value = unsafe { sqlite::sqlite3_column_text(statement, 0) };
-                    !value.is_null()
-                        && unsafe { CStr::from_ptr(value.cast()) }.to_bytes() == expected.as_bytes()
-                        && unsafe { sqlite::sqlite3_step(statement) } == sqlite::SQLITE_DONE
+                    // SAFETY: SQLITE_ROW makes column 0 available. SQLite owns
+                    // this NUL-terminated text until the next step/finalize.
+                    let value = unsafe { sqlite::sqlite3_column_text(statement.raw, 0) };
+                    let matches = !value.is_null()
+                        // SAFETY: non-null text is read before the next step;
+                        // neither the pointer nor a borrowed slice escapes.
+                        && unsafe { CStr::from_ptr(value.cast()) }.to_bytes() == expected.as_bytes();
+                    // SAFETY: statement is still live; the text borrow is over.
+                    matches && unsafe { sqlite::sqlite3_step(statement.raw) } == sqlite::SQLITE_DONE
                 }
                 None => code == sqlite::SQLITE_DONE,
                 _ => false,
             };
-            unsafe {
-                sqlite::sqlite3_finalize(statement);
-            }
             if !passed {
                 return Err(Error::new(503, "账本完整性或外键检查未通过"));
             }
@@ -62,9 +54,43 @@ impl Database {
         Ok(())
     }
 }
+struct Statement<'db> {
+    raw: *mut sqlite::sqlite3_stmt,
+    _database: std::marker::PhantomData<&'db Database>,
+}
+impl<'db> Statement<'db> {
+    fn prepare(database: &'db Database, sql: &CStr) -> Result<Self> {
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: the live database outlives this guard; sql is NUL-terminated,
+        // and raw is a valid out-pointer. The statement is finalized once.
+        let code = unsafe {
+            sqlite::sqlite3_prepare_v2(database.0, sql.as_ptr(), -1, &mut raw, std::ptr::null_mut())
+        };
+        let statement = Self {
+            raw,
+            _database: std::marker::PhantomData,
+        };
+        if code != sqlite::SQLITE_OK || raw.is_null() {
+            return Err(Error::new(503, "备份完整性检查失败"));
+        }
+        Ok(statement)
+    }
+}
+impl Drop for Statement<'_> {
+    fn drop(&mut self) {
+        if !self.raw.is_null() {
+            // SAFETY: this guard uniquely owns raw and cannot outlive Database.
+            unsafe {
+                sqlite::sqlite3_finalize(self.raw);
+            }
+        }
+    }
+}
 impl Drop for Database {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: the handle is owned by this guard. Borrowed statements
+            // and backup transfers have been released before the database.
             unsafe {
                 sqlite::sqlite3_close(self.0);
             }
@@ -75,6 +101,8 @@ struct Transfer(*mut sqlite::sqlite3_backup);
 impl Drop for Transfer {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: this guard uniquely owns the transfer; both databases
+            // remain live until it is dropped, including error/timeout paths.
             unsafe {
                 sqlite::sqlite3_backup_finish(self.0);
             }
@@ -123,6 +151,8 @@ fn create_sync(source: &Path, output: &Path) -> Result<()> {
                 &temporary,
                 sqlite::SQLITE_OPEN_READWRITE | sqlite::SQLITE_OPEN_NOMUTEX,
             )?;
+            // SAFETY: both database handles are live and distinct; static main
+            // names are NUL-terminated. Transfer owns the returned backup.
             let pointer = unsafe {
                 sqlite::sqlite3_backup_init(output.0, c"main".as_ptr(), input.0, c"main".as_ptr())
             };
@@ -132,6 +162,8 @@ fn create_sync(source: &Path, output: &Path) -> Result<()> {
             let mut transfer = Transfer(pointer);
             let deadline = Instant::now() + Duration::from_secs(60);
             loop {
+                // SAFETY: transfer is initialized and neither database has
+                // been closed or accessed concurrently by this worker.
                 let code = unsafe { sqlite::sqlite3_backup_step(transfer.0, 128) };
                 if code == sqlite::SQLITE_DONE {
                     break;
@@ -150,6 +182,8 @@ fn create_sync(source: &Path, output: &Path) -> Result<()> {
                     std::thread::sleep(Duration::from_millis(20));
                 }
             }
+            // SAFETY: finish consumes the live transfer. Clearing its pointer
+            // prevents Drop from finishing it a second time, even on failure.
             let code = unsafe { sqlite::sqlite3_backup_finish(transfer.0) };
             transfer.0 = std::ptr::null_mut();
             if code != sqlite::SQLITE_OK {
