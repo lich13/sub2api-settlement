@@ -49,6 +49,7 @@ impl Service {
         pair: Option<(i64, i64)>,
         uid: Option<i64>,
     ) -> Result<Vec<Value>> {
+        // SQL fragments are fixed here; user IDs only enter bound parameters.
         let (extra, args) = if let Some((a, b)) = pair {
             (
                 " AND ((payer_id=? AND creditor_id=?) OR (payer_id=? AND creditor_id=?))",

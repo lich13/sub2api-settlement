@@ -182,6 +182,7 @@ impl Service {
             scopes.as_deref(),
         )
         .await?;
+        // This predicate is a code-owned constant, never source or request data.
         let differs = "u.id IS NULL OR u.account_id!=s.account_id OR u.root_id!=s.root_id OR u.user_id!=s.user_id OR u.amount!=s.amount OR u.created_at!=s.created_at OR (s.detail IS NOT NULL AND (d.payload IS NULL OR d.payload!=s.detail))";
         exec(&mut db,&format!("INSERT OR IGNORE INTO rust_sync_changed SELECT s.root_id FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs}"),&[]).await?;
         exec(&mut db,&format!("INSERT OR IGNORE INTO rust_sync_changed SELECT u.root_id FROM rust_sync_stage s JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs}"),&[]).await?;

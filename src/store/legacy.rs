@@ -1,5 +1,13 @@
 use super::*;
 
+fn quoted_column(column: &Value) -> Result<String> {
+    let name = column["name"]
+        .as_str()
+        .filter(|name| !name.is_empty() && !name.contains('\0'))
+        .ok_or_else(Error::unavailable)?;
+    Ok(format!("\"{}\"", name.replace('"', "\"\"")))
+}
+
 pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
     let columns = all(db, "PRAGMA table_info(cycles)", &[]).await?;
     let additions = [
@@ -25,6 +33,7 @@ pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
         ("billable_cost_fen", "INTEGER"),
         ("start_locked", "INTEGER NOT NULL DEFAULT 0"),
     ];
+    // Both identifiers and SQL types come exclusively from the fixed list above.
     for (name, kind) in additions {
         if !columns.iter().any(|r| r["name"] == name) {
             exec(
@@ -54,6 +63,8 @@ pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
     )
     .await?;
     for table in ["settlements", "orders"] {
+        // Only these code-owned table names may enter the migration SQL.
+        debug_assert!(matches!(table, "settlements" | "orders"));
         let columns = all(db, &format!("PRAGMA table_info({table})"), &[]).await?;
         if columns
             .iter()
@@ -76,9 +87,10 @@ pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
                 &[],
             )
             .await?;
+            // PRAGMA supplies metadata, not SQL: quote every column identifier.
             let names = columns
                 .iter()
-                .map(|r| r["name"].as_str().ok_or_else(Error::unavailable))
+                .map(quoted_column)
                 .collect::<Result<Vec<_>>>()?
                 .join(",");
             exec(
@@ -120,4 +132,27 @@ pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
     }
     sqlx::raw_sql("CREATE INDEX IF NOT EXISTS order_payer ON orders(payer_id,status); CREATE INDEX IF NOT EXISTS order_creditor ON orders(creditor_id,status); CREATE INDEX IF NOT EXISTS order_netting_payment ON orders(netting_payment_id); CREATE TABLE IF NOT EXISTS rust_root_versions(root_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS rust_sync_stage(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL,root_id INTEGER NOT NULL,user_id INTEGER NOT NULL,amount TEXT NOT NULL,created_at TEXT NOT NULL,detail TEXT); CREATE INDEX IF NOT EXISTS rust_stage_root ON rust_sync_stage(root_id,created_at); CREATE TABLE IF NOT EXISTS rust_source_presence(id INTEGER PRIMARY KEY); CREATE TABLE IF NOT EXISTS rust_sync_changed(root_id INTEGER PRIMARY KEY); CREATE INDEX IF NOT EXISTS usage_account_time ON usage(account_id,created_at); CREATE INDEX IF NOT EXISTS cycle_open ON cycles(status,account_id);").execute(&mut *db).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_columns_are_quoted_identifiers() {
+        assert_eq!(quoted_column(&json!({"name":"id"})).unwrap(), "\"id\"");
+        assert_eq!(
+            quoted_column(&json!({"name":"a\";DROP TABLE orders;--"})).unwrap(),
+            "\"a\"\";DROP TABLE orders;--\""
+        );
+        for column in [
+            json!({}),
+            json!({"name": null}),
+            json!({"name": 1}),
+            json!({"name": ""}),
+            json!({"name": "a\0b"}),
+        ] {
+            assert!(quoted_column(&column).is_err());
+        }
+    }
 }
