@@ -12,12 +12,13 @@ pub struct Inspection {
     pub existing: bool,
 }
 fn checksum(version: i64) -> String {
+    // v0.10.0/v0.10.1 included legacy.rs source bytes in this checksum. Preserve
+    // that released value across implementation-only refactors; schema changes
+    // must use a new migration instead of rewriting this historical contract.
+    if version == 1 {
+        return "2f7d2bb503201536c4f0b51471b56dec24fa3e4a43eee98f777ef55e6f2ee176".into();
+    }
     let bytes = match version {
-        1 => concat!(
-            include_str!("../schema.sql"),
-            "\n",
-            include_str!("legacy.rs")
-        ),
         2 => include_str!("../sync_schema.sql"),
         3 => include_str!("../security_schema.sql"),
         4 => include_str!("../payment_schema.sql"),

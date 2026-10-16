@@ -19,6 +19,25 @@ const LEGACY_SQL: &str = concat!(
     "/tests/fixtures/ledger/legacy-written.sql"
 );
 
+// Fixed from the published v0.10.1 migration history, independently of the
+// checksum implementation under test.
+const PUBLISHED_MIGRATION_CHECKSUMS: [&str; 7] = [
+    "2f7d2bb503201536c4f0b51471b56dec24fa3e4a43eee98f777ef55e6f2ee176",
+    "30d331e26fec4786252dbd5ba5353b477002a943ba971c3eb7765f2a36e46ac0",
+    "ff99cd10deeb058026124228ac96d6cc333948bbeb590c09e4bfe77e33f5954d",
+    "8c27e69c2df11b7cb062e12ab71ec605f2ab2cc96476fa15e01481f16b839fe2",
+    "c6318f749e4276b2774c258a81dc31a3ca8f704b033d0fd822fe189ec9853d2b",
+    "8c11465571dfeb251884247febafc2852b4a292364e496afe69393a9caebec54",
+    "f6a9788b9fb5818fef31c4866aa8716d43f9d2ecd637c09129658a45c5efb53b",
+];
+
+#[derive(Debug, PartialEq)]
+struct DatabaseSnapshot {
+    schema: Vec<(String, String, Option<String>)>,
+    tables: Vec<(String, Vec<Value>)>,
+    migrations: Vec<(i64, String, String)>,
+}
+
 async fn connect(path: &Path) -> sqlx::SqliteConnection {
     SqliteConnectOptions::new()
         .filename(path)
@@ -96,6 +115,101 @@ fn database_sidecar(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap().to_os_string();
     name.push(suffix);
     path.with_file_name(name)
+}
+
+async fn database_snapshot(path: &Path) -> DatabaseSnapshot {
+    let mut db = connect_read_only(path).await;
+    let schema = sqlx::query(
+        "SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get::<String, _>("type").unwrap(),
+            row.try_get::<String, _>("name").unwrap(),
+            row.try_get::<Option<String>, _>("sql").unwrap(),
+        )
+    })
+    .collect();
+
+    let table_names = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    let mut tables = Vec::with_capacity(table_names.len());
+    for table in table_names {
+        let quoted_table = table.replace('"', "\"\"");
+        let rows = sqlx::query(&format!("SELECT * FROM \"{quoted_table}\" ORDER BY rowid"))
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+        let values = rows
+            .iter()
+            .map(|row| settlement::store::row(row).expect("serialize ledger row"))
+            .collect();
+        tables.push((table, values));
+    }
+
+    let migrations = sqlx::query(
+        "SELECT version,checksum,applied_at FROM rust_schema_migrations ORDER BY version",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.try_get::<i64, _>("version").unwrap(),
+            row.try_get::<String, _>("checksum").unwrap(),
+            row.try_get::<String, _>("applied_at").unwrap(),
+        )
+    })
+    .collect();
+    db.close().await.unwrap();
+
+    DatabaseSnapshot {
+        schema,
+        tables,
+        migrations,
+    }
+}
+
+async fn create_published_ledger(path: &Path) {
+    import_legacy_fixture(path).await;
+    let store = Store::open(path)
+        .await
+        .expect("prepare current ledger schema for published history");
+    store.close().await;
+
+    let mut db = connect(path).await;
+    for (index, checksum) in PUBLISHED_MIGRATION_CHECKSUMS.iter().enumerate() {
+        let result = sqlx::query("UPDATE rust_schema_migrations SET checksum=? WHERE version=?")
+            .bind(*checksum)
+            .bind(index as i64 + 1)
+            .execute(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.rows_affected(),
+            1,
+            "published version {} exists",
+            index + 1
+        );
+    }
+    db.close().await.unwrap();
+}
+
+fn published_migration_records() -> Vec<(i64, String)> {
+    PUBLISHED_MIGRATION_CHECKSUMS
+        .iter()
+        .enumerate()
+        .map(|(index, checksum)| (index as i64 + 1, (*checksum).to_owned()))
+        .collect()
 }
 
 #[tokio::test]
@@ -356,6 +470,79 @@ async fn migrate_check_reports_pending_versions_without_changing_legacy_database
     assert!(!data_dir.join("backups").exists());
     assert!(!data_dir.join("session.key").exists());
     assert!(!data_dir.join("settlement.lock").exists());
+}
+
+#[tokio::test]
+async fn published_v0101_history_opens_without_schema_or_data_changes() {
+    let temporary = TempDir::new().unwrap();
+    let data_dir = temporary.path().join("published-data");
+    fs::create_dir(&data_dir).unwrap();
+    let ledger = data_dir.join("settlement.sqlite3");
+    create_published_ledger(&ledger).await;
+
+    let before = database_snapshot(&ledger).await;
+    let recorded = before
+        .migrations
+        .iter()
+        .map(|(version, checksum, _)| (*version, checksum.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(recorded, published_migration_records());
+
+    let inspection = migrations::inspect(&ledger)
+        .await
+        .expect("inspect published v0.10.1 ledger");
+    assert_eq!(inspection.schema_version, 7);
+    assert_eq!(inspection.target_version, 7);
+    assert!(inspection.pending.is_empty());
+    assert!(inspection.existing);
+
+    let store = Store::open(&ledger)
+        .await
+        .expect("open published v0.10.1 ledger");
+    store.close().await;
+    assert_eq!(database_snapshot(&ledger).await, before);
+
+    let output = run_migrate_check(&data_dir);
+    assert!(
+        output.status.success(),
+        "migrate --check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = parse_json_stdout(&output);
+    assert_eq!(report["schema_version"], 7);
+    assert_eq!(report["target_version"], 7);
+    assert_eq!(report["pending"], serde_json::json!([]));
+    assert_eq!(report["existing"], true);
+    assert_eq!(database_snapshot(&ledger).await, before);
+}
+
+#[tokio::test]
+async fn new_ledger_writes_the_published_v0101_checksum_vector() {
+    let temporary = TempDir::new().unwrap();
+    let ledger = temporary.path().join("settlement.sqlite3");
+    let store = Store::open(&ledger).await.expect("create new ledger");
+    store.close().await;
+
+    let before = database_snapshot(&ledger).await;
+    let recorded = before
+        .migrations
+        .iter()
+        .map(|(version, checksum, _)| (*version, checksum.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(recorded, published_migration_records());
+
+    let inspection = migrations::inspect(&ledger)
+        .await
+        .expect("inspect new ledger with published checksums");
+    assert_eq!(inspection.schema_version, 7);
+    assert_eq!(inspection.target_version, 7);
+    assert!(inspection.pending.is_empty());
+
+    let store = Store::open(&ledger)
+        .await
+        .expect("reopen new ledger with published checksum history");
+    store.close().await;
+    assert_eq!(database_snapshot(&ledger).await, before);
 }
 
 #[tokio::test]
