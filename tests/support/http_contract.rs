@@ -101,7 +101,19 @@ const HARDENED_ERROR_HEADERS: &[(&str, &str)] = &[
 type TestResult<T> = std::result::Result<T, String>;
 
 pub async fn run_workflow(name: &str) -> TestResult<()> {
-    let mut harness = Harness::new(name).await?;
+    let mut harness = Harness::new_with_contract(name, false).await?;
+    harness.run().await
+}
+
+/// Run a frozen v0.8 workflow under the explicit v0.11 cost contract.
+///
+/// The fixture bytes remain the historical contract. The runner records the
+/// two deliberate differences: a new estimated-cost write is rejected, then
+/// the historical row is inserted as a compatibility fixture so the rest of
+/// the billing and settlement workflow stays covered; renewal costs now use
+/// the exact default.
+pub async fn run_workflow_v011(name: &str) -> TestResult<()> {
+    let mut harness = Harness::new_with_contract(name, true).await?;
     harness.run().await
 }
 
@@ -144,6 +156,7 @@ async fn deletion_jobs_waits_for_delayed_delete() {
 
 struct Harness {
     name: String,
+    v011_cost_contract: bool,
     root: PathBuf,
     workflow: Value,
     replay_overlay: Value,
@@ -173,6 +186,10 @@ struct Harness {
 
 impl Harness {
     async fn new(name: &str) -> TestResult<Self> {
+        Self::new_with_contract(name, false).await
+    }
+
+    async fn new_with_contract(name: &str, v011_cost_contract: bool) -> TestResult<Self> {
         let root = PathBuf::from(FIXTURE_ROOT);
         let workflow_path = root.join("http/workflows").join(format!("{name}.json"));
         let workflow: Value = read_json(&workflow_path)?;
@@ -232,6 +249,7 @@ impl Harness {
         presentation.set_source_state(&read_json(&source_fixture)?);
         Ok(Self {
             name: name.to_owned(),
+            v011_cost_contract,
             root,
             workflow,
             replay_overlay,
@@ -671,8 +689,102 @@ impl Harness {
                 .set_settled_cycle_ids(self.current_settled_cycle_ids().await?);
         }
         self.compare_response(step, &response, false)?;
+        if self.v011_cost_contract
+            && response.status == StatusCode::UNPROCESSABLE_ENTITY.as_u16()
+            && self.is_v011_estimated_create(step)
+        {
+            self.seed_v011_legacy_estimated_cycle(&request).await?;
+        }
         self.record_signature(&request, &response)?;
         self.compare_upstream_calls(step).await?;
+        Ok(())
+    }
+
+    fn is_v011_estimated_create(&self, step: &Value) -> bool {
+        if !self.v011_cost_contract || step["request"]["method"] != "POST" {
+            return false;
+        }
+        let label = step["label"].as_str().unwrap_or_default();
+        let workflow = self.name.as_str();
+        matches!(
+            (workflow, label),
+            ("starts-costs", "exact")
+                | ("billing-proportional", "bill-cycle")
+                | ("billing-matched-only", "bill-cycle")
+        ) && step["request"]["json"]["cost_kind"] == "estimated"
+    }
+
+    async fn seed_v011_legacy_estimated_cycle(&self, request: &Value) -> TestResult<()> {
+        let payload = request["json"]
+            .as_object()
+            .ok_or_else(|| format!("{}: estimated compatibility request is not an object", self.name))?;
+        let account_id = payload["account_id"]
+            .as_i64()
+            .ok_or_else(|| format!("{}: estimated compatibility account is missing", self.name))?;
+        let name = payload["name"]
+            .as_str()
+            .ok_or_else(|| format!("{}: estimated compatibility name is missing", self.name))?;
+        let cost = payload["cost"]
+            .as_str()
+            .ok_or_else(|| format!("{}: estimated compatibility cost is missing", self.name))?;
+        let cost_fen = settlement::money::cents(cost).map_err(display_error)?;
+        let creditor_id = payload["creditor_id"]
+            .as_i64()
+            .ok_or_else(|| format!("{}: estimated compatibility creditor is missing", self.name))?;
+        let start = wire_datetime(payload["start"].clone())
+            .as_str()
+            .ok_or_else(|| format!("{}: estimated compatibility start is missing", self.name))?
+            .to_owned();
+        let start_meta = json!({
+            "start": start.clone(),
+            "start_mode": "exact",
+            "start_lower": start.clone(),
+            "start_upper": null,
+            "start_confirmed": 1,
+            "start_confirmed_by": null,
+            "start_confirmed_at": null,
+            "start_source_usage_id": null,
+        });
+        let created_at = self.workflow["clock"]["value"]
+            .as_str()
+            .ok_or_else(|| format!("{}: fixed compatibility clock is missing", self.name))?;
+        let mut connection = open_writable(&self.data_dir.join("settlement.sqlite3")).await?;
+        sqlx::query(
+            "INSERT INTO profiles(account_id,name,kind) VALUES(?,?,'paid') ON CONFLICT(account_id) DO UPDATE SET name=excluded.name,kind='paid'",
+        )
+        .bind(account_id)
+        .bind(name)
+        .execute(&mut connection)
+        .await
+        .map_err(display_error)?;
+        let result = sqlx::query(
+            "INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,start_locked,cost_kind) VALUES(?,?,?,?,?,'exact',?,NULL,1,NULL,NULL,NULL,NULL,0,'estimated')",
+        )
+        .bind(account_id)
+        .bind(name)
+        .bind(cost_fen)
+        .bind(creditor_id)
+        .bind(&start)
+        .bind(&start)
+        .execute(&mut connection)
+        .await
+        .map_err(display_error)?;
+        let cycle_id = result.last_insert_rowid();
+        let mut audit_payload = start_meta;
+        audit_payload["cost_fen"] = json!(cost_fen);
+        audit_payload["cost_kind"] = json!("estimated");
+        audit_payload["creditor_id"] = json!(creditor_id);
+        audit_payload["renewed_from_cycle_id"] = Value::Null;
+        sqlx::query(
+            "INSERT INTO audit(actor_id,action,entity_id,payload,created_at) VALUES(1,'create_cycle',?,?,?)",
+        )
+        .bind(cycle_id)
+        .bind(serde_json::to_string(&audit_payload).map_err(display_error)?)
+        .bind(created_at)
+        .execute(&mut connection)
+        .await
+        .map_err(display_error)?;
+        connection.close().await.map_err(display_error)?;
         Ok(())
     }
 
@@ -1530,6 +1642,8 @@ impl Harness {
         let expected = step
             .get("expect")
             .ok_or_else(|| format!("{} / {label}: expected response missing", self.name))?;
+        let mut expected = expected.clone();
+        self.adapt_v011_expected_response(step, &mut expected)?;
         let expected_status = expected["status"]
             .as_u64()
             .ok_or_else(|| format!("{} / {label}: expected status missing", self.name))?;
@@ -1576,6 +1690,30 @@ impl Harness {
                 &expected_headers,
                 &actual_headers,
             ));
+        }
+        Ok(())
+    }
+
+    fn adapt_v011_expected_response(&self, step: &Value, expected: &mut Value) -> TestResult<()> {
+        if !self.v011_cost_contract {
+            return Ok(());
+        }
+        let label = step["label"].as_str().unwrap_or_default();
+        if self.is_v011_estimated_create(step) {
+            expected["status"] = json!(422);
+            expected["body"] = json!({"detail":"只支持准确成本，请刷新后重新配置"});
+            return Ok(());
+        }
+        if matches!(self.name.as_str(), "billing-proportional" | "billing-matched-only")
+            && label == "bill-history"
+        {
+            if let Some(cycles) = expected["body"]["cycles"].as_array_mut() {
+                for cycle in cycles {
+                    if cycle["id"] == 2 {
+                        cycle["cost_kind"] = json!("exact");
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1724,6 +1862,9 @@ impl Harness {
         self.presentation
             .set_source_state(&self.upstream.current_state().await?);
         self.presentation.adapt_database_snapshot(&mut expected);
+        if self.v011_cost_contract {
+            self.adapt_v011_database_expectations(&mut expected).await?;
+        }
         let expected = &expected;
         self.wait_for_deletion_snapshot_state(expected).await?;
         let sql_path = step.get("sql").and_then(Value::as_str).or_else(|| {
@@ -1796,6 +1937,98 @@ impl Harness {
         }
         self.compare_upstream_calls(step).await?;
         Ok(())
+    }
+
+    async fn adapt_v011_database_expectations(&self, expected: &mut Value) -> TestResult<()> {
+        if matches!(self.name.as_str(), "billing-proportional" | "billing-matched-only") {
+            if let Some(cycles) = expected["database"]["cycles"].as_array_mut() {
+                for cycle in cycles {
+                    if cycle["id"] == 2 {
+                        cycle["cost_kind"] = json!("exact");
+                    }
+                }
+            }
+            if let Some(audit) = expected["database"]["audit"].as_array_mut() {
+                for row in audit {
+                    if row["action"] == "create_cycle" && row["entity_id"] == 2 {
+                        row["payload"]["cost_kind"] = json!("exact");
+                    }
+                }
+            }
+        }
+        self.adapt_v011_null_vendor_fields(expected).await
+    }
+
+    /// v8 adds nullable vendor associations. Frozen v0.8 snapshots may omit
+    /// those columns only when every value is still NULL; a non-NULL value is
+    /// an explicit contract change and must fail the snapshot instead of being
+    /// hidden by compatibility normalization.
+    async fn adapt_v011_null_vendor_fields(&self, expected: &mut Value) -> TestResult<()> {
+        let path = self.data_dir.join("settlement.sqlite3");
+        let mut connection = open_read_only(&path).await?;
+        for (table, fields) in [
+            ("profiles", ["vendor_id"].as_slice()),
+            ("cycles", ["vendor_id", "vendor_period_id"].as_slice()),
+        ] {
+            let info = sqlx::query(&format!("PRAGMA table_info(\"{table}\")"))
+                .fetch_all(&mut connection)
+                .await
+                .map_err(display_error)?;
+            for field in fields {
+                let Some(column) = info.iter().find(|row| {
+                    row.try_get::<String, _>("name")
+                        .ok()
+                        .is_some_and(|name| name == *field)
+                }) else {
+                    return Err(format!(
+                        "{}: schema8 column {table}.{field} is missing",
+                        self.name
+                    ));
+                };
+                let _ = column;
+                let non_null: i64 = sqlx::query_scalar(&format!(
+                    "SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" IS NOT NULL"
+                ))
+                .fetch_one(&mut connection)
+                .await
+                .map_err(display_error)?;
+                if non_null != 0 {
+                    return Err(format!(
+                        "{}: frozen compatibility cannot omit non-NULL schema8 field {table}.{field}",
+                        self.name
+                    ));
+                }
+            }
+            let schema = expected["schema"][table]
+                .as_array_mut()
+                .ok_or_else(|| format!("{}: expected schema for {table} is missing", self.name))?;
+            for row in &info {
+                let name = row
+                    .try_get::<String, _>("name")
+                    .map_err(display_error)?;
+                if fields.contains(&name.as_str())
+                    && !schema.iter().any(|item| item["name"] == name)
+                {
+                    schema.push(json!({
+                        "cid": row.try_get::<i64, _>("cid").map_err(display_error)?,
+                        "name": name,
+                        "type": row.try_get::<String, _>("type").map_err(display_error)?,
+                        "notnull": row.try_get::<i64, _>("notnull").map_err(display_error)?,
+                        "dflt_value": row.try_get::<Option<String>, _>("dflt_value").map_err(display_error)?,
+                        "pk": row.try_get::<i64, _>("pk").map_err(display_error)?,
+                    }));
+                }
+            }
+            let rows = expected["database"][table]
+                .as_array_mut()
+                .ok_or_else(|| format!("{}: expected rows for {table} are missing", self.name))?;
+            for row in rows {
+                for field in fields {
+                    row[*field] = Value::Null;
+                }
+            }
+        }
+        connection.close().await.map_err(display_error)
     }
 
     async fn current_settlement_ids(&self) -> TestResult<HashSet<i64>> {
@@ -3396,6 +3629,18 @@ async fn open_read_only(path: &Path) -> TestResult<SqliteConnection> {
         .filename(path)
         .read_only(true)
         .foreign_keys(true)
+        .busy_timeout(Duration::from_secs(10));
+    SqliteConnection::connect_with(&options)
+        .await
+        .map_err(display_error)
+}
+
+async fn open_writable(path: &Path) -> TestResult<SqliteConnection> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(false)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(10));
     SqliteConnection::connect_with(&options)
         .await

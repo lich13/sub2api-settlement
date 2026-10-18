@@ -19,6 +19,17 @@ macro_rules! workflow_test {
     };
 }
 
+macro_rules! v011_workflow_test {
+    ($test:ident, $fixture:literal) => {
+        #[tokio::test]
+        async fn $test() {
+            http_contract::run_workflow_v011($fixture)
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+    };
+}
+
 workflow_test!(identity_errors, "identity-errors");
 workflow_test!(identity_session_boundaries, "identity-session-boundaries");
 workflow_test!(
@@ -54,11 +65,11 @@ workflow_test!(
     account_state_overview_role_revision,
     "account-state-overview-role-revision"
 );
-workflow_test!(starts_costs, "starts-costs");
+v011_workflow_test!(starts_costs, "starts-costs");
 workflow_test!(start_beijing_boundaries, "start-beijing-boundaries");
 workflow_test!(expenses_netting, "expenses-netting");
-workflow_test!(billing_proportional, "billing-proportional");
-workflow_test!(billing_matched_only, "billing-matched-only");
+v011_workflow_test!(billing_proportional, "billing-proportional");
+v011_workflow_test!(billing_matched_only, "billing-matched-only");
 workflow_test!(paid_upgrade, "paid-upgrade");
 workflow_test!(deletion_jobs, "deletion-jobs");
 workflow_test!(stale_preview_drift, "stale-preview-drift");

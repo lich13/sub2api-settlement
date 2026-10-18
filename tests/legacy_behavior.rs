@@ -98,6 +98,40 @@ async fn create_cycle(harness: &Harness, payload: &Value, key: &str) -> Value {
         .expect("create fixture cycle")
 }
 
+async fn inject_legacy_estimated_cycle(
+    harness: &Harness,
+    account_id: i64,
+    name: &str,
+    cost_fen: i64,
+    creditor_id: i64,
+    start: &str,
+) -> i64 {
+    let mut db = harness.app.service.store.write().await.unwrap();
+    sqlx::query(
+        "INSERT INTO profiles(account_id,name,kind) VALUES(?,?,'paid') ON CONFLICT(account_id) DO UPDATE SET name=excluded.name,kind='paid'",
+    )
+    .bind(account_id)
+    .bind(name)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    let id = sqlx::query(
+        "INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,start_locked,cost_kind) VALUES(?,?,?,?,?,'exact',?,NULL,1,NULL,NULL,NULL,NULL,0,'estimated')",
+    )
+    .bind(account_id)
+    .bind(name)
+    .bind(cost_fen)
+    .bind(creditor_id)
+    .bind(start)
+    .bind(start)
+    .execute(&mut *db)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    db.commit().await.unwrap();
+    id
+}
+
 async fn cycle_row(harness: &Harness, id: i64) -> Value {
     harness
         .rows("cycles")
@@ -942,8 +976,31 @@ async fn estimated_cost_cannot_settle_and_editing_kind_invalidates_the_old_previ
     let harness = Harness::new().await;
     let mut payload = cycle_payload(100, "100.00", 2, START);
     payload["cost_kind"] = json!("estimated");
-    let created = create_cycle(&harness, &payload, "estimated-cost-cycle").await;
-    let id = created["id"].as_i64().unwrap();
+    assert_error(
+        harness
+            .app
+            .service
+            .mutate(
+                &admin(),
+                "estimated-cost-cycle",
+                "create",
+                &payload,
+                Prepared::default(),
+                None,
+            )
+            .await,
+        422,
+        "准确成本",
+    );
+    let id = inject_legacy_estimated_cycle(
+        &harness,
+        100,
+        "Fixture account 100",
+        10_000,
+        2,
+        START,
+    )
+    .await;
     assert_eq!(cycle_row(&harness, id).await["cost_kind"], "estimated");
 
     let old = preview(&harness, &[id], &[], END).await;

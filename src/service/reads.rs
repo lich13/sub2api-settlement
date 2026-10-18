@@ -75,7 +75,7 @@ impl Service {
             if p["kind"] != "paid" && text(actor, "role") != "admin" {
                 continue;
             }
-            let c=store::optional(&mut db,"SELECT * FROM cycles WHERE account_id=? ORDER BY (status='open') DESC,start DESC,id DESC LIMIT 1",&[a["id"].clone()]).await?;
+            let c=store::optional(&mut db,"SELECT * FROM cycles WHERE account_id=? AND status!='cancelled' ORDER BY (status='open') DESC,start DESC,id DESC LIMIT 1",&[a["id"].clone()]).await?;
             let mut row = json!({"id":a["id"],"name":a["name"],"platform":a["platform"],"kind":p["kind"].as_str().unwrap_or("unconfigured"),"deleted":flag(&a,"deleted"),"profile_version":p["profile_version"],"cycle":c});
             if row["cycle"]["status"] == "open" {
                 row["cycle"]["name"] = a["name"].clone();

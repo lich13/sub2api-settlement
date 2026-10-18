@@ -9,6 +9,15 @@ use std::collections::HashSet;
 pub fn estimate(mode: &str) -> bool {
     matches!(mode, "date_estimate" | "minute_estimate")
 }
+pub fn accurate_cost(data: &Value) -> Result<()> {
+    if data
+        .get("cost_kind")
+        .is_some_and(|kind| !kind.is_null() && kind != "exact")
+    {
+        return Err(Error::invalid("只支持准确成本，请刷新后重新配置"));
+    }
+    Ok(())
+}
 pub fn start_meta(c: &Value) -> Value {
     let confirmed = c
         .get("start_confirmed")
@@ -115,11 +124,13 @@ impl Service {
         if start >= limit {
             return Err(Error::invalid("开始时间必须早于结束时间"));
         }
-        if optional(db,"SELECT 1 AS found FROM cycles WHERE account_id=? AND id!=? AND start<? AND coalesce(end,'9999')>?",&[json!(account),json!(exclude.unwrap_or(-1)),json!(end.unwrap_or("9999")),json!(start)]).await?.is_some(){return Err(Error::conflict("该账号已有重叠周期"));}
+        if optional(db,"SELECT 1 AS found FROM cycles WHERE account_id=? AND status='cancelled' AND start_locked=1 AND start>?",&[json!(account),json!(start)]).await?.is_some(){return Err(Error::conflict("重新配置不能早于已锁定的升级付费起点"));}
+        if optional(db,"SELECT 1 AS found FROM cycles WHERE account_id=? AND status!='cancelled' AND id!=? AND start<? AND coalesce(end,'9999')>?",&[json!(account),json!(exclude.unwrap_or(-1)),json!(end.unwrap_or("9999")),json!(start)]).await?.is_some(){return Err(Error::conflict("该账号已有重叠周期"));}
         Ok(())
     }
     pub async fn create_cycle(&self, db: &mut Db, actor: &Value, data: &Value) -> Result<Value> {
         admin(actor)?;
+        accurate_cost(data)?;
         let account = int(data, "account_id");
         if optional(
             db,
@@ -154,18 +165,8 @@ impl Service {
             return Err(Error::invalid("请填写账号公开名称"));
         }
         exec(db,"INSERT INTO profiles(account_id,name,kind) VALUES(?,?,'paid') ON CONFLICT(account_id) DO UPDATE SET name=excluded.name,kind='paid',version=profiles.version+1",&[json!(account),json!(title)]).await?;
-        let cid=exec(db,"INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",&[json!(account),json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),data["renewed_from_cycle_id"].clone()]).await?.last_insert_rowid();
-        let kind = if text(data, "cost_kind").is_empty() {
-            "exact"
-        } else {
-            text(data, "cost_kind")
-        };
-        exec(
-            db,
-            "UPDATE cycles SET cost_kind=? WHERE id=?",
-            &[json!(kind), json!(cid)],
-        )
-        .await?;
+        let kind = "exact";
+        let cid=exec(db,"INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,cost_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'exact')",&[json!(account),json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),data["renewed_from_cycle_id"].clone()]).await?.last_insert_rowid();
         audit(db,actor,"create_cycle",json!(cid),&merge(start,json!({"cost_fen":cost,"cost_kind":kind,"creditor_id":data["creditor_id"],"renewed_from_cycle_id":data["renewed_from_cycle_id"]}))).await?;
         Ok(json!({"id":cid}))
     }
@@ -177,6 +178,7 @@ impl Service {
         data: &Value,
     ) -> Result<Value> {
         admin(actor)?;
+        accurate_cost(data)?;
         store::one(
             db,
             "SELECT id FROM accounts WHERE id=? AND root_id=id",
@@ -234,11 +236,7 @@ impl Service {
             ],
         )
         .await?;
-        let kind = if text(data, "cost_kind").is_empty() {
-            "exact"
-        } else {
-            text(data, "cost_kind")
-        };
+        let kind = "exact";
         let cid=exec(db,"INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,start_locked,cost_kind) VALUES(?,?,?,?,?,'exact',?,NULL,1,?,?,NULL,NULL,1,?)",&[json!(account),json!(title),json!(cost),data["creditor_id"].clone(),json!(since),json!(since),actor["id"].clone(),json!(since),json!(kind)]).await?.last_insert_rowid();
         audit(db,actor,"upgrade_paid",json!(account),&json!({"cycle_id":cid,"paid_since":since,"cost_fen":cost,"cost_kind":kind,"creditor_id":data["creditor_id"],"profile_version":version})).await?;
         Ok(json!({"account_id":account,"cycle_id":cid,"paid_since":since,"version":version}))
@@ -251,6 +249,7 @@ impl Service {
         data: &Value,
     ) -> Result<Value> {
         admin(actor)?;
+        accurate_cost(data)?;
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
         if c["status"] != "open" {
             return Err(Error::conflict("已出单成本已锁定"));
@@ -314,7 +313,7 @@ impl Service {
         if title.is_empty() {
             return Err(Error::invalid("请填写账号公开名称"));
         }
-        exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind=?,version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},data.get("cost_kind").filter(|v|!v.is_null()).unwrap_or(&c["cost_kind"]).clone(),json!(cid)]).await?;
+        exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind=?,version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},json!("exact"),json!(cid)]).await?;
         if cost != int(&c, "cost_fen") {
             exec(db,"UPDATE cycles SET cost_source='manual',bill_import_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0 WHERE id=?",&[json!(cid)]).await?;
         }

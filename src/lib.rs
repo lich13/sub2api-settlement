@@ -7,6 +7,7 @@ pub mod http;
 pub mod inventory;
 pub mod json;
 pub mod keys;
+pub mod maintenance;
 pub mod metrics;
 pub mod money;
 pub mod rate;

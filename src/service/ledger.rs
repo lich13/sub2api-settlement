@@ -497,14 +497,8 @@ impl Service {
                 .await?;
             }
             if let Some(r) = renewals.get(&cid) {
-                let kind =
-                    r["cost_kind"]
-                        .as_str()
-                        .unwrap_or(if c["cost_source"] == "upstream_bill" {
-                            "estimated"
-                        } else {
-                            c["cost_kind"].as_str().unwrap_or("exact")
-                        });
+                super::cycles::accurate_cost(r)?;
+                let kind = "exact";
                 let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":renewal_name,"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":kind,"start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;
                 result["next_cycle"] = next["id"].clone();
             }

@@ -27,6 +27,26 @@ async fn run() -> Result<()> {
     let config = Config::env()?;
     let arguments = std::env::args().collect::<Vec<_>>();
     let ledger = config.data_dir.join("settlement.sqlite3");
+    if arguments
+        .get(1)
+        .is_some_and(|command| command == "reset-estimated")
+    {
+        let result = if arguments.len() == 3 && arguments[2] == "--check" {
+            settlement::maintenance::preview(&ledger).await?
+        } else if arguments.len() == 5 && arguments[2] == "--apply" && arguments[3] == "--digest" {
+            let _lock = settlement::keys::LedgerLock::acquire(&config.data_dir)?;
+            let store = settlement::store::Store::open(&ledger).await?;
+            let result = settlement::maintenance::reset_estimated(&store, &arguments[4]).await;
+            store.close().await;
+            result?
+        } else {
+            return Err(settlement::error::Error::invalid(
+                "用法：settlement reset-estimated --check 或 --apply --digest DIGEST",
+            ));
+        };
+        println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
     if arguments.get(1).is_some_and(|command| command == "backup") {
         if arguments.len() != 4 || arguments[2] != "--output" {
             return Err(settlement::error::Error::invalid(

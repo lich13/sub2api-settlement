@@ -358,7 +358,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         choice(
             &v,
             "cost_kind",
-            &["exact", "estimated"],
+            &["exact"],
             matches!(kind, "edit" | "renewal"),
         )?;
     }
