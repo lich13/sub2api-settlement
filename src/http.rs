@@ -377,7 +377,9 @@ impl App {
             ("POST", ["account-deletions", _, "cancel"]) => ("delete-cancel", Some(id(1)?)),
             _ => return Err(Error::new(404, "Not Found")),
         };
-        if ["settle", "bill-confirm", "start-confirm", "delete-retry"].contains(&kind) {
+        if ["settle", "bill-confirm", "start-confirm", "delete-retry"].contains(&kind)
+            || kind.contains("vendor")
+        {
             admin(actor)?;
         }
         let payload = crate::input::normalize(kind, body)?;

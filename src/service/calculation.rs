@@ -308,9 +308,8 @@ impl Service {
                 return Err(Error::conflict(gap));
             }
             let mut calc = if let Some(pid) = c["vendor_period_id"].as_i64() {
-                if !vendor_cache.contains_key(&pid) {
-                    vendor_cache.insert(
-                        pid,
+                if let std::collections::btree_map::Entry::Vacant(entry) = vendor_cache.entry(pid) {
+                    entry.insert(
                         self.vendor_calculation(&mut db, pid, actual_end, None, false)
                             .await?,
                     );

@@ -273,9 +273,8 @@ impl Service {
             .await?;
             let revision = store::revision(&mut db, int(&c, "account_id")).await?;
             let calc = if let Some(pid) = c["vendor_period_id"].as_i64() {
-                if !vendor_cache.contains_key(&pid) {
-                    vendor_cache.insert(
-                        pid,
+                if let std::collections::btree_map::Entry::Vacant(entry) = vendor_cache.entry(pid) {
+                    entry.insert(
                         self.vendor_calculation(&mut db, pid, text(snap, "end"), None, true)
                             .await?,
                     );

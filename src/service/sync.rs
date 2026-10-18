@@ -228,9 +228,10 @@ impl Service {
             };
             if affected || !array(&gaps).is_empty() {
                 let calc = if pid != 0 {
-                    if !vendor_cache.contains_key(&pid) {
-                        vendor_cache.insert(
-                            pid,
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        vendor_cache.entry(pid)
+                    {
+                        entry.insert(
                             self.vendor_calculation(&mut db, pid, text(&snap, "end"), None, false)
                                 .await?,
                         );

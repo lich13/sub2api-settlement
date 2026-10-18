@@ -103,9 +103,10 @@ impl Service {
                         Value::Null
                     };
                     if let Some(pid) = c["vendor_period_id"].as_i64() {
-                        if !vendor_cache.contains_key(&pid) {
-                            vendor_cache.insert(
-                                pid,
+                        if let std::collections::btree_map::Entry::Vacant(entry) =
+                            vendor_cache.entry(pid)
+                        {
+                            entry.insert(
                                 self.vendor_calculation(&mut db, pid, end, None, false)
                                     .await?,
                             );
@@ -163,11 +164,10 @@ impl Service {
         .await?
         {
             let pid = int(&p, "id");
-            if !vendor_cache.contains_key(&pid) {
+            if let std::collections::btree_map::Entry::Vacant(entry) = vendor_cache.entry(pid) {
                 let now = time::now();
                 let end = p["bill_end"].as_str().or(p["end"].as_str()).unwrap_or(&now);
-                vendor_cache.insert(
-                    pid,
+                entry.insert(
                     self.vendor_calculation(&mut db, pid, end, None, false)
                         .await?,
                 );
@@ -379,10 +379,10 @@ impl Service {
         for mut c in all(&mut db,"SELECT c.*,s.drift FROM cycles c JOIN accounts a ON a.id=c.account_id AND a.deleted=0 LEFT JOIN settlements s ON s.id=c.settlement_id WHERE c.status!='cancelled' ORDER BY c.id DESC",&[]).await? {
             if !active.contains(&c["account_id"]) { continue; }
             if c["status"] == "open" && let Some(pid) = c["vendor_period_id"].as_i64() {
-                if !vendor_cache.contains_key(&pid) {
+                if let std::collections::btree_map::Entry::Vacant(entry) = vendor_cache.entry(pid) {
                     let now = time::now();
                     let end = c["bill_end"].as_str().or(c["end"].as_str()).unwrap_or(&now);
-                    vendor_cache.insert(pid, self.vendor_calculation(&mut db, pid, end, None, false).await?);
+                    entry.insert(self.vendor_calculation(&mut db, pid, end, None, false).await?);
                 }
                 let calc = array(&vendor_cache[&pid]["calculations"]).iter().find(|r|r["cycle"]["id"]==c["id"]).ok_or_else(Error::unavailable)?;
                 c["cost_fen"] = calc["cycle"]["cost_fen"].clone();
