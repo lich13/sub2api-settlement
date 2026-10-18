@@ -87,8 +87,8 @@ export function billedMoney(value: string) {
   return "¥" + new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number);
 }
 
-export function canImportBill(cycle: Pick<Cycle, "cost_kind" | "cost_source">) {
-  return cycle.cost_kind === "estimated" || cycle.cost_source === "upstream_bill";
+export function canImportBill(cycle: Pick<Cycle, "cost_kind" | "cost_source"> & { vendor_period_id?: number | null }) {
+  return !cycle.vendor_period_id;
 }
 
 export function canUpgradePaid(account: Pick<Account, "kind">) {

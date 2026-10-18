@@ -47,10 +47,12 @@ describe("amount presentation", () => {
 });
 
 describe("upstream bill entry", () => {
-  it("shows the entry for estimated and previously imported cycles only", () => {
+  it("shows the entry for every independent cycle and hides it for vendor periods", () => {
+    expect(canImportBill({ cost_kind: "exact", cost_source: "manual" })).toBe(true);
     expect(canImportBill({ cost_kind: "estimated", cost_source: "manual" })).toBe(true);
     expect(canImportBill({ cost_kind: "exact", cost_source: "upstream_bill" })).toBe(true);
-    expect(canImportBill({ cost_kind: "exact", cost_source: "manual" })).toBe(false);
+    expect(canImportBill({ cost_kind: "exact", cost_source: "manual", vendor_period_id: 9 })).toBe(false);
+    expect(canImportBill({ cost_kind: "exact", cost_source: "manual", vendor_period_id: null })).toBe(true);
   });
 });
 

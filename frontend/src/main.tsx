@@ -165,7 +165,6 @@ function CycleForm({
   );
   const name = catalog.accounts.find(a => a.id === aid)?.name || account?.name || cycle?.name || "";
   const [cost, setCost] = useState(cycle ? costInput(cycle.cost_fen) : "");
-  const [costKind, setCostKind] = useState<CostKind>(cycle?.cost_kind || "exact");
   const [creditor, setCreditor] = useState(
     cycle?.creditor_id || catalog.users[0]?.id || 0,
   );
@@ -189,7 +188,7 @@ function CycleForm({
         account_id: aid,
         name: name.trim(),
         cost,
-        cost_kind: costKind,
+        cost_kind: "exact",
         creditor_id: creditor,
         start: startMode === "earliest_usage" ? null : cycle && startMode === cycle.start_mode && start === inputDate(cycle.start) ? cycle.start : fromInput(startMode === "minute_estimate" ? start.slice(0, 16) : start),
         start_mode: startMode,
@@ -272,7 +271,6 @@ function CycleForm({
                 </Select>
               </label>
             </div>
-            <label>成本类型<Select value={costKind} onChange={(e) => setCostKind(e.target.value as CostKind)}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></Select></label>
             {cycle?.cost_source === "upstream_bill" && cost !== costInput(cycle.cost_fen) && <p className="field-hint">修改金额将改用手动成本分摊，原账单保留。</p>}
             <label>
               起点方式
@@ -325,7 +323,6 @@ function UpgradeForm({
 }) {
   const name = catalog.accounts.find(a => a.id === account.id)?.name || account.name;
   const [cost, setCost] = useState("");
-  const [costKind, setCostKind] = useState<CostKind>("exact");
   const [creditor, setCreditor] = useState(catalog.users[0]?.id || 0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -341,7 +338,7 @@ function UpgradeForm({
       await api(`/accounts/${account.id}/upgrade-paid`, "POST", {
         name: name.trim(),
         cost,
-        cost_kind: costKind,
+        cost_kind: "exact",
         creditor_id: creditor,
         version: account.profile_version,
       });
@@ -372,13 +369,6 @@ function UpgradeForm({
             </Select>
           </label>
         </div>
-        <label>
-          成本类型
-          <Select value={costKind} onChange={(e) => setCostKind(e.target.value as CostKind)}>
-            <option value="exact">准确成本</option>
-            <option value="estimated">模糊成本</option>
-          </Select>
-        </label>
         <p className="field-hint">保存时开始计费，升级前用量不计入。</p>
         <footer>
           <button type="button" className="button" disabled={busy} onClick={close}>取消</button>
@@ -725,7 +715,7 @@ function BillImportPanel({
   }
   return (
     <div className="bill-import">
-      <div className="bill-import-head"><strong>上游账单</strong><span>{effectiveCycle.cost_source === "upstream_bill" ? "替换账单" : "模糊成本"}</span></div>
+      <div className="bill-import-head"><strong>上游账单</strong><span>{effectiveCycle.cost_source === "upstream_bill" ? "替换账单" : "独立账号"}</span></div>
       <label>分摊方式<Select value={mode} disabled={busy} onChange={(e) => {
         const next = e.target.value as BillMode;
         setMode(next); ++requestVersion.current; setPreview(null); setAcceptDifference(false); setAcceptOutside(false);
@@ -816,7 +806,7 @@ export function SettleForm({
     onResult(next) {
       setDisplayPreview(next);
       if (renewByDefault && !renewalDefaultsSet.current) {
-        setRenew(Object.fromEntries(next.cycles.map((c) => [c.cycle.id, { cost: costInput(c.cycle.cost_fen), creditor_id: c.cycle.creditor_id, cost_kind: c.cycle.cost_source === "upstream_bill" ? "estimated" : c.cycle.cost_kind || "exact" }])));
+        setRenew(Object.fromEntries(next.cycles.map((c) => [c.cycle.id, { cost: costInput(c.cycle.cost_fen), creditor_id: c.cycle.creditor_id, cost_kind: "exact" }])));
         renewalDefaultsSet.current = true;
       }
     },
@@ -931,7 +921,7 @@ export function SettleForm({
                       next[c.cycle.id] = {
                         cost: costInput(c.cycle.cost_fen),
                         creditor_id: c.cycle.creditor_id,
-                        cost_kind: c.cycle.cost_source === "upstream_bill" ? "estimated" : c.cycle.cost_kind || "exact",
+                        cost_kind: "exact",
                       };
                     else delete next[c.cycle.id];
                     return next;
@@ -944,7 +934,6 @@ export function SettleForm({
             {deleteIds.includes(c.cycle.id) && <DeletionScope accountId={c.cycle.account_id} onConfirmed={value=>setDeleteScopes(prev=>({...prev,[c.cycle.id]:value}))}/>}
             {renew[c.cycle.id] && (
               <div className="form-columns">
-                <label>新周期成本类型<Select value={renew[c.cycle.id].cost_kind} onChange={(e) => setRenew({...renew, [c.cycle.id]: {...renew[c.cycle.id], cost_kind: e.target.value as CostKind}})}><option value="exact">准确成本</option><option value="estimated">模糊成本</option></Select></label>
                 <label>
                   新周期成本（元）
                   <input
@@ -1498,7 +1487,7 @@ export function App() {
                         </td>
                         <td data-label="成本" className="numeric amount">
                           {a.kind === "free" ? money(0) : a.cycle ? <>
-                            <span className="cost-kind">{a.cycle.cost_kind === "estimated" ? "模糊成本" : "准确成本"}</span>
+                            <span className="cost-kind">{a.cycle.cost_kind === "estimated" ? "待重新配置" : "准确成本"}</span>
                             {money(a.cycle.cost_fen)}
                           </> : "—"}
                         </td>
@@ -1652,7 +1641,7 @@ export function App() {
                           </small>
                         </td>
                         <td data-label="成本" className="numeric amount">
-                          <span className="cost-kind">{c.cost_kind === "estimated" ? "模糊成本" : "准确成本"}</span>
+                          <span className="cost-kind">{c.cost_kind === "estimated" ? "历史待确认成本" : "准确成本"}</span>
                           {money(c.cost_fen)}
                         </td>
                         <td data-label="垫付人">{c.creditor_name}</td>
