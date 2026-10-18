@@ -352,7 +352,16 @@ async fn legacy_written_ledger_and_session_continue_across_rust_restart() {
 
     let mut db = connect(&database).await;
     let after = financial_rows(&mut db).await;
-    for ((table, original), current) in FINANCIAL_TABLES.iter().zip(before).zip(after) {
+    for ((table, original), mut current) in FINANCIAL_TABLES.iter().zip(before).zip(after) {
+        if *table == "cycles" {
+            for row in &mut current {
+                assert_eq!(row.get("vendor_id"), Some(&Value::Null));
+                assert_eq!(row.get("vendor_period_id"), Some(&Value::Null));
+                let object = row.as_object_mut().expect("cycle row object");
+                object.remove("vendor_id");
+                object.remove("vendor_period_id");
+            }
+        }
         assert_eq!(
             &current[..original.len()],
             &original,
