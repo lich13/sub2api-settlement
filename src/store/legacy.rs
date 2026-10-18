@@ -134,6 +134,30 @@ pub(super) async fn migrate(db: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
+/// Additive v8 columns also work with unversioned ledgers. Identifiers and types
+/// are fixed code-owned values; the released v1 checksum remains unchanged.
+pub(super) async fn vendor_columns(db: &mut SqliteConnection) -> Result<()> {
+    for (table, fields) in [
+        ("profiles", &["vendor_id"][..]),
+        ("cycles", &["vendor_id", "vendor_period_id"][..]),
+    ] {
+        let columns = all(db, &format!("PRAGMA table_info({table})"), &[]).await?;
+        for field in fields {
+            if !columns.iter().any(|column| column["name"] == *field) {
+                exec(
+                    db,
+                    &format!("ALTER TABLE {table} ADD COLUMN {field} INTEGER"),
+                    &[],
+                )
+                .await?;
+            }
+        }
+    }
+    sqlx::raw_sql("CREATE INDEX IF NOT EXISTS profile_vendor ON profiles(vendor_id); CREATE INDEX IF NOT EXISTS cycle_vendor_period ON cycles(vendor_period_id,id);")
+        .execute(db).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

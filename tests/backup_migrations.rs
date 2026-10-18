@@ -30,6 +30,7 @@ const PUBLISHED_MIGRATION_CHECKSUMS: [&str; 7] = [
     "8c11465571dfeb251884247febafc2852b4a292364e496afe69393a9caebec54",
     "f6a9788b9fb5818fef31c4866aa8716d43f9d2ecd637c09129658a45c5efb53b",
 ];
+const CURRENT_MIGRATION_VERSION: i64 = 8;
 
 #[derive(Debug, PartialEq)]
 struct DatabaseSnapshot {
@@ -181,19 +182,23 @@ async fn database_snapshot(path: &Path) -> DatabaseSnapshot {
 
 async fn create_published_ledger(path: &Path) {
     import_legacy_fixture(path).await;
-    let store = Store::open(path)
-        .await
-        .expect("prepare current ledger schema for published history");
-    store.close().await;
-
     let mut db = connect(path).await;
+    sqlx::query(
+        "CREATE TABLE rust_schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)",
+    )
+    .execute(&mut db)
+    .await
+    .expect("create published migration history");
     for (index, checksum) in PUBLISHED_MIGRATION_CHECKSUMS.iter().enumerate() {
-        let result = sqlx::query("UPDATE rust_schema_migrations SET checksum=? WHERE version=?")
-            .bind(*checksum)
-            .bind(index as i64 + 1)
-            .execute(&mut db)
-            .await
-            .unwrap();
+        let result = sqlx::query(
+            "INSERT INTO rust_schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
+        )
+        .bind(index as i64 + 1)
+        .bind(*checksum)
+        .bind("published-v0.10.1")
+        .execute(&mut db)
+        .await
+        .unwrap();
         assert_eq!(
             result.rows_affected(),
             1,
@@ -473,7 +478,7 @@ async fn migrate_check_reports_pending_versions_without_changing_legacy_database
 }
 
 #[tokio::test]
-async fn published_v0101_history_opens_without_schema_or_data_changes() {
+async fn published_v0101_history_reports_and_applies_vendor_migration() {
     let temporary = TempDir::new().unwrap();
     let data_dir = temporary.path().join("published-data");
     fs::create_dir(&data_dir).unwrap();
@@ -492,15 +497,26 @@ async fn published_v0101_history_opens_without_schema_or_data_changes() {
         .await
         .expect("inspect published v0.10.1 ledger");
     assert_eq!(inspection.schema_version, 7);
-    assert_eq!(inspection.target_version, 7);
-    assert!(inspection.pending.is_empty());
+    assert_eq!(inspection.target_version, CURRENT_MIGRATION_VERSION);
+    assert_eq!(inspection.pending, vec![CURRENT_MIGRATION_VERSION]);
     assert!(inspection.existing);
 
     let store = Store::open(&ledger)
         .await
         .expect("open published v0.10.1 ledger");
     store.close().await;
-    assert_eq!(database_snapshot(&ledger).await, before);
+    let after = database_snapshot(&ledger).await;
+    assert_eq!(after.migrations.len(), CURRENT_MIGRATION_VERSION as usize);
+    assert_eq!(
+        after
+            .migrations
+            .iter()
+            .take(PUBLISHED_MIGRATION_CHECKSUMS.len())
+            .map(|(version, checksum, _)| (*version, checksum.clone()))
+            .collect::<Vec<_>>(),
+        published_migration_records()
+    );
+    assert_eq!(before.migrations.len(), PUBLISHED_MIGRATION_CHECKSUMS.len());
 
     let output = run_migrate_check(&data_dir);
     assert!(
@@ -509,11 +525,11 @@ async fn published_v0101_history_opens_without_schema_or_data_changes() {
         String::from_utf8_lossy(&output.stderr)
     );
     let report = parse_json_stdout(&output);
-    assert_eq!(report["schema_version"], 7);
-    assert_eq!(report["target_version"], 7);
+    assert_eq!(report["schema_version"], CURRENT_MIGRATION_VERSION);
+    assert_eq!(report["target_version"], CURRENT_MIGRATION_VERSION);
     assert_eq!(report["pending"], serde_json::json!([]));
     assert_eq!(report["existing"], true);
-    assert_eq!(database_snapshot(&ledger).await, before);
+    assert_eq!(database_snapshot(&ledger).await, after);
 }
 
 #[tokio::test]
@@ -529,13 +545,21 @@ async fn new_ledger_writes_the_published_v0101_checksum_vector() {
         .iter()
         .map(|(version, checksum, _)| (*version, checksum.clone()))
         .collect::<Vec<_>>();
-    assert_eq!(recorded, published_migration_records());
+    assert_eq!(recorded.len(), CURRENT_MIGRATION_VERSION as usize);
+    assert_eq!(
+        &recorded[..PUBLISHED_MIGRATION_CHECKSUMS.len()],
+        published_migration_records().as_slice()
+    );
+    assert_eq!(
+        recorded.last().map(|(version, _)| *version),
+        Some(CURRENT_MIGRATION_VERSION)
+    );
 
     let inspection = migrations::inspect(&ledger)
         .await
         .expect("inspect new ledger with published checksums");
-    assert_eq!(inspection.schema_version, 7);
-    assert_eq!(inspection.target_version, 7);
+    assert_eq!(inspection.schema_version, CURRENT_MIGRATION_VERSION);
+    assert_eq!(inspection.target_version, CURRENT_MIGRATION_VERSION);
     assert!(inspection.pending.is_empty());
 
     let store = Store::open(&ledger)
