@@ -30,7 +30,7 @@ const PUBLISHED_MIGRATION_CHECKSUMS: [&str; 7] = [
     "8c11465571dfeb251884247febafc2852b4a292364e496afe69393a9caebec54",
     "f6a9788b9fb5818fef31c4866aa8716d43f9d2ecd637c09129658a45c5efb53b",
 ];
-const CURRENT_MIGRATION_VERSION: i64 = 8;
+const CURRENT_MIGRATION_VERSION: i64 = 9;
 
 #[derive(Debug, PartialEq)]
 struct DatabaseSnapshot {
@@ -498,7 +498,7 @@ async fn published_v0101_history_reports_and_applies_vendor_migration() {
         .expect("inspect published v0.10.1 ledger");
     assert_eq!(inspection.schema_version, 7);
     assert_eq!(inspection.target_version, CURRENT_MIGRATION_VERSION);
-    assert_eq!(inspection.pending, vec![CURRENT_MIGRATION_VERSION]);
+    assert_eq!(inspection.pending, vec![8, 9]);
     assert!(inspection.existing);
 
     let store = Store::open(&ledger)

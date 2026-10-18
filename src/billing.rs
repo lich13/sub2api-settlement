@@ -257,6 +257,19 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
     end: &str,
     mode: &str,
 ) -> Result<Value> {
+    reconcile_inner(rows, usage, details, start, end, mode, false)
+}
+// Diagnostics are opt-in: legacy result serialization and billing digests stay unchanged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFields>(
+    rows: &[B],
+    usage: &[U],
+    details: &BTreeMap<i64, D>,
+    start: &str,
+    end: &str,
+    mode: &str,
+    diagnostics: bool,
+) -> Result<Value> {
     if !["proportional", "matched_only"].contains(&mode) {
         return Err(Error::invalid("账单分摊方式无效"));
     }
@@ -340,6 +353,7 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
     }
     let mut matched = Vec::new();
     let mut unmatched = Vec::new();
+    let mut ambiguous = std::collections::BTreeSet::new();
     let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
     for r in &included {
         let (group, uses) = if let Some(g) = identified.get(&r.number("row").unwrap_or(0)) {
@@ -355,8 +369,13 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
             ));
             let weight = weights.entry(local.user_id()).or_insert_with(Decimal::zero);
             weight.add(&Decimal::parse(r.field("amount"))?);
-            *weight = weight.rounded(60);
+            if !diagnostics {
+                *weight = weight.rounded(60);
+            }
         } else {
+            if diagnostics {
+                ambiguous.extend(group.iter().map(|i| usage[*i].id()));
+            }
             unmatched.push(merge(
                 serde_json::to_value(r)?,
                 json!({"reason":if group.is_empty(){"missing"}else{"ambiguous"}}),
@@ -367,7 +386,9 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
         let mut n = Decimal::zero();
         for r in records {
             n.add(&Decimal::parse(r.field("amount"))?);
-            n = n.rounded(60);
+            if !diagnostics {
+                n = n.rounded(60);
+            }
         }
         Ok(n)
     };
@@ -375,7 +396,9 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
     let mut matched_amount = Decimal::zero();
     for v in weights.values() {
         matched_amount.add(v);
-        matched_amount = matched_amount.rounded(60);
+        if !diagnostics {
+            matched_amount = matched_amount.rounded(60);
+        }
     }
     let cost = total.fen_half_up()?;
     if cost > 999_999_999_999 {
@@ -394,12 +417,18 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
         result["rules_version"] = json!(2);
     }
     result["digest"] = json!(billing_digest(&result));
+    if diagnostics {
+        result["ambiguous_usage_ids"] = json!(ambiguous);
+    }
     Ok(merge(
         result,
         json!({"allocation_mode":mode,"rules_version":if mode=="matched_only"{2}else{1},"billable_cost_fen":if mode=="matched_only"{matched_amount.fen_half_up()?}else{cost},"excluded_amount":if mode=="matched_only"{unmatched_amount}else{"0".to_owned()}}),
     ))
 }
 pub fn bill_allocations(result: &Value, creditor: i64) -> Result<Value> {
+    if !result["manual_basis"].is_null() {
+        return crate::manual_billing::allocations(result, creditor);
+    }
     if !Decimal::parse(text(result, "matched_amount"))?.positive() {
         return Ok(json!([]));
     }

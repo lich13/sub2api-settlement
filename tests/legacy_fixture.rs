@@ -352,14 +352,22 @@ async fn legacy_written_ledger_and_session_continue_across_rust_restart() {
 
     let mut db = connect(&database).await;
     let after = financial_rows(&mut db).await;
+    let manual_basis_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM cycles WHERE manual_basis_id IS NOT NULL")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(manual_basis_rows, 0, "legacy cycles gained a manual basis");
     for ((table, original), mut current) in FINANCIAL_TABLES.iter().zip(before).zip(after) {
         if *table == "cycles" {
             for row in &mut current {
                 assert_eq!(row.get("vendor_id"), Some(&Value::Null));
                 assert_eq!(row.get("vendor_period_id"), Some(&Value::Null));
+                assert_eq!(row.get("manual_basis_id"), Some(&Value::Null));
                 let object = row.as_object_mut().expect("cycle row object");
                 object.remove("vendor_id");
                 object.remove("vendor_period_id");
+                object.remove("manual_basis_id");
             }
         }
         assert_eq!(

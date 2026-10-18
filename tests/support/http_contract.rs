@@ -587,6 +587,34 @@ impl Harness {
                         })
                     })
                 });
+        if recreates_legacy_schema {
+            for table in ["manual_bill_bases", "manual_bill_drafts"] {
+                let rows: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                    .fetch_one(&mut connection)
+                    .await
+                    .map_err(display_error)?;
+                if rows != 0 {
+                    return Err(format!(
+                        "{} / {label}: cannot rebuild legacy schema with {} {table} row(s)",
+                        self.name, rows
+                    ));
+                }
+            }
+            sqlx::query("PRAGMA foreign_keys=OFF")
+                .execute(&mut connection)
+                .await
+                .map_err(display_error)?;
+            sqlx::query("ALTER TABLE vendor_periods DROP COLUMN manual_basis_id")
+                .execute(&mut connection)
+                .await
+                .map_err(display_error)?;
+            for table in ["manual_bill_drafts", "manual_bill_bases"] {
+                sqlx::query(&format!("DROP TABLE {table}"))
+                    .execute(&mut connection)
+                    .await
+                    .map_err(display_error)?;
+            }
+        }
         for (index, statement) in statements.iter().enumerate() {
             let sql = statement["sql"].as_str().ok_or_else(|| {
                 format!("{} / {label}: statement {index} has no SQL text", self.name)
@@ -1928,6 +1956,8 @@ impl Harness {
             .set_source_state(&self.upstream.current_state().await?);
         self.presentation.adapt_database_snapshot(&mut expected);
         self.adapt_v011_null_vendor_fields(&mut expected).await?;
+        self.adapt_v012_null_manual_basis_fields(&mut expected)
+            .await?;
         if self.v011_cost_contract {
             self.adapt_v011_database_expectations(&mut expected).await?;
         }
@@ -2028,9 +2058,9 @@ impl Harness {
         Ok(())
     }
 
-    /// v8 API responses expose the nullable vendor associations on cycle and
-    /// profile projections. Frozen v0.8 response snapshots may omit those
-    /// fields only while the actual value remains NULL.
+    /// API responses expose nullable association fields on cycle and profile
+    /// projections. Frozen snapshots may omit those fields only while the
+    /// actual value remains NULL.
     fn adapt_v011_null_vendor_response(
         &self,
         expected: &mut Value,
@@ -2044,7 +2074,7 @@ impl Harness {
         ) -> TestResult<()> {
             match (expected, actual) {
                 (Value::Object(expected), Value::Object(actual)) => {
-                    for field in ["vendor_id", "vendor_period_id"] {
+                    for field in ["vendor_id", "vendor_period_id", "manual_basis_id"] {
                         let Some(actual_value) = actual.get(field) else {
                             continue;
                         };
@@ -2107,7 +2137,7 @@ impl Harness {
         ) -> TestResult<()> {
             match (expected, actual) {
                 (Value::Object(expected), Value::Object(actual)) => {
-                    for field in ["vendor_id", "vendor_period_id"] {
+                    for field in ["vendor_id", "vendor_period_id", "manual_basis_id"] {
                         let Some(actual_value) = actual.get(field) else {
                             continue;
                         };
@@ -2227,6 +2257,86 @@ impl Harness {
                 for field in fields {
                     row[*field] = Value::Null;
                 }
+            }
+        }
+        connection.close().await.map_err(display_error)
+    }
+
+    /// Schema9 adds nullable manual-billing references. Frozen snapshots may
+    /// omit the cycle column only while every legacy row remains NULL. The
+    /// manual-billing tables must stay empty so compatibility cannot hide a
+    /// new manual-billing write or draft lock.
+    async fn adapt_v012_null_manual_basis_fields(&self, expected: &mut Value) -> TestResult<()> {
+        let path = self.data_dir.join("settlement.sqlite3");
+        let mut connection = open_read_only(&path).await?;
+        let info = sqlx::query("PRAGMA table_info(\"cycles\")")
+            .fetch_all(&mut connection)
+            .await
+            .map_err(display_error)?;
+        let Some(column) = info.iter().find(|row| {
+            row.try_get::<String, _>("name")
+                .ok()
+                .is_some_and(|name| name == "manual_basis_id")
+        }) else {
+            return Err(format!(
+                "{}: schema9 column cycles.manual_basis_id is missing",
+                self.name
+            ));
+        };
+        let _ = column;
+        let non_null: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cycles WHERE manual_basis_id IS NOT NULL")
+                .fetch_one(&mut connection)
+                .await
+                .map_err(display_error)?;
+        if non_null != 0 {
+            return Err(format!(
+                "{}: frozen compatibility cannot omit non-NULL schema9 field cycles.manual_basis_id",
+                self.name
+            ));
+        }
+        let schema = expected["schema"]["cycles"]
+            .as_array_mut()
+            .ok_or_else(|| format!("{}: expected schema for cycles is missing", self.name))?;
+        for row in &info {
+            let name = row.try_get::<String, _>("name").map_err(display_error)?;
+            if name == "manual_basis_id" && !schema.iter().any(|item| item["name"] == name) {
+                schema.push(json!({
+                    "cid": row.try_get::<i64, _>("cid").map_err(display_error)?,
+                    "name": name,
+                    "type": row.try_get::<String, _>("type").map_err(display_error)?,
+                    "notnull": row.try_get::<i64, _>("notnull").map_err(display_error)?,
+                    "dflt_value": row.try_get::<Option<String>, _>("dflt_value").map_err(display_error)?,
+                    "pk": row.try_get::<i64, _>("pk").map_err(display_error)?,
+                }));
+            }
+        }
+        let rows = expected["database"]["cycles"]
+            .as_array_mut()
+            .ok_or_else(|| format!("{}: expected rows for cycles are missing", self.name))?;
+        for row in rows {
+            row["manual_basis_id"] = Value::Null;
+        }
+
+        for table in ["manual_bill_bases", "manual_bill_drafts"] {
+            let table_exists: Option<i64> = sqlx::query_scalar(&format!(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
+            ))
+            .fetch_optional(&mut connection)
+            .await
+            .map_err(display_error)?;
+            if table_exists.is_none() {
+                return Err(format!("{}: schema9 table {table} is missing", self.name));
+            }
+            let rows: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&mut connection)
+                .await
+                .map_err(display_error)?;
+            if rows != 0 {
+                return Err(format!(
+                    "{}: frozen compatibility cannot hide {} {table} row(s)",
+                    self.name, rows
+                ));
             }
         }
         connection.close().await.map_err(display_error)

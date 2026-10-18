@@ -318,7 +318,8 @@ impl Service {
         }
         exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind=?,version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},json!("exact"),json!(cid)]).await?;
         if cost != int(&c, "cost_fen") {
-            exec(db,"UPDATE cycles SET cost_source='manual',bill_import_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0 WHERE id=?",&[json!(cid)]).await?;
+            exec(db,"UPDATE cycles SET cost_source='manual',bill_import_id=NULL,manual_basis_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0 WHERE id=?",&[json!(cid)]).await?;
+            Self::clear_manual_draft(db, Some(cid), None).await?;
         }
         exec(
             db,

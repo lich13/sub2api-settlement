@@ -11,6 +11,7 @@ const LEGACY_SQL: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/ledger/legacy-written.sql"
 );
+const VENDOR_SCHEMA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/vendor_schema.sql");
 const PUBLISHED_MIGRATION_CHECKSUMS: [&str; 7] = [
     "2f7d2bb503201536c4f0b51471b56dec24fa3e4a43eee98f777ef55e6f2ee176",
     "30d331e26fec4786252dbd5ba5353b477002a943ba971c3eb7765f2a36e46ac0",
@@ -20,7 +21,7 @@ const PUBLISHED_MIGRATION_CHECKSUMS: [&str; 7] = [
     "8c11465571dfeb251884247febafc2852b4a292364e496afe69393a9caebec54",
     "f6a9788b9fb5818fef31c4866aa8716d43f9d2ecd637c09129658a45c5efb53b",
 ];
-const CURRENT_MIGRATION_VERSION: i64 = 8;
+const CURRENT_MIGRATION_VERSION: i64 = 9;
 
 #[derive(Debug, PartialEq)]
 struct EstimatedCycle {
@@ -93,6 +94,34 @@ async fn create_published_v7_ledger(path: &Path) {
         .expect("insert published migration record");
     }
     db.close().await.expect("close published v7 ledger");
+}
+
+async fn create_published_v8_ledger(path: &Path) {
+    create_published_v7_ledger(path).await;
+    let mut db = connect(path).await;
+    let vendor_schema = fs::read_to_string(VENDOR_SCHEMA).expect("read vendor schema");
+    sqlx::raw_sql(&vendor_schema)
+        .execute(&mut db)
+        .await
+        .expect("apply published vendor schema");
+    sqlx::raw_sql(
+        "ALTER TABLE profiles ADD COLUMN vendor_id INTEGER;
+         ALTER TABLE cycles ADD COLUMN vendor_id INTEGER;
+         ALTER TABLE cycles ADD COLUMN vendor_period_id INTEGER;
+         CREATE INDEX profile_vendor ON profiles(vendor_id);
+         CREATE INDEX cycle_vendor_period ON cycles(vendor_period_id,id);",
+    )
+    .execute(&mut db)
+    .await
+    .expect("apply published vendor columns");
+    let checksum = settlement::json::hash(vendor_schema.as_bytes());
+    sqlx::query("INSERT INTO rust_schema_migrations(version,checksum,applied_at) VALUES(8,?,?)")
+        .bind(checksum)
+        .bind("published-v0.11.1")
+        .execute(&mut db)
+        .await
+        .expect("record published v8 migration");
+    db.close().await.expect("close published v8 ledger");
 }
 
 async fn add_estimated_cycle(path: &Path) {
@@ -304,7 +333,7 @@ async fn published_v7_upgrade_preserves_estimated_rows_issued_snapshots_and_amou
         .expect("inspect v7 ledger");
     assert_eq!(inspection.schema_version, 7);
     assert_eq!(inspection.target_version, CURRENT_MIGRATION_VERSION);
-    assert_eq!(inspection.pending, vec![CURRENT_MIGRATION_VERSION]);
+    assert_eq!(inspection.pending, vec![8, 9]);
 
     let store = Store::open(&ledger).await.expect("upgrade v7 ledger");
     store.close().await;
@@ -372,4 +401,48 @@ async fn published_v7_upgrade_restart_is_idempotent_and_does_not_add_backups() {
         CURRENT_MIGRATION_VERSION as usize
     );
     assert_eq!(foreign_key_check(&ledger).await, 0);
+}
+
+#[tokio::test]
+async fn published_v8_upgrade_to_manual_billing_preserves_history() {
+    let temporary = TempDir::new().unwrap();
+    let ledger = temporary.path().join("settlement.sqlite3");
+    create_published_v8_ledger(&ledger).await;
+    add_estimated_cycle(&ledger).await;
+
+    let before_estimated = estimated_cycle(&ledger).await;
+    let before_settlements = settlement_snapshots(&ledger).await;
+    let before_orders = order_amounts(&ledger).await;
+    let inspection = migrations::inspect(&ledger)
+        .await
+        .expect("inspect v8 ledger");
+    assert_eq!(inspection.schema_version, 8);
+    assert_eq!(inspection.target_version, 9);
+    assert_eq!(inspection.pending, vec![9]);
+
+    let store = Store::open(&ledger).await.expect("upgrade v8 ledger");
+    store.close().await;
+
+    assert_eq!(estimated_cycle(&ledger).await, before_estimated);
+    assert_eq!(settlement_snapshots(&ledger).await, before_settlements);
+    assert_eq!(order_amounts(&ledger).await, before_orders);
+    assert_eq!(foreign_key_check(&ledger).await, 0);
+    assert!(
+        table_names(&ledger)
+            .await
+            .iter()
+            .any(|name| name == "manual_bill_bases")
+    );
+    for table in ["cycles", "vendor_periods"] {
+        assert!(
+            columns(&ledger, table)
+                .await
+                .iter()
+                .any(|name| name == "manual_basis_id")
+        );
+    }
+    let migrations = migration_pairs(&ledger).await;
+    assert_eq!(migrations.len(), 9);
+    assert_eq!(migrations[7].0, 8);
+    assert_eq!(migrations[8].0, 9);
 }

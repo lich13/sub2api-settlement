@@ -9,7 +9,7 @@ const actions: Record<string,string> = {
   create_cycle:"创建周期", edit_cycle:"修改成本与周期", confirm_cycle_start:"确认周期起点",
   mark_free:"标记免费", upgrade_paid:"升级付费", settle:"结算出单", create_expense:"新增固定费用",
   edit_expense:"修改固定费用", settle_expense:"固定费用出单", void_expense:"作废固定费用结算",
-  import_bill:"确认上游账单", bill_allocation:"确认账单分摊方式", request_account_deletion:"结算后删除账号",
+  import_bill:"确认上游账单", confirm_manual_basis:"确认补计依据", confirm_local_billing:"确认本地计费依据", bill_allocation:"确认账单分摊方式", request_account_deletion:"结算后删除账号",
   retry_account_deletion:"重试删除账号", cancel_account_deletion:"取消删除账号", account_deletion_done:"账号已删除",
   account_deletion_failed:"账号删除未完成", account_deletion_verify:"账号删除待核验", merge:"合并订单",
   submit:"付款方结清", mark_paid:"管理员标记结清", netting_payment:"对冲结清", confirm:"管理员标记结清",

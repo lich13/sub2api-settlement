@@ -408,6 +408,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 "file_name",
                 "import_id",
                 "allocation_mode",
+                "manual_basis",
             ],
             json!({"csv":null,"file_name":"usage.csv","import_id":null,"allocation_mode":null}),
         ),
@@ -473,6 +474,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             ("netting-payment", "note" | "reference")
                 | ("settle", "delete_scopes" | "vendor_renewals")
                 | ("delete-retry", "scope_digest")
+                | ("bill-preview", "manual_basis")
         ) {
             required(&v, k)?;
         }

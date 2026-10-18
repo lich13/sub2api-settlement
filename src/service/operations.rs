@@ -68,6 +68,9 @@ impl Service {
         if cycle["status"] != "open" || cycle["version"] != result["version"] {
             return Err(Error::conflict("周期已修改或已出单，请重新匹配"));
         }
+        if !result["manual_basis"].is_null() {
+            return manual_basis_csv(result);
+        }
         csv_bytes(
             &[
                 "CSV 行号",
@@ -202,4 +205,77 @@ impl Service {
             json!({"last_sync":store::meta(&mut db,"last_sync").await?,"sync_error":store::meta(&mut db,"sync_error").await?,"accounts":accounts,"checkpoint":checkpoint,"pending_deletions":jobs["count"]}),
         )
     }
+}
+
+pub(super) fn manual_basis_csv(result: &Value) -> Result<Vec<u8>> {
+    use crate::json::{array, flag};
+    let local = array(&result["local_unmatched"]).iter().map(|r| {
+        vec![
+            "本地请求".into(),
+            int(r, "usage_id").to_string(),
+            int(r, "account_id").to_string(),
+            text(r, "created_at").into(),
+            text(r, "model").into(),
+            text(r, "local_amount").into(),
+            text(r, "rate").into(),
+            text(r, "amount").into(),
+            if r["reason"] == "ambiguous" {
+                "匹配歧义"
+            } else {
+                "上游缺失"
+            }
+            .into(),
+            if flag(r, "included") {
+                "计入"
+            } else {
+                "排除"
+            }
+            .into(),
+        ]
+    });
+    let upstream = array(&result["unmatched"])
+        .iter()
+        .map(|r| (r, false))
+        .chain(array(&result["outside"]).iter().map(|r| (r, true)))
+        .map(|(r, outside)| {
+            vec![
+                "上游账单".into(),
+                int(r, "row").to_string(),
+                String::new(),
+                text(r, "created_at").into(),
+                text(r, "model").into(),
+                String::new(),
+                String::new(),
+                text(r, "amount").into(),
+                if outside {
+                    "周期范围外"
+                } else if r["reason"] == "ambiguous" {
+                    "匹配歧义"
+                } else {
+                    "本地缺失"
+                }
+                .into(),
+                if outside || result["allocation_mode"] == "matched_only" {
+                    "排除"
+                } else {
+                    "按比例分摊"
+                }
+                .into(),
+            ]
+        });
+    csv_bytes(
+        &[
+            "来源",
+            "记录编号",
+            "母账号编号",
+            "请求时间（UTC）",
+            "模型",
+            "本地原始消费",
+            "倍率",
+            "金额（元，原始精度）",
+            "原因",
+            "处理",
+        ],
+        local.chain(upstream),
+    )
 }

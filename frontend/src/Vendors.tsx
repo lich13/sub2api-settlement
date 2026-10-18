@@ -1,3 +1,4 @@
+import { ManualBillingEditor, useManualBilling } from "./ManualBilling";
 import React, { useEffect, useRef, useState } from "react";
 import { X, ChevronDown } from "lucide-react";
 import { api, money, costInput, amountPattern, inputDate, fromInput, date, consumption, billedMoney, downloadCsv } from "./api";
@@ -87,21 +88,49 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
   </div></dialog>;
 }
 
-export function VendorBillPanel({period,cycles,end,previewKey,onConfirmed}:{period:VendorPeriod;cycles:Cycle[];end:string;previewKey:string;onConfirmed:()=>Promise<void>}){
-  const [csv,setCsv]=useState("");const [fileName,setFileName]=useState("");const [preview,setPreview]=useState<VendorBillPreview|null>(null);const [difference,setDifference]=useState(false);const [outside,setOutside]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState("");const [start,setStart]=useState(inputDate(period.start));const seq=useRef(0);const reads=useRef(0);
-  useEffect(()=>{++seq.current;setPreview(null);setDifference(false);setOutside(false);setBusy(false);},[end,period.version,previewKey]);
+export function VendorBillPanel({period,cycles,end,previewKey,onConfirmed,onDraftChange}:{period:VendorPeriod;cycles:Cycle[];end:string;previewKey:string;onConfirmed:()=>Promise<void>;onDraftChange?:(dirty:boolean)=>void}){
+  const [csv,setCsv]=useState("");const [fileName,setFileName]=useState("");const [preview,setPreview]=useState<VendorBillPreview|null>(null);
+  const [difference,setDifference]=useState(false);const [outside,setOutside]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState("");
+  const [start,setStart]=useState(inputDate(period.start));const seq=useRef(0);const reads=useRef(0);const manual=useManualBilling(period.manual_basis);
+  function invalidate(){++seq.current;setPreview(null);setDifference(false);setOutside(false);setBusy(false);}
+  function changed(){invalidate();onDraftChange?.(true);}
+  const manualWindow=useRef(end);
+  useEffect(()=>{invalidate();manual.clearDiagnostics(manualWindow.current!==end);manualWindow.current=end;},[end,period.version,previewKey]);
   useEffect(()=>()=>{++seq.current;++reads.current;},[]);
-  async function inspect(existing=false){const token=++seq.current;setBusy(true);setError("");try{const p=await api<VendorBillPreview>(`/vendor-periods/${period.id}/bill-previews`,"POST",{version:period.version,end,...(existing?{import_id:period.bill_import_id}:{csv,file_name:fileName})});if(token!==seq.current)return;setPreview(p);setDifference(false);setOutside(false);}catch(e){if(token===seq.current)setError((e as Error).message);}finally{if(token===seq.current)setBusy(false);}}
-  async function confirm(){if(!preview)return;const token=seq.current;setBusy(true);setError("");try{await api(`/vendor-periods/${period.id}/bill-confirm`,"POST",{version:period.version,preview_id:preview.id,accept_difference:difference,accept_outside:outside});if(token===seq.current){setPreview(null);await onConfirmed();}}catch(e){if(token===seq.current)setError((e as Error).message);}finally{if(token===seq.current)setBusy(false);}}
+  async function inspect(existing=false){
+    if(!manual.valid){setError("倍率须为非负数，最多六位小数");return;}
+    const token=++seq.current;setBusy(true);setError("");
+    try{
+      const p=await api<VendorBillPreview>(`/vendor-periods/${period.id}/bill-previews`,"POST",{version:period.version,end,
+        ...(manual.source==="local_only"?{}:existing?{import_id:period.bill_import_id}:{csv,file_name:fileName}),...(manual.basis?{manual_basis:manual.basis}:{})});
+      if(token!==seq.current)return;setPreview(p);manual.setDiagnostics(p);setDifference(false);setOutside(false);
+    }catch(e){if(token===seq.current){setPreview(null);setError((e as Error).message);}}finally{if(token===seq.current)setBusy(false);}
+  }
+  async function confirm(){if(!preview)return;const token=seq.current;setBusy(true);setError("");try{
+    await api(`/vendor-periods/${period.id}/bill-confirm`,"POST",{version:period.version,preview_id:preview.id,accept_difference:difference,accept_outside:outside});
+    if(token===seq.current){setPreview(null);onDraftChange?.(false);await onConfirmed();}
+  }catch(e){if(token===seq.current)setError((e as Error).message);}finally{if(token===seq.current)setBusy(false);}}
   async function confirmStart(){setBusy(true);setError("");try{await api(`/vendor-periods/${period.id}/start-confirm`,"POST",{version:period.version,start:start===inputDate(period.start)?period.start:fromInput(start),members:cycles.map(c=>({cycle_id:c.id,version:c.version}))});await onConfirmed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
   return <section className="bill-import vendor-bill"><div className="bill-import-head"><strong>{period.name} · 整组上游账单</strong><b className="amount">{money(period.cost_fen)}</b></div><p className="field-hint">{cycles.map(c=>c.name).join("、")} · 统一按本期总成本分摊</p>
     {!period.start_confirmed&&<div className="start-confirm"><label>确认共同起点<input type="datetime-local" step="1" value={start} onChange={e=>setStart(e.target.value)}/></label><button className="button" disabled={busy} onClick={confirmStart}>确认起点</button></div>}
-    <label>CSV 文件<input type="file" accept=".csv,text/csv" onChange={async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){setError("CSV 不能超过 10 MB");return;}const token=++reads.current;++seq.current;setPreview(null);setDifference(false);setOutside(false);setBusy(false);const text=await f.text();if(token===reads.current){setCsv(text);setFileName(f.name);}}}/></label>
-    <div className="start-actions"><button className="button" disabled={busy||!csv.trim()||!end} onClick={()=>inspect()}>{busy?"处理中…":"账单预览"}</button>{!!period.bill_import_id&&<button className="button" disabled={busy||!end} onClick={()=>inspect(true)}>沿用已导入账单</button>}</div>
-    {preview&&<div className="bill-stats"><div><span>组准确成本</span><b>{money(preview.cost_fen)}</b></div><div><span>账单总额</span><b>{money(preview.bill_total_fen)}</b></div><div><span>差额</span><b>{preview.difference_amount && Number(preview.difference_amount)!==0 && Math.abs(Number(preview.difference_amount))<0.005 ? "差异不足 ¥0.01" : money(preview.cost_fen-preview.bill_total_fen)}</b></div><div><span>未匹配</span><b>{preview.unmatched_count} 条 · {billedMoney(preview.unmatched_amount)}</b></div><p className="field-hint">{preview.basis==="local_consumption"?"无正金额匹配，按各账号本地原始消费分摊。":"未匹配费用按各账号已匹配上游扣费比例分摊。"}</p>{preview.coverage_warnings.map(g=><p key={g.account_id} className="form-error">{g.warning}</p>)}{preview.accounts.map(a=><div key={a.account_id}><span>{a.name}</span><b className="amount">{a.amount_fen==null?"—":money(a.amount_fen)}</b></div>)}{!!preview.outside_count&&<div><span>范围外</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
-      {(preview.unmatched_count>0||preview.outside_count>0)&&<button className="text-button" onClick={()=>downloadCsv(`/vendor-periods/${period.id}/bill-previews/${preview.id}/unmatched.csv`,"账号组未匹配账单.csv").catch(e=>setError(e.message))}>导出未匹配明细</button>}
-      {preview.difference_required&&<label className="checkline"><input type="checkbox" checked={difference} onChange={e=>setDifference(e.target.checked)}/>确认组成本与账单、未匹配和覆盖差异</label>}{!!preview.outside_count&&<label className="checkline"><input type="checkbox" checked={outside} onChange={e=>setOutside(e.target.checked)}/>确认排除范围外记录</label>}
-      {!preview.can_confirm&&<p className="form-error">没有正金额匹配或本地消费依据，无法分摊</p>}<button className="button primary" disabled={busy||!preview.can_confirm||!period.start_confirmed||(preview.difference_required&&!difference)||(preview.outside_count>0&&!outside)} onClick={confirm}>确认分摊依据</button></div>}
+    <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={cycles} changed={changed}/>
+    {manual.source!=="local_only"&&<label>CSV 文件<input type="file" accept=".csv,text/csv" onChange={async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){setError("CSV 不能超过 10 MB");return;}const token=++reads.current;changed();manual.clearDiagnostics();const text=await f.text();if(token===reads.current){setCsv(text);setFileName(f.name);}}}/></label>}
+    <div className="start-actions"><button className="button" disabled={busy||!manual.valid||(manual.source!=="local_only"&&!csv.trim())||!end} onClick={()=>inspect()}>{busy?"处理中…":"账单预览"}</button>{manual.source!=="local_only"&&!!period.bill_import_id&&<button className="button" disabled={busy||!manual.valid||!end} onClick={()=>inspect(true)}>沿用已导入账单</button>}</div>
+    {preview&&<div className="bill-stats">
+      <div><span>组准确成本</span><b>{money(preview.cost_fen)}</b></div><div><span>账单总额</span><b>{preview.bill_total_fen==null?"未提供":money(preview.bill_total_fen)}</b></div>
+      {preview.bill_total_fen!=null&&<div><span>差额</span><b>{preview.difference_amount&&Number(preview.difference_amount)!==0&&Math.abs(Number(preview.difference_amount))<0.005?"差异不足 ¥0.01":money(preview.cost_fen-preview.bill_total_fen)}</b></div>}
+      {preview.manual_summary&&<div><span>手动补计权重</span><b>{billedMoney(preview.manual_summary.amount)}</b></div>}
+      <div><span>未匹配上游</span><b>{preview.unmatched_count} 条 · {billedMoney(preview.unmatched_amount)}</b></div>
+      <p className="field-hint">{preview.basis==="manual_supplement"?"按已匹配扣费与手动补计权重拆分，组总成本不变。":preview.basis==="local_consumption"?"无正金额匹配，按各账号本地原始消费分摊。":"未匹配费用按各账号已匹配上游扣费比例分摊。"}</p>
+      {preview.coverage_warnings.map(g=><p key={g.account_id} className="form-error">{g.warning}</p>)}
+      {preview.accounts.map(a=><div key={a.account_id}><span>{a.name}</span><b className="amount">{a.amount_fen==null?"—":money(a.amount_fen)}</b></div>)}
+      {!!preview.outside_count&&<div><span>范围外</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
+      {(preview.unmatched_count>0||preview.outside_count>0||!!preview.local_unmatched?.length)&&<button className="text-button" onClick={()=>downloadCsv(`/vendor-periods/${period.id}/bill-previews/${preview.id}/unmatched.csv`,"账号组未匹配账单.csv").catch(e=>setError(e.message))}>导出未匹配明细</button>}
+      {preview.difference_required&&<label className="checkline"><input type="checkbox" checked={difference} onChange={e=>setDifference(e.target.checked)}/>确认组成本与账单、未匹配和覆盖差异</label>}
+      {!!preview.outside_count&&<label className="checkline"><input type="checkbox" checked={outside} onChange={e=>setOutside(e.target.checked)}/>确认排除范围外记录</label>}
+      {!preview.can_confirm&&<p className="form-error">{preview.manual_basis?"请确认本地消费覆盖及正金额分摊依据":"没有正金额匹配或本地消费依据，无法分摊"}</p>}
+      <button className="button primary" disabled={busy||!preview.can_confirm||!period.start_confirmed||(preview.difference_required&&!difference)||(preview.outside_count>0&&!outside)} onClick={confirm}>确认分摊依据</button>
+    </div>}
     {error&&<p className="form-error" role="alert">{error}</p>}
   </section>;
 }

@@ -3,7 +3,7 @@ use crate::{backup, json::hash, time};
 use serde::Serialize;
 
 const HISTORY: &str = "CREATE TABLE IF NOT EXISTS rust_schema_migrations(version INTEGER PRIMARY KEY,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)";
-const LATEST: i64 = 8;
+const LATEST: i64 = 9;
 #[derive(Serialize)]
 pub struct Inspection {
     pub schema_version: i64,
@@ -26,6 +26,7 @@ fn checksum(version: i64) -> String {
         6 => include_str!("../reminder_schema.sql"),
         7 => include_str!("../operations_schema.sql"),
         8 => include_str!("../vendor_schema.sql"),
+        9 => include_str!("../manual_billing_schema.sql"),
         _ => "",
     };
     hash(bytes.as_bytes())
@@ -168,6 +169,11 @@ pub(super) async fn apply(db: &mut SqliteConnection) -> Result<()> {
                     .execute(&mut *db)
                     .await?;
                 super::legacy::vendor_columns(db).await?;
+            }
+            9 => {
+                sqlx::raw_sql(include_str!("../manual_billing_schema.sql"))
+                    .execute(&mut *db)
+                    .await?;
             }
             _ => unreachable!(),
         }

@@ -107,6 +107,13 @@ impl Decimal {
             negative_zero: false,
         }
     }
+    pub fn multiply(&self, other: &Self) -> Self {
+        Self {
+            coefficient: &self.coefficient * &other.coefficient,
+            scale: self.scale + other.scale,
+            negative_zero: false,
+        }
+    }
     pub fn rounded(&self, precision: u32) -> Self {
         // 2^(3p) < 10^p: ordinary amounts need no decimal string allocation to
         // prove that they already fit the requested significant digits.

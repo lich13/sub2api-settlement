@@ -118,6 +118,9 @@ impl Service {
             for p in &mut periods {
                 // Only public cycle metadata is returned here; raw bill rows stay in admin-only endpoints.
                 p["members"] = json!(Self::vendor_members(&mut db, int(p, "id")).await?);
+                if text(actor, "role") == "admin" && !p["manual_basis_id"].is_null() {
+                    p["manual_basis"] = json!(Self::manual_config(&mut db, p).await?);
+                }
                 if text(actor, "role") != "admin" {
                     p.as_object_mut().map(|o| o.remove("bill_digest"));
                 }

@@ -1,3 +1,4 @@
+import { ManualBillingEditor, useManualBilling } from "./ManualBilling";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -543,7 +544,7 @@ function Allocation({ value }: { value: Calculation | ExpenseCalculation }) {
         <strong className="amount">{!isExpense && cycleValue.allocation_pending ? "待账单拆分" : money(amount)}</strong>
       </div>
       {!isExpense && <div className="detail-facts"><span>周期总消费 <b>{consumption(cycleValue.total_consumption)}</b></span><span>调用 <b>{cycleValue.record_count.toLocaleString()}</b></span><span title="本次计费（元）÷ 周期原始总消费">{cycleValue.display?.settled ? "结算倍率" : "预估倍率"} <b>{cycleValue.display?.cost_multiplier != null ? `${cycleValue.display.cost_multiplier}×` : "—"}</b></span></div>}
-      {!isExpense && cycleValue.bill && !cycleValue.vendor_period && <div className="detail-facts"><span>{cycleValue.bill.allocation_mode === "matched_only" ? "精准匹配" : "上游扣费分摊"}</span><span>上游总扣费 <b>{money(cycleValue.cycle.cost_fen)}</b></span><span>本次计费 <b>{money(amount)}</b></span><span>已匹配 <b>{cycleValue.bill.matched_count} 条</b></span><span>{cycleValue.bill.allocation_mode === "matched_only" ? "未匹配不计费" : "未匹配"} <b>{cycleValue.bill.unmatched_count} 条 · {billedMoney(cycleValue.bill.unmatched_amount)}</b></span></div>}
+      {!isExpense && cycleValue.bill && !cycleValue.vendor_period && <div className="detail-facts"><span>{cycleValue.bill.allocation_mode === "matched_only" ? "精准匹配" : "上游扣费分摊"}</span><span>上游总扣费 <b>{cycleValue.bill.manual_summary?.source==="local_only"?"未提供":money(cycleValue.bill.upstream_total_fen??cycleValue.cycle.cost_fen)}</b></span>{cycleValue.bill.manual_summary&&<span>手动补计 <b>{billedMoney(cycleValue.bill.manual_summary.amount)}</b></span>}<span>本次计费 <b>{money(amount)}</b></span><span>已匹配 <b>{cycleValue.bill.matched_count} 条</b></span><span>{cycleValue.bill.allocation_mode === "matched_only" ? "未匹配不计费" : "未匹配"} <b>{cycleValue.bill.unmatched_count} 条 · {billedMoney(cycleValue.bill.unmatched_amount)}</b></span></div>}
       <AllocationRows allocations={value.allocations} />
     </section>
   );
@@ -630,12 +631,14 @@ function BillImportPanel({
   end,
   previewKey,
   onConfirmed,
+  onDraftChange,
 }: {
   cycle: Cycle;
   calculation?: Calculation;
   end: string;
   previewKey: string;
   onConfirmed: () => Promise<void>;
+  onDraftChange?: (dirty:boolean)=>void;
 }) {
   const [csv, setCsv] = useState("");
   const [fileName, setFileName] = useState("");
@@ -646,8 +649,11 @@ function BillImportPanel({
   const [error, setError] = useState("");
   const effectiveCycle = calculation && calculation.cycle.version >= cycle.version ? calculation.cycle : cycle;
   const [mode, setMode] = useState<BillMode>(effectiveCycle.bill_allocation_mode || "proportional");
+  const manual=useManualBilling(calculation?.bill?.manual_basis);
+  function invalidate(){onDraftChange?.(true);++requestVersion.current;setPreview(null);setBusy(false);setAcceptDifference(false);setAcceptOutside(false);}
   const requestVersion = useRef(0);
   const fileRead = useRef(0);
+  const manualWindow = useRef(end);
 
   useEffect(() => { setMode(effectiveCycle.bill_allocation_mode || "proportional"); }, [effectiveCycle.id, effectiveCycle.bill_allocation_mode]);
 
@@ -658,12 +664,15 @@ function BillImportPanel({
     setAcceptDifference(false);
     setAcceptOutside(false);
     setError("");
+    manual.clearDiagnostics(manualWindow.current !== end);
+    manualWindow.current = end;
   }, [end, effectiveCycle.id, effectiveCycle.version, previewKey]);
   useEffect(() => () => { ++requestVersion.current; ++fileRead.current; }, []);
 
   async function inspect(useExisting = false, selectedMode = mode) {
     if (!end) { setError("请填写有效的结束时间"); return; }
-    if (!useExisting && !csv.trim()) {
+    if (!manual.valid){setError("倍率须为非负数，最多六位小数");return;}
+    if (manual.source!=="local_only" && !useExisting && !csv.trim()) {
       setError("请选择 CSV 文件");
       return;
     }
@@ -675,10 +684,12 @@ function BillImportPanel({
         version: effectiveCycle.version,
         end,
         allocation_mode: selectedMode,
-        ...(useExisting ? { import_id: effectiveCycle.bill_import_id } : { csv, file_name: fileName || "usage.csv" }),
+        ...(manual.source==="local_only"?{}:useExisting ? { import_id: effectiveCycle.bill_import_id } : { csv, file_name: fileName || "usage.csv" }),
+        ...(manual.basis?{manual_basis:manual.basis}:{}),
       });
       if (token !== requestVersion.current) return;
       setPreview(result);
+      manual.setDiagnostics(result);
       setAcceptDifference(false);
       setAcceptOutside(false);
     } catch (e) {
@@ -709,6 +720,7 @@ function BillImportPanel({
         accept_outside: acceptOutside,
       });
       setPreview(null);
+      onDraftChange?.(false);
       await onConfirmed();
     } catch (e) {
       setError((e as Error).message);
@@ -719,9 +731,11 @@ function BillImportPanel({
   return (
     <div className="bill-import">
       <div className="bill-import-head"><strong>上游账单</strong><span>{effectiveCycle.cost_source === "upstream_bill" ? "替换账单" : "独立账号"}</span></div>
-      <label>分摊方式<Select value={mode} disabled={busy} onChange={(e) => {
+      <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={[{account_id:effectiveCycle.account_id,name:effectiveCycle.name}]} changed={invalidate} proportional={mode==="proportional"} />
+      {manual.source!=="local_only"&&<><label>分摊方式<Select value={mode} disabled={busy} onChange={(e) => {
         const next = e.target.value as BillMode;
-        setMode(next); ++requestVersion.current; setPreview(null); setAcceptDifference(false); setAcceptOutside(false);
+        setMode(next); invalidate();
+        manual.clearDiagnostics();
         if (csv.trim() || effectiveCycle.bill_import_id) void inspect(!csv.trim(), next);
       }}><option value="proportional">比例分摊</option><option value="matched_only">精准匹配</option></Select></label>
       <label>CSV 文件
@@ -730,7 +744,7 @@ function BillImportPanel({
           if (!file) return;
           if (file.size > 10 * 1024 * 1024) { setError("CSV 不能超过 10 MB"); return; }
           const token = ++fileRead.current;
-          ++requestVersion.current;
+          invalidate();manual.clearDiagnostics();
           setBusy(false);
           setPreview(null);
           const content = await file.text();
@@ -739,20 +753,22 @@ function BillImportPanel({
           setCsv(content);
         }} />
       </label>
+      </>}
       <div className="start-actions">
-        <button className="button" disabled={busy || !csv.trim() || !end} onClick={() => inspect()}>{busy && !preview ? "匹配中…" : "账单预览"}</button>
-        {!!effectiveCycle.bill_import_id && <button className="button" disabled={busy} onClick={() => inspect(true)}>沿用已导入账单</button>}
+        <button className="button" disabled={busy || !manual.valid || (manual.source!=="local_only"&&!csv.trim()) || !end} onClick={() => inspect()}>{busy && !preview ? "匹配中…" : "账单预览"}</button>
+        {manual.source!=="local_only" && !!effectiveCycle.bill_import_id && <button className="button" disabled={busy} onClick={() => inspect(true)}>沿用已导入账单</button>}
       </div>
       {preview && <div className="bill-stats">
-        <div><span>文件</span><b>{preview.file_name}</b></div>
-        <div><span>上游总扣费</span><b>{money(preview.cost_fen)}</b></div>
+        {preview.file_name&&<div><span>文件</span><b>{preview.file_name}</b></div>}
+        <div><span>上游总扣费</span><b>{preview.manual_basis?.source==="local_only"?"未提供":money(preview.upstream_total_fen??preview.cost_fen)}</b></div>
+        {preview.manual_summary&&<div><span>手动补计</span><b>{billedMoney(preview.manual_summary.amount)}</b></div>}
         <div><span>本次计费</span><b>{money(preview.billable_cost_fen ?? preview.cost_fen)}</b></div>
         <div><span>已匹配</span><b>{preview.matched_count} 条 · {billedMoney(preview.matched_amount)}</b></div>
         <div><span>{preview.allocation_mode === "matched_only" ? "未匹配不计费" : "未匹配"}</span><b>{preview.unmatched_count} 条 · {billedMoney(preview.unmatched_amount)}</b></div>
         {preview.coverage_warning && <FormError error={preview.coverage_warning} />}
         {!!preview.local_unmatched_count && <div><span>本地未列入账单</span><b>{preview.local_unmatched_count} 条</b></div>}
         {!!preview.outside_count && <div><span>范围外</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
-        {(preview.unmatched_count > 0 || preview.outside_count > 0) && <button className="text-button" disabled={busy} onClick={async () => {
+        {(preview.unmatched_count > 0 || preview.outside_count > 0 || (preview.local_unmatched?.length||0)>0) && <button className="text-button" disabled={busy} onClick={async () => {
           const token = requestVersion.current;
           setBusy(true); setError("");
           try {
@@ -766,8 +782,8 @@ function BillImportPanel({
         {preview.difference_required && <label className="checkline"><input type="checkbox" checked={acceptDifference} onChange={(e) => setAcceptDifference(e.target.checked)} />确认本地差异，按已匹配扣费比例分摊</label>}
         {!!preview.outside_count && <label className="checkline"><input type="checkbox" checked={acceptOutside} onChange={(e) => setAcceptOutside(e.target.checked)} />确认不计入范围外记录</label>}
         <BillAllocation cycle={effectiveCycle} preview={preview} />
-        {!preview.can_confirm && <FormError error="没有正金额匹配依据，无法分摊" />}
-        <button className="button primary" disabled={busy || !preview.can_confirm || (preview.difference_required && !acceptDifference) || (!!preview.outside_count && !acceptOutside)} onClick={confirm}>{busy ? "确认中…" : preview.allocation_mode === "matched_only" ? "确认仅按匹配金额计费" : "确认替换成本"}</button>
+        {!preview.can_confirm && <FormError error="请确认起点、消费覆盖及正金额计费依据" />}
+        <button className="button primary" disabled={busy || !preview.can_confirm || (preview.difference_required && !acceptDifference) || (!!preview.outside_count && !acceptOutside)} onClick={confirm}>{busy ? "确认中…" : preview.manual_basis ? "确认计费依据" : preview.allocation_mode === "matched_only" ? "确认仅按匹配金额计费" : "确认替换成本"}</button>
       </div>}
       {error && <div className="form-error">{error}</div>}
     </div>
@@ -803,6 +819,8 @@ export function SettleForm({
   const [vendorRenew, setVendorRenew] = useState<Record<number,{cost:string;creditor_id:number}>>({});
   const renewalDefaultsSet = useRef(false);
   const [deleteIds, setDeleteIds] = useState<number[]>([]);
+  const [billDrafts,setBillDrafts]=useState<Record<string,boolean>>({});
+  const hasBillDraft=Object.values(billDrafts).some(Boolean);
   const [deleteScopes,setDeleteScopes] = useState<Record<number,DeletionScopeValue|null>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -837,6 +855,7 @@ export function SettleForm({
   const groups=[...groupMap.values()];
   const calculations = new Map((preview?.cycles || []).map((calculation) => [calculation.cycle.id, calculation]));
   async function settle() {
+    if(hasBillDraft){setError("请先预览并确认已修改的计费依据");return;}
     if (!pendingSubmission.current && deleteIds.some(id=>!deleteScopes[id])) {setError("请先核验并确认删除范围");return;}
     if ((!preview || loading) && !pendingSubmission.current) return;
     if (!pendingSubmission.current && preview && preview.cycles.some((c) => c.can_settle === false)) {
@@ -899,12 +918,13 @@ export function SettleForm({
           </label>}
         </div>
         <fieldset className="settlement-fields" disabled={busy || !!pendingSubmission.current}>
-        {groups.map(g=><div key={g.id}><VendorBillPanel period={g} cycles={[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id)} end={[...cycleMap.values()].find(c=>c.vendor_period_id===g.id&&c.end)?.end||cutoff} previewKey={preview?.id||""} onConfirmed={()=>inspect()}/><label className="checkline renewal"><input type="checkbox" checked={!!vendorRenew[g.id]} onChange={e=>setVendorRenew(prev=>{const next={...prev};if(e.target.checked)next[g.id]={cost:costInput(g.cost_fen),creditor_id:g.creditor_id};else delete next[g.id];return next;})}/>结算后整组续费</label>{vendorRenew[g.id]&&<div className="form-columns vendor-renewal"><label>下期组成本（元）<input inputMode="decimal" value={vendorRenew[g.id]?.cost??costInput(g.cost_fen)} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{creditor_id:prev[g.id]?.creditor_id??g.creditor_id,cost:e.target.value}}))}/></label><label>下期统一垫付人<Select value={vendorRenew[g.id]?.creditor_id??g.creditor_id} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{cost:prev[g.id]?.cost??costInput(g.cost_fen),creditor_id:Number(e.target.value)}}))}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}</div>)}
+        {groups.map(g=><div key={g.id}><VendorBillPanel onDraftChange={dirty=>setBillDrafts(prev=>({...prev,[`group-${g.id}`]:dirty}))} period={g} cycles={[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id)} end={[...cycleMap.values()].find(c=>c.vendor_period_id===g.id&&c.end)?.end||cutoff} previewKey={preview?.id||""} onConfirmed={()=>inspect()}/><label className="checkline renewal"><input type="checkbox" checked={!!vendorRenew[g.id]} onChange={e=>setVendorRenew(prev=>{const next={...prev};if(e.target.checked)next[g.id]={cost:costInput(g.cost_fen),creditor_id:g.creditor_id};else delete next[g.id];return next;})}/>结算后整组续费</label>{vendorRenew[g.id]&&<div className="form-columns vendor-renewal"><label>下期组成本（元）<input inputMode="decimal" value={vendorRenew[g.id]?.cost??costInput(g.cost_fen)} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{creditor_id:prev[g.id]?.creditor_id??g.creditor_id,cost:e.target.value}}))}/></label><label>下期统一垫付人<Select value={vendorRenew[g.id]?.creditor_id??g.creditor_id} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{cost:prev[g.id]?.cost??costInput(g.cost_fen),creditor_id:Number(e.target.value)}}))}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}</div>)}
         {!!billCycles.length && (
           <div className="bill-import-list">
             {billCycles.map((cycle) => (
               <BillImportPanel
                 key={cycle.id}
+                onDraftChange={dirty=>setBillDrafts(prev=>({...prev,[`cycle-${cycle.id}`]:dirty}))}
                 cycle={cycle}
                 calculation={calculations.get(cycle.id)}
                 end={cutoff}
@@ -1000,7 +1020,7 @@ export function SettleForm({
           </button>
           <button
             className="button primary"
-            disabled={busy || (!pendingSubmission.current && (loading || !preview || preview.cycles.some((c) => c.can_settle === false) || deleteIds.some(id=>!deleteScopes[id])))}
+            disabled={hasBillDraft || busy || (!pendingSubmission.current && (loading || !preview || preview.cycles.some((c) => c.can_settle === false) || deleteIds.some(id=>!deleteScopes[id])))}
             onClick={settle}
           >
             {busy ? "结算中…" : pendingSubmission.current ? "重试结算" : "确认结算"}

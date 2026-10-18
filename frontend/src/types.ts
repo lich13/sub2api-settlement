@@ -1,6 +1,9 @@
 export type StartMode = "exact" | "date_estimate" | "minute_estimate" | "earliest_usage";
 export type CostKind = "exact" | "estimated";
 export type BillMode = "proportional" | "matched_only";
+export type ManualBasis = {source:"upstream"|"local_only";rates:{account_id:number;rate:string}[];ambiguous_usage_ids:number[]};
+export type LocalUnmatched = {usage_id:number;account_id:number;user_id:number;created_at:string;model:string;local_amount:string;rate:string|null;amount:string;reason:"missing"|"ambiguous";included:boolean};
+export type ManualSummary = {source:"upstream"|"local_only";amount:string;accounts:{account_id:number;rate:string|null;request_count:number;excluded_count:number;local_amount:string;amount:string}[]};
 export type AccountState = { revision: string; active_ids: number[]; accounts?: { id: number; name: string }[]; checked_at: string | null; error: string | null };
 export type DeletionJob = { id: number; account_id: number; account_name: string; settlement_id: number; status: string; version: number; error: string | null; updated_at: string };
 export type Actor = {
@@ -166,6 +169,9 @@ export type Calculation = {
   cost_kind?: CostKind;
   cost_warning?: string | null;
   bill?: {
+    manual_basis?: ManualBasis;
+    manual_summary?: ManualSummary;
+    upstream_total_fen?: number|null;
     allocation_mode?: BillMode;
     cost_fen?: number;
     billable_cost_fen?: number;
@@ -183,17 +189,19 @@ export type Calculation = {
   };
 };
 export type VendorPeriod = {
+  manual_basis?: ManualBasis;
+  manual_basis_id?: number|null;
   id: number; vendor_id: number; name: string; cost_fen: number; creditor_id: number;
   creditor_name?: string; start: string; end: string | null; start_mode?: StartMode;
   start_confirmed: boolean | number; version: number; status?: string;
   members?: Cycle[]; member_ids?: number[]; bill_import_id?: number | null;
-  pending_bill?: boolean; basis?: "matched_upstream" | "local_consumption";
+  pending_bill?: boolean; basis?: "matched_upstream" | "local_consumption" | "manual_supplement";
 };
 export type Vendor = { id: number; name: string; cost_fen: number; creditor_id: number; creditor_name?: string; version: number; archived_at: string | null; periods: VendorPeriod[]; current_members?: {account_id:number;name:string;account_deleted:boolean|number;profile_version:number;renewal_excluded?:boolean|number}[]; current_period?:VendorPeriod|null; waiting_renewal?:boolean };
 export type VendorBillPreview = BillPreview & {
   difference_amount?: string;
-  bill_total_fen: number; accounts: {account_id:number;cycle_id:number;name:string;amount_fen:number|null;total_consumption:string;allocations:Share[]}[];
-  basis: "matched_upstream" | "local_consumption"; coverage_warnings: {account_id:number;warning:string}[];
+  bill_total_fen: number|null; accounts: {account_id:number;cycle_id:number;name:string;amount_fen:number|null;total_consumption:string;allocations:Share[]}[];
+  basis: "matched_upstream" | "local_consumption" | "manual_supplement"; coverage_warnings: {account_id:number;warning:string}[];
 };
 export type ExpenseMember = {
   user_id: number;
@@ -222,13 +230,17 @@ export type ExpenseCalculation = {
   digest?: string;
 };
 export type BillPreview = {
+  manual_basis?: ManualBasis;
+  manual_summary?: ManualSummary;
+  local_unmatched?: LocalUnmatched[];
+  upstream_total_fen?: number|null;
   allocation_mode?: BillMode;
   billable_cost_fen?: number;
   excluded_amount?: string;
   coverage_warning?: string | null;
   id: string;
   cost_fen: number;
-  total: string;
+  total: string|null;
   matched_amount: string;
   unmatched_amount: string;
   matched_count: number;

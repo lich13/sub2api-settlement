@@ -49,7 +49,8 @@ impl Service {
         Ok((total, shares))
     }
     pub async fn overview_calculation(&self, db: &mut Db, c: &Value, end: &str) -> Result<Value> {
-        if !c["vendor_period_id"].is_null()
+        if !c["manual_basis_id"].is_null()
+            || !c["vendor_period_id"].is_null()
             || (c["cost_source"] == "upstream_bill" && int(c, "bill_import_id") != 0)
         {
             return self.preview_calculation(db, c, end).await;
@@ -166,7 +167,9 @@ impl Service {
         } else {
             None
         };
-        let details = if bill.is_some() {
+        let manual = Self::manual_config(db, c).await?;
+        let pending_manual = Self::has_manual_draft(db, Some(int(c, "id")), None).await?;
+        let details = if bill.is_some() || manual.is_some() {
             Self::details(db, c, end).await?
         } else {
             BTreeMap::new()
@@ -179,19 +182,22 @@ impl Service {
             let row_digest=digest(&rows);let confirmed=c.get("start_confirmed").map(|_|flag(&c,"start_confirmed")).unwrap_or(true);
             let mut result=merge(json!({"cycle":c,"end":end,"total_consumption":total.to_string(),"allocations":shares,"digest":row_digest,"record_count":rows.len(),"data_quality":if confirmed{"complete"}else{"estimated"},"can_settle":confirmed}),start_meta(&c));
             if c.get("cost_kind").is_some_and(|k|k!="exact"){result["can_settle"]=json!(false);result["cost_warning"]=json!("请先确认准确成本或导入上游账单");}
-            if let Some(bill)=bill{
+            if bill.is_some() || manual.is_some(){
+                let bill = bill.unwrap_or(json!({"rows":"[]"}));
                 let bill_rows:Vec<BillRow>=serde_json::from_str(text(&bill,"rows"))?;
                 let mode=c["bill_allocation_mode"].as_str().unwrap_or("proportional");
-                let resolved=billing::reconcile(&bill_rows,&rows,&details,text(&c,"start"),&end,mode)?;
+                let resolved=if let Some(config)=&manual {crate::manual_billing::reconcile(&bill_rows,&rows,&details,text(&c,"start"),&end,mode,config,&[int(&c,"account_id")])?}else{billing::reconcile(&bill_rows,&rows,&details,text(&c,"start"),&end,mode)?};
                 let mut allocations=bill_allocations(&resolved,int(&c,"creditor_id"))?;Self::apply_names(&mut allocations,&names);
                 result["allocations"]=allocations;result["digest"]=json!(digest(&json!([row_digest,resolved["digest"],bill["file_hash"]])));
                 let valid=c["bill_end"]==end&&c["bill_digest"]==resolved["digest"]&&c["cost_fen"]==resolved["cost_fen"];
                 if !valid{result["can_settle"]=json!(false);result["cost_warning"]=json!("账单范围或匹配结果已变化，请重新确认账单");}
-                if !Decimal::parse(text(&resolved,"matched_amount"))?.positive(){result["can_settle"]=json!(false);result["cost_warning"]=json!("没有正金额匹配依据，无法分摊");}
+                if if manual.is_some(){!flag(&resolved,"can_confirm")}else{!Decimal::parse(text(&resolved,"matched_amount"))?.positive()}{result["can_settle"]=json!(false);result["cost_warning"]=json!("没有正金额匹配依据，无法分摊");}
                 if mode=="proportional"&&(int(&resolved,"unmatched_count")!=0||gap.is_some())&&!flag(&c,"bill_difference_confirmed"){result["can_settle"]=json!(false);result["cost_warning"]=json!("请确认上游账单与本地记录的差异");}
                 if gap.is_some()||int(&resolved,"unmatched_count")!=0{result["data_quality"]=json!("upstream_difference");}
+                if manual.is_some() && gap.is_some(){result["can_settle"]=json!(false);result["cost_warning"]=json!("补计不能绕过本地消费覆盖缺口");}
                 result["bill"]=merge(resolved,json!({"file_name":bill["file_name"],"file_hash":bill["file_hash"],"import_id":bill["id"]}));
             }
+            if pending_manual {result["can_settle"]=json!(false);result["cost_warning"]=json!("人工计费依据已修改，请重新确认账单依据");}
             if include_records { result["records"]=serde_json::to_value(rows)?; }
             Ok(result)
         }).await.map_err(|_|Error::unavailable())?
@@ -259,8 +265,14 @@ impl Service {
                         "file_name",
                         "file_hash",
                         "import_id",
+                        "manual_weights",
+                        "local_unmatched",
+                        "manual_basis",
                     ],
                 );
+                if let Some(summary) = result["bill"]["manual_summary"].as_object_mut() {
+                    summary.remove("accounts");
+                }
             }
         }
         result
@@ -334,6 +346,13 @@ impl Service {
                 calc["start_warning"] = json!("周期起点未确认");
             }
             calc = without(calc, &["records"]);
+            if let Some(pid) = c["vendor_period_id"].as_i64() {
+                let period = &vendor_cache[&pid]["period"];
+                if !period["manual_basis_id"].is_null() {
+                    calc["vendor_period"]["manual_basis"] =
+                        json!(Self::manual_config(&mut db, period).await?);
+                }
+            }
             calc["creditor_name"] = json!(name(&mut db, int(&c, "creditor_id")).await?);
             versions.push((
                 int(&c, "id"),
@@ -422,7 +441,17 @@ impl Service {
         {
             return Err(Error::invalid("账单截止时间无效"));
         }
-        let (rows, file_name, file_hash) = if int(data, "import_id") != 0 {
+        let manual = data
+            .get("manual_basis")
+            .map(crate::manual_billing::normalize)
+            .transpose()?;
+        let local_only = manual.as_ref().is_some_and(|m| m["source"] == "local_only");
+        if local_only && (!text(data, "csv").is_empty() || int(data, "import_id") != 0) {
+            return Err(Error::invalid("仅用本地记录时不能同时上传或沿用账单"));
+        }
+        let (rows, file_name, file_hash) = if local_only {
+            (Vec::new(), String::new(), String::new())
+        } else if int(data, "import_id") != 0 {
             let b = one(
                 &mut db,
                 "SELECT * FROM bill_imports WHERE id=? AND cycle_id=?",
@@ -471,13 +500,14 @@ impl Service {
                 &c,
                 &end,
                 rows.clone(),
+                manual.clone(),
                 data["allocation_mode"]
                     .as_str()
                     .unwrap_or(c["bill_allocation_mode"].as_str().unwrap_or("proportional")),
             )
             .await?;
         let gap = Self::coverage_error(&mut db, &c, &end).await?;
-        let metadata = json!({"file_name":file_name,"file_hash":file_hash,"end":end,"version":c["version"],"difference_required":result["allocation_mode"]=="proportional"&&(int(&result,"unmatched_count")!=0||gap.is_some()),"coverage_warning":gap,"can_confirm":Decimal::parse(text(&result,"matched_amount"))?.positive()});
+        let metadata = json!({"file_name":file_name,"file_hash":file_hash,"end":end,"version":c["version"],"difference_required":result["allocation_mode"]=="proportional"&&(int(&result,"unmatched_count")!=0||gap.is_some()),"coverage_warning":gap,"can_confirm":if manual.is_some(){flag(&result,"can_confirm") && gap.is_none() && flag(&c,"start_confirmed")}else{Decimal::parse(text(&result,"matched_amount"))?.positive()}});
         result = merge(result, metadata);
         db.commit().await?;
         #[derive(serde::Serialize)]
@@ -508,6 +538,18 @@ impl Service {
             &[json!(time::now())],
         )
         .await?;
+        if manual.is_some()
+            || !c["manual_basis_id"].is_null()
+            || Self::has_manual_draft(&mut db, Some(cid), None).await?
+        {
+            exec(
+                &mut db,
+                "DELETE FROM bill_previews WHERE cycle_id=?",
+                &[json!(cid)],
+            )
+            .await?;
+            Self::mark_manual_draft(&mut db, Some(cid), None).await?;
+        }
         exec(
             &mut db,
             "INSERT INTO bill_previews VALUES(?,?,?,?,?)",
@@ -529,6 +571,7 @@ impl Service {
         c: &Value,
         end: &str,
         rows: Arc<Vec<BillRow>>,
+        manual: Option<Value>,
         mode: &str,
     ) -> Result<Value> {
         let permit = self
@@ -544,9 +587,23 @@ impl Service {
         let end = end.to_owned();
         let mode = mode.to_owned();
         let creditor = int(c, "creditor_id");
+        let root = int(c, "account_id");
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let mut result = billing::reconcile(&rows, &usage, &details, &start, &end, &mode)?;
+            let mut result = if let Some(config) = &manual {
+                crate::manual_billing::reconcile(
+                    &rows,
+                    &usage,
+                    &details,
+                    &start,
+                    &end,
+                    &mode,
+                    config,
+                    &[root],
+                )?
+            } else {
+                billing::reconcile(&rows, &usage, &details, &start, &end, &mode)?
+            };
             let mut shares = bill_allocations(&result, creditor)?;
             Self::apply_names(&mut shares, &names);
             result["allocations"] = shares;
@@ -582,6 +639,7 @@ impl Service {
                 &c,
                 &end,
                 Arc::new(serde_json::from_value(p["rows"].take())?),
+                p["result"].get("manual_basis").cloned(),
                 p["result"]["allocation_mode"]
                     .as_str()
                     .unwrap_or("proportional"),
@@ -625,11 +683,18 @@ impl Service {
         {
             return Err(Error::conflict("请求匹配已更新，请重新预览"));
         }
-        if !Decimal::parse(text(&fresh, "matched_amount"))?.positive() {
+        if if fresh["manual_basis"].is_null() {
+            !Decimal::parse(text(&fresh, "matched_amount"))?.positive()
+        } else {
+            !flag(&fresh, "can_confirm")
+        } {
             return Err(Error::invalid("没有正金额匹配依据，无法分摊"));
         }
         let mode = result["allocation_mode"].as_str().unwrap_or("proportional");
         let gap = Self::coverage_error(db, &c, text(result, "end")).await?;
+        if !fresh["manual_basis"].is_null() && (gap.is_some() || !flag(&c, "start_confirmed")) {
+            return Err(Error::conflict("请先确认起点并解决本地消费覆盖缺口"));
+        }
         if mode == "proportional"
             && (int(&fresh, "unmatched_count") != 0 || gap.is_some())
             && !flag(data, "accept_difference")
@@ -639,16 +704,39 @@ impl Service {
         if int(&fresh, "outside_count") != 0 && !flag(data, "accept_outside") {
             return Err(Error::invalid("请确认不计入周期范围外的账单记录"));
         }
-        exec(db,"INSERT INTO bill_imports(cycle_id,file_name,file_hash,rows,created_by,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cycle_id,file_hash) DO NOTHING",&[json!(cid),result["file_name"].clone(),result["file_hash"].clone(),json!(dumps(&payload["rows"])),actor["id"].clone(),json!(time::now())]).await?;
-        let bill = one(
+        let local_only = fresh["manual_basis"]["source"] == "local_only";
+        let bill = if local_only {
+            json!({"id":null})
+        } else {
+            exec(db,"INSERT INTO bill_imports(cycle_id,file_name,file_hash,rows,created_by,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cycle_id,file_hash) DO NOTHING",&[json!(cid),result["file_name"].clone(),result["file_hash"].clone(),json!(dumps(&payload["rows"])),actor["id"].clone(),json!(time::now())]).await?;
+            one(
+                db,
+                "SELECT id FROM bill_imports WHERE cycle_id=? AND file_hash=?",
+                &[json!(cid), result["file_hash"].clone()],
+            )
+            .await?
+        };
+        let basis_id = Self::save_manual_basis(
             db,
-            "SELECT id FROM bill_imports WHERE cycle_id=? AND file_hash=?",
-            &[json!(cid), result["file_hash"].clone()],
+            actor,
+            Some(cid),
+            None,
+            &merge(
+                fresh.clone(),
+                json!({"start":c["start"],"end":result["end"],"version":result["version"]}),
+            ),
         )
         .await?;
-        exec(db,"UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source='upstream_bill',bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,bill_allocation_mode=?,billable_cost_fen=?,version=version+1 WHERE id=? AND version=?",&[result["cost_fen"].clone(),bill["id"].clone(),result["end"].clone(),result["digest"].clone(),json!(i64::from(flag(data,"accept_difference"))),json!(mode),fresh["billable_cost_fen"].clone(),json!(cid),c["version"].clone()]).await?;
+        Self::clear_manual_draft(db, Some(cid), None).await?;
+        exec(
+            db,
+            "UPDATE cycles SET manual_basis_id=? WHERE id=?",
+            &[basis_id, json!(cid)],
+        )
+        .await?;
+        exec(db,"UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source=?,bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,bill_allocation_mode=?,billable_cost_fen=?,version=version+1 WHERE id=? AND version=?",&[result["cost_fen"].clone(),json!(if local_only{"manual_bill"}else{"upstream_bill"}),bill["id"].clone(),result["end"].clone(),result["digest"].clone(),json!(i64::from(flag(data,"accept_difference"))),json!(mode),fresh["billable_cost_fen"].clone(),json!(cid),c["version"].clone()]).await?;
         audit(db,actor,"bill_allocation",json!(cid),&json!({"allocation_mode":mode,"billable_cost_fen":fresh["billable_cost_fen"],"excluded_amount":fresh["excluded_amount"],"rules_version":fresh["rules_version"]})).await?;
-        audit(db,actor,"import_bill",json!(cid),&json!({"before_cost_fen":c["cost_fen"],"cost_fen":result["cost_fen"],"bill_import_id":bill["id"],"file_hash":result["file_hash"],"end":result["end"],"unmatched_amount":result["unmatched_amount"],"accept_difference":flag(data,"accept_difference"),"accept_outside":flag(data,"accept_outside")})).await?;
+        audit(db,actor,if local_only{"confirm_local_billing"}else{"import_bill"},json!(cid),&json!({"before_cost_fen":c["cost_fen"],"cost_fen":result["cost_fen"],"bill_import_id":bill["id"],"file_hash":result["file_hash"],"end":result["end"],"unmatched_amount":result["unmatched_amount"],"accept_difference":flag(data,"accept_difference"),"accept_outside":flag(data,"accept_outside")})).await?;
         Ok(json!({"id":cid,"version":int(&c,"version")+1,"bill_import_id":bill["id"]}))
     }
 }

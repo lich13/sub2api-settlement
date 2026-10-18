@@ -398,6 +398,9 @@ impl Service {
             if c["status"] != "open" || c["version"] != snap["cycle"]["version"] {
                 return Err(Error::conflict("成本或周期已修改，请重新预览"));
             }
+            if Self::has_manual_draft(db, Some(cid), c["vendor_period_id"].as_i64()).await? {
+                return Err(Error::conflict("人工计费依据已修改，请重新确认账单依据"));
+            }
             for key in [
                 "start_mode",
                 "start_lower",

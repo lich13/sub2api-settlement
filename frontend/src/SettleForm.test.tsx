@@ -52,6 +52,14 @@ function inputForLabel(labelText: string) {
   return input as HTMLInputElement;
 }
 
+function selectForLabel(labelText: string) {
+  const label = Array.from(host!.querySelectorAll("label"))
+    .find(element => element.textContent?.includes(labelText));
+  const select = label?.querySelector<HTMLSelectElement>("select");
+  if (!select) throw new Error(`select not found for label: ${labelText}`);
+  return select;
+}
+
 function response(data: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -569,7 +577,7 @@ describe("SettleForm preview integration", () => {
 
     await render(<SettleForm {...formProps({ cycles: [cycle({ cost_source: "upstream_bill", bill_import_id: 33, cost_kind: "estimated" })] })} />);
     await advance(0);
-    expect(host!.querySelector<HTMLSelectElement>(".bill-import select")?.value).toBe("proportional");
+    expect(selectForLabel("分摊方式").value).toBe("proportional");
 
     await click(button("沿用已导入账单"));
     const proportionalCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
@@ -577,8 +585,7 @@ describe("SettleForm preview integration", () => {
     expect(host!.textContent).toContain("确认本地差异，按已匹配扣费比例分摊");
     expect(host!.textContent).toContain("确认替换成本");
 
-    const mode = host!.querySelector<HTMLSelectElement>(".bill-import select");
-    if (!mode) throw new Error("bill allocation mode select not found");
+    const mode = selectForLabel("分摊方式");
     await act(async () => {
       setSelectValue(mode, "matched_only");
       await Promise.resolve();

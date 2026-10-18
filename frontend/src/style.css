@@ -1604,3 +1604,15 @@ td small {
   .vendor-members > div > div:first-child { flex-basis: 100%; }
   .vendor-member-stats { text-align: left; margin-right: auto; }
 }
+
+.manual-billing { display: grid; gap: 12px; padding: 12px 0; border-block: 1px solid var(--line); }
+.manual-rates { display: grid; gap: 12px; }
+.manual-rate label { display: grid; grid-template-columns: minmax(0,1fr) minmax(100px,160px); gap: 16px; align-items: center; }
+.manual-rate label span { overflow-wrap: anywhere; }
+.manual-rate input { text-align: right; font-variant-numeric: tabular-nums; }
+.manual-rate .field-hint { margin: 6px 0 0; }
+.manual-ambiguous summary { cursor: pointer; padding-block: 6px; }
+.manual-request { align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.manual-request span { min-width: 0; overflow-wrap: anywhere; }
+.manual-request small { display: block; font-size: 12px; color: var(--muted); line-height: 1.6; }
+@media(max-width:760px) { .manual-rate label { grid-template-columns: 1fr; gap: 6px; } .manual-rate input { text-align: left; } }
