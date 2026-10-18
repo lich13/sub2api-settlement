@@ -58,6 +58,8 @@ export type Cycle = {
   can_settle?: boolean;
 };
 export type Account = {
+  vendor_id?: number | null;
+  display?: {cost_multiplier: string | null; settled: boolean};
   vendor_period?: VendorPeriod;
   allocation_pending?: boolean;
   id: number;
@@ -187,7 +189,7 @@ export type VendorPeriod = {
   members?: Cycle[]; member_ids?: number[]; bill_import_id?: number | null;
   pending_bill?: boolean; basis?: "matched_upstream" | "local_consumption";
 };
-export type Vendor = { id: number; name: string; cost_fen: number; creditor_id: number; creditor_name?: string; version: number; archived_at: string | null; periods: VendorPeriod[] };
+export type Vendor = { id: number; name: string; cost_fen: number; creditor_id: number; creditor_name?: string; version: number; archived_at: string | null; periods: VendorPeriod[]; current_members?: {account_id:number;name:string;account_deleted:boolean|number;profile_version:number;renewal_excluded?:boolean|number}[]; current_period?:VendorPeriod|null; waiting_renewal?:boolean };
 export type VendorBillPreview = BillPreview & {
   difference_amount?: string;
   bill_total_fen: number; accounts: {account_id:number;cycle_id:number;name:string;amount_fen:number|null;total_consumption:string;allocations:Share[]}[];

@@ -58,7 +58,7 @@ import type {
 } from "./types";
 import { useAutoPreview } from "./useAutoPreview";
 import { useAccountState } from "./useAccountState";
-import { VendorGroups, VendorManager, VendorBillPanel, expandVendorSelection } from "./Vendors";
+import { VendorGroups, VendorManager, VendorBillPanel, expandVendorSelection, type GroupAction } from "./Vendors";
 import { Select } from "./Select";
 import { NettingList, NettingReceivables, NettingDetails } from "./Netting";
 import { AuditLog, OperationStatus } from "./Operations";
@@ -812,13 +812,13 @@ export function SettleForm({
     onResult(next) {
       setDisplayPreview(next);
       if (renewByDefault && !renewalDefaultsSet.current) {
-        setRenew(Object.fromEntries(next.cycles.filter(c=>!c.cycle.account_deleted).map((c) => [c.cycle.id, { cost: costInput(c.cycle.cost_fen), creditor_id: c.cycle.creditor_id, cost_kind: "exact" }])));
+        setRenew(Object.fromEntries(next.cycles.filter(c=>!c.cycle.account_deleted&&!c.cycle.vendor_period_id).map((c) => [c.cycle.id, { cost: costInput(c.cycle.cost_fen), creditor_id: c.cycle.creditor_id, cost_kind: "exact" }])));
         setVendorRenew(Object.fromEntries(next.cycles.filter(c=>c.vendor_period).map(c=>[c.vendor_period!.id,{cost:costInput(c.vendor_period!.cost_fen),creditor_id:c.vendor_period!.creditor_id}])));
         renewalDefaultsSet.current = true;
       }
     },
   });
-  const pendingSubmission = useRef<{preview_id: string; renewals: {cycle_id: number; cost: string; creditor_id: number; cost_kind: CostKind}[]; delete_cycle_ids?: number[];delete_scopes?:Record<string,string>;vendor_renewals?:{period_id:number;version:number;cost:string;creditor_id:number;cycle_ids:number[]}[]} | null>(null);
+  const pendingSubmission = useRef<{preview_id: string; renewals: {cycle_id: number; cost: string; creditor_id: number; cost_kind: CostKind}[]; delete_cycle_ids?: number[];delete_scopes?:Record<string,string>;vendor_renewals?:{period_id:number;version:number;cost:string;creditor_id:number}[]} | null>(null);
   let cutoff = "";
   try { if (end) cutoff = fromInput(end); } catch { /* Date input may be incomplete. */ }
   const cycleMap = new Map<number, Cycle>();
@@ -851,6 +851,7 @@ export function SettleForm({
       setError("续期成本最多保留两位小数");
       return;
     }
+    if (!pendingSubmission.current && groups.some(g=>vendorRenew[g.id]&&![...cycleMap.values()].some(c=>c.vendor_period_id===g.id&&!c.account_deleted&&!deleteIds.includes(c.id)))) {setError("没有可续费成员，请取消整组续费");return;}
     setBusy(true);
     setError("");
     try {
@@ -860,7 +861,7 @@ export function SettleForm({
           cycle_id: Number(id),
           ...r,
         })),
-        ...(groups.length ? {vendor_renewals:groups.filter(g=>[...cycleMap.values()].some(c=>c.vendor_period_id===g.id&&renew[c.id])).map(g=>({period_id:g.id,version:g.version,cost:vendorRenew[g.id]?.cost??costInput(g.cost_fen),creditor_id:vendorRenew[g.id]?.creditor_id??g.creditor_id,cycle_ids:[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id&&renew[c.id]).map(c=>c.id)}))}:{}),
+        ...(groups.length ? {vendor_renewals:groups.filter(g=>vendorRenew[g.id]).map(g=>({period_id:g.id,version:g.version,cost:vendorRenew[g.id]?.cost??costInput(g.cost_fen),creditor_id:vendorRenew[g.id]?.creditor_id??g.creditor_id}))}:{}),
         ...(deleteIds.length ? { delete_cycle_ids: deleteIds,delete_scopes:Object.fromEntries(deleteIds.map(id=>[id,deleteScopes[id]!.digest])) } : {}),
       };
       pendingSubmission.current = payload;
@@ -898,7 +899,7 @@ export function SettleForm({
           </label>}
         </div>
         <fieldset className="settlement-fields" disabled={busy || !!pendingSubmission.current}>
-        {groups.map(g=><div key={g.id}><VendorBillPanel period={g} cycles={[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id)} end={[...cycleMap.values()].find(c=>c.vendor_period_id===g.id&&c.end)?.end||cutoff} previewKey={preview?.id||""} onConfirmed={()=>inspect()}/>{[...cycleMap.values()].some(c=>c.vendor_period_id===g.id&&renew[c.id])&&<div className="form-columns vendor-renewal"><label>下期组成本（元）<input inputMode="decimal" value={vendorRenew[g.id]?.cost??costInput(g.cost_fen)} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{creditor_id:prev[g.id]?.creditor_id??g.creditor_id,cost:e.target.value}}))}/></label><label>下期统一垫付人<Select value={vendorRenew[g.id]?.creditor_id??g.creditor_id} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{cost:prev[g.id]?.cost??costInput(g.cost_fen),creditor_id:Number(e.target.value)}}))}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}</div>)}
+        {groups.map(g=><div key={g.id}><VendorBillPanel period={g} cycles={[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id)} end={[...cycleMap.values()].find(c=>c.vendor_period_id===g.id&&c.end)?.end||cutoff} previewKey={preview?.id||""} onConfirmed={()=>inspect()}/><label className="checkline renewal"><input type="checkbox" checked={!!vendorRenew[g.id]} onChange={e=>setVendorRenew(prev=>{const next={...prev};if(e.target.checked)next[g.id]={cost:costInput(g.cost_fen),creditor_id:g.creditor_id};else delete next[g.id];return next;})}/>结算后整组续费</label>{vendorRenew[g.id]&&<div className="form-columns vendor-renewal"><label>下期组成本（元）<input inputMode="decimal" value={vendorRenew[g.id]?.cost??costInput(g.cost_fen)} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{creditor_id:prev[g.id]?.creditor_id??g.creditor_id,cost:e.target.value}}))}/></label><label>下期统一垫付人<Select value={vendorRenew[g.id]?.creditor_id??g.creditor_id} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{cost:prev[g.id]?.cost??costInput(g.cost_fen),creditor_id:Number(e.target.value)}}))}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}</div>)}
         {!!billCycles.length && (
           <div className="bill-import-list">
             {billCycles.map((cycle) => (
@@ -921,7 +922,7 @@ export function SettleForm({
             )}
             {c.start_warning && c.start_warning !== "周期起点未确认" && <div className="form-error">{c.start_warning}</div>}
             {c.cost_warning && <FormError error={c.cost_warning} />}
-            <label className="checkline renewal">
+            {!c.cycle.vendor_period_id && <label className="checkline renewal">
               <input
                 type="checkbox"
                 checked={!!renew[c.cycle.id]}
@@ -941,7 +942,7 @@ export function SettleForm({
                 }
               />
               结算后续期
-            </label>
+            </label>}
             <label className="checkline deletion-option"><input type="checkbox" checked={deleteIds.includes(c.cycle.id)} disabled={!!renew[c.cycle.id] || !!c.cycle.account_deleted} onChange={e => setDeleteIds(prev => e.target.checked ? [...prev, c.cycle.id] : prev.filter(id => id !== c.cycle.id))} />出单后删除账号</label>
             {deleteIds.includes(c.cycle.id) && <DeletionScope accountId={c.cycle.account_id} onConfirmed={value=>setDeleteScopes(prev=>({...prev,[c.cycle.id]:value}))}/>}
             {renew[c.cycle.id] && !c.cycle.vendor_period_id && (
@@ -1037,7 +1038,7 @@ export function App() {
   );
   const [vendorsSource, setVendors] = useState<Vendor[]>([]);
   const [vendorRevision, setVendorRevision] = useState("");
-  const [vendorManager,setVendorManager] = useState(false);
+  const [vendorManager,setVendorManager] = useState<{id?:number;action?:GroupAction}|null>(null);
   const [settleIds, setSettleIds] = useState<number[] | null>(null);
   const [settleExpenseIds, setSettleExpenseIds] = useState<number[] | null>(null);
   const [settleRenewDefault, setSettleRenewDefault] = useState(false);
@@ -1066,7 +1067,7 @@ export function App() {
   const overview = overviewSource && { ...overviewSource, accounts: overviewSource.accounts.filter(a => !active || active.has(a.id)).map(a => ({ ...a, name: currentName(a.id, a.name, overviewSource.account_revision), cycle: a.cycle ? currentCycle(a.cycle, overviewSource.account_revision) : null })) };
   const catalog = catalogSource && { ...catalogSource, accounts: catalogSource.accounts.filter(a => !active || active.has(a.id)).map(a => ({ ...a, name: currentName(a.id, a.name, catalogSource.account_revision) })) };
   const history = { ...historySource, cycles: historySource.cycles.filter(c => !active || active.has(c.account_id)).map(c => currentCycle(c, historySource.account_revision)) };
-  const vendors = vendorsSource.map(v => ({...v, periods: v.periods.map(p => ({...p, members: p.members?.map(c => ({...currentCycle(c, vendorRevision), current_name: currentName(c.account_id, c.current_name || c.name, vendorRevision), account_deleted: active && accountState && accountState.revision >= vendorRevision ? !active.has(c.account_id) : c.account_deleted}))}))}));
+  const vendors = vendorsSource.map(v => ({...v, current_members:v.current_members?.map(a=>({...a,name:currentName(a.account_id,a.name,vendorRevision),account_deleted:active&&accountState&&accountState.revision>=vendorRevision?!active.has(a.account_id):a.account_deleted})), periods: v.periods.map(p => ({...p, members: p.members?.map(c => ({...currentCycle(c, vendorRevision), current_name: currentName(c.account_id, c.current_name || c.name, vendorRevision), account_deleted: active && accountState && accountState.revision >= vendorRevision ? !active.has(c.account_id) : c.account_deleted}))}))}));
   const refreshSequence = useRef(0);
 
   useEffect(() => {
@@ -1098,7 +1099,7 @@ export function App() {
     const clear = () => {
       setMe(null);
       setOverview(null);
-      setVendors([]);setVendorManager(false);
+      setVendors([]);setVendorManager(null);
       setCatalog(null);
       setHistory({cycles: [], audit: []});
       setDeletions([]);
@@ -1271,7 +1272,7 @@ export function App() {
   const filteredAccounts = (overview?.accounts || []).filter(
     (a) =>
       isOperationalAccount(a) &&
-      !(a.cycle?.vendor_period_id && a.cycle.status === "open") &&
+      !a.vendor_id &&
       (isAdmin || a.kind === "paid") &&
       (!query ||
         `${a.name} ${a.id}`.toLowerCase().includes(query.toLowerCase())) &&
@@ -1442,7 +1443,7 @@ export function App() {
                     ))}
                   </Select>}
                 <div className="toolbar-actions">
-                  {tab === "accounts" && costView === "accounts" && isAdmin && <button className="button" disabled={!catalog} onClick={()=>setVendorManager(true)}>供应商管理</button>}
+                  {tab === "accounts" && costView === "accounts" && isAdmin && <button className="button" disabled={!catalog} onClick={()=>setVendorManager({action:"create"})}>新建账号组</button>}
                   {tab === "accounts" && costView === "accounts" && isAdmin && selected.length > 0 && (
                       <button
                         className="button primary"
@@ -1460,7 +1461,7 @@ export function App() {
                 </div>
               </div>
             )}
-            {tab === "accounts" && costView === "accounts" && <VendorGroups vendors={vendors} accounts={overview?.accounts||[]} admin={!!isAdmin} totals={overview?.vendor_totals} selected={selected} onToggle={ids=>setSelected(prev=>ids.some(id=>prev.includes(id))?prev.filter(id=>!ids.includes(id)):[...new Set([...prev,...ids])])} query={query} filter={filter} onSettle={beginSettlement} onManage={()=>setVendorManager(true)} onDetail={showCycle}/>}
+            {tab === "accounts" && costView === "accounts" && <VendorGroups vendors={vendors} accounts={overview?.accounts||[]} admin={!!isAdmin} totals={overview?.vendor_totals} selected={selected} onToggle={ids=>setSelected(prev=>ids.some(id=>prev.includes(id))?prev.filter(id=>!ids.includes(id)):[...new Set([...prev,...ids])])} query={query} filter={filter} onSettle={beginSettlement} onManage={(id,action)=>setVendorManager({id,action})} onDetail={showCycle}/>}
             {tab === "accounts" && costView === "accounts" && (
               <div className="table-shell">
                 <table className="accounts-table">
@@ -1505,7 +1506,7 @@ export function App() {
                               <small>
                                 {a.kind === "free"
                                   ? "免费资源"
-                                  : a.cycle
+                                  : a.kind === "paid" && a.cycle
                                     ? `${!a.start_confirmed && a.start_mode === "date_estimate" ? "约 " + date(a.start_lower) + " — " + date(a.start_upper) : !a.start_confirmed && a.start_mode === "minute_estimate" ? "约 " + date(a.start_lower, "minute") : date(a.cycle.start)}${a.cycle.end ? " — " + date(a.cycle.end) : " 起"}`
                                     : a.platform}
                               </small>
@@ -1513,16 +1514,16 @@ export function App() {
                           </div>
                         </td>
                         <td data-label="成本" className="numeric amount">
-                          {a.kind === "free" ? money(0) : a.cycle ? <>
+                          {a.kind === "free" ? money(0) : a.kind === "paid" && a.cycle ? <>
                             <span className="cost-kind">{a.cycle.cost_kind === "estimated" ? "待重新配置" : "准确成本"}</span>
                             {a.allocation_pending ? "待账单拆分" : money(a.cycle.cost_fen)}
                           </> : "—"}
                         </td>
                         <td data-label="垫付人">
-                          {a.kind === "free" ? "—" : a.creditor_name || "—"}
+                          {a.kind !== "paid" ? "—" : a.creditor_name || "—"}
                         </td>
                         <td data-label="我的占比" className="numeric">
-                          {a.kind === "free" || !a.cycle || a.data_error || a.allocation_pending ? (
+                          {a.kind !== "paid" || !a.cycle || a.data_error || a.allocation_pending ? (
                             "—"
                           ) : (
                             <div className="share-meter">
@@ -1543,7 +1544,7 @@ export function App() {
                           <strong className="amount">
                             {a.kind === "free"
                               ? money(0)
-                              : a.allocation_pending ? "待账单拆分" : !a.cycle || a.data_error ||
+                              : a.allocation_pending ? "待账单拆分" : a.kind !== "paid" || !a.cycle || a.data_error ||
                                   (overview.sync_error &&
                                     a.cycle.status === "open")
                                 ? "—"
@@ -1612,7 +1613,7 @@ export function App() {
                     ))}
                   </tbody>
                 </table>
-                {!filteredAccounts.length && <Empty text="暂无账号成本" />}
+                {!filteredAccounts.length && <Empty text={vendors.some(v=>!v.archived_at)?"暂无独立账号":"暂无账号成本"} />}
               </div>
             )}
             {tab === "accounts" && costView === "expenses" && (
@@ -1689,11 +1690,11 @@ export function App() {
                           >
                             明细
                           </button>
-                          {c.status === "open" ? (
+                          {c.vendor_period_id ? <button className="text-button" onClick={()=>setVendorManager({id:c.vendor_id??undefined})}>整组管理</button> : c.status === "open" ? (
                             <>
                               <button
                                 className="text-button"
-                                onClick={() => c.vendor_period_id ? setVendorManager(true) : setForm({ cycle: c })}
+                                onClick={() => c.vendor_period_id ? setVendorManager({id:c.vendor_id??undefined,action:"edit"}) : setForm({ cycle: c })}
                               >
                                 修改
                               </button>
@@ -1704,7 +1705,7 @@ export function App() {
                                 结算
                               </button>
                             </>
-                          ) : c.vendor_period_id ? <button className="text-button" onClick={()=>setVendorManager(true)}>整组管理</button> : (
+                          ) : (
                             <button
                               className="text-button danger"
                               onClick={() =>
@@ -1771,7 +1772,7 @@ export function App() {
           close={() => setForm(null)}
         />
       )}
-      {vendorManager && catalog && <VendorManager vendors={vendors} accounts={overview?.accounts||[]} catalog={catalog} close={()=>setVendorManager(false)} refresh={refresh}/>}
+      {vendorManager && catalog && <VendorManager initialVendorId={vendorManager.id} initialAction={vendorManager.action} vendors={vendors} accounts={overview?.accounts||[]} catalog={catalog} close={()=>setVendorManager(null)} refresh={refresh}/>}
       {settleIds && catalog && (
         <SettleForm
           ids={settleSelection}

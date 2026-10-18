@@ -2,7 +2,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VendorBillPanel, VendorGroups, VendorManager, expandVendorSelection } from "./Vendors";
+import { VendorBillPanel, VendorGroups, VendorManager, expandVendorSelection, groupCandidates } from "./Vendors";
 import type { Account, Catalog, Cycle, Vendor, VendorBillPreview, VendorPeriod } from "./types";
 
 let root: Root | undefined;
@@ -35,6 +35,43 @@ function button(text: string) {
     .find(element => element.textContent?.trim() === text);
   if (!found) throw new Error(`button not found: ${text}`);
   return found;
+}
+
+function inputForLabel(labelText: string) {
+  const label = Array.from(host!.querySelectorAll("label"))
+    .find(element => element.textContent?.includes(labelText));
+  const input = label?.querySelector<HTMLInputElement>("input");
+  if (!input) throw new Error(`input not found for label: ${labelText}`);
+  return input;
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("input value setter is unavailable");
+  setter.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function setSelectValue(select: HTMLSelectElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+  if (!setter) throw new Error("select value setter is unavailable");
+  setter.call(select, value);
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function selectForLabel(labelText: string) {
+  const label = Array.from(host!.querySelectorAll("label"))
+    .find(element => element.textContent?.includes(labelText));
+  const select = label?.querySelector<HTMLSelectElement>("select");
+  if (!select) throw new Error(`select not found for label: ${labelText}`);
+  return select;
+}
+
+function candidateCheckbox(name: string) {
+  const checkbox = Array.from(host!.querySelectorAll<HTMLInputElement>("fieldset input[type=checkbox]"))
+    .find(input => input.closest("label")?.textContent?.includes(name));
+  if (!checkbox) throw new Error(`candidate checkbox not found: ${name}`);
+  return checkbox;
 }
 
 function response(data: unknown, status = 200): Response {
@@ -102,6 +139,19 @@ function account(id: number, name: string, value: Cycle, overrides: Partial<Acco
     deleted: false,
     profile_version: 1,
     cycle: value,
+    ...overrides,
+  };
+}
+
+function unconfiguredAccount(id: number, name: string, overrides: Partial<Account> = {}): Account {
+  return {
+    id,
+    name,
+    platform: "claude",
+    kind: "unconfigured",
+    deleted: false,
+    profile_version: null,
+    cycle: null,
     ...overrides,
   };
 }
@@ -203,6 +253,196 @@ describe("vendor group selection and presentation", () => {
 
     await click(button("结算并续费"));
     expect(onSettle).toHaveBeenCalledWith([11, 12], true);
+  });
+});
+
+describe("vendor group manager v0.11.1 flows", () => {
+  it("creates one group and its first period in one atomic request", async () => {
+    const first = unconfiguredAccount(101, "Unconfigured Alpha");
+    const second = unconfiguredAccount(102, "Cancelled draft Beta", {
+      profile_version: null,
+      cycle: cycle({ id: 12, account_id: 102, name: "Cancelled draft Beta", status: "cancelled", end: "2026-08-31T00:00:00Z" }),
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => response({ id: 5 }));
+    const refresh = vi.fn(async () => {});
+    const close = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorManager
+      vendors={[]}
+      accounts={[first, second]}
+      catalog={catalog()}
+      close={close}
+      refresh={refresh}
+      initialAction="create"
+    />);
+
+    setInputValue(inputForLabel("账号组名称"), "Shared provider");
+    setInputValue(inputForLabel("本期准确总成本（元）"), "12.34");
+    setInputValue(inputForLabel("共同起点（北京时间）"), "2026-09-01T08:00:00");
+    setSelectValue(selectForLabel("起点方式"), "exact");
+    await act(async () => {
+      candidateCheckbox("Unconfigured Alpha").click();
+      candidateCheckbox("Cancelled draft Beta").click();
+    });
+    await click(button("保存"));
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [path, options] = fetcher.mock.calls[0];
+    expect(String(path)).toBe("/settlement/api/v1/vendors");
+    expect(options?.method).toBe("POST");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      name: "Shared provider",
+      cost: "12.34",
+      creditor_id: 7,
+      start: "2026-09-01T00:00:00.000Z",
+      start_mode: "exact",
+      account_ids: [101, 102],
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers only unconfigured, live, unassigned accounts, including cancelled no-profile drafts", async () => {
+    const eligible = unconfiguredAccount(101, "Eligible");
+    const cancelledDraft = unconfiguredAccount(102, "Cancelled no-profile draft", {
+      cycle: cycle({ id: 12, account_id: 102, status: "cancelled", end: "2026-08-31T00:00:00Z" }),
+    });
+    const deleted = unconfiguredAccount(103, "Deleted", { deleted: true });
+    const assigned = unconfiguredAccount(104, "Already assigned", { vendor_id: 5 });
+    const configured = account(105, "Configured", cycle({ id: 15, account_id: 105 }));
+
+    expect(groupCandidates([eligible, cancelledDraft, deleted, assigned, configured]).map(a => a.id))
+      .toEqual([101, 102]);
+
+    await render(<VendorManager
+      vendors={[]}
+      accounts={[eligible, cancelledDraft, deleted, assigned, configured]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialAction="create"
+    />);
+    expect(host!.textContent).toContain("Eligible");
+    expect(host!.textContent).toContain("Cancelled no-profile draft");
+    expect(host!.textContent).not.toContain("Deleted");
+    expect(host!.textContent).not.toContain("Already assigned");
+    expect(host!.textContent).not.toContain("Configured");
+  });
+
+  it("adds members to an open period with its active period version", async () => {
+    const value = period({ members: [cycle()] });
+    const fetcher = vi.fn<typeof fetch>(async () => response({}));
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorManager
+      vendors={[vendor(value)]}
+      accounts={[unconfiguredAccount(102, "New member")]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialVendorId={5}
+      initialAction="add"
+    />);
+    await act(async () => { candidateCheckbox("New member").click(); });
+    await click(button("保存"));
+
+    const [path, options] = fetcher.mock.calls[0];
+    expect(String(path)).toBe("/settlement/api/v1/vendors/5/members");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      version: 2,
+      period_version: 4,
+      account_ids: [102],
+    });
+  });
+
+  it("adds members to a settled group as a next-period draft with a null period version", async () => {
+    const settled = period({ status: "settled", end: "2026-10-01T00:00:00Z", members: [cycle({ status: "settled", end: "2026-10-01T00:00:00Z" })] });
+    const fetcher = vi.fn<typeof fetch>(async () => response({}));
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorManager
+      vendors={[vendor(settled)]}
+      accounts={[unconfiguredAccount(102, "Next period member")]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialVendorId={5}
+      initialAction="add"
+    />);
+    expect(host!.textContent).toContain("新增成员从下一期生效，已结算账期保持不变。");
+    await act(async () => { candidateCheckbox("Next period member").click(); });
+    await click(button("保存"));
+
+    const [path, options] = fetcher.mock.calls[0];
+    expect(String(path)).toBe("/settlement/api/v1/vendors/5/members");
+    expect(JSON.parse(String(options?.body))).toEqual({
+      version: 2,
+      period_version: null,
+      account_ids: [102],
+    });
+  });
+
+  it("renews the whole settled group without a member selection payload", async () => {
+    const settled = period({ status: "settled", end: "2026-10-01T00:00:00Z", members: [cycle({ status: "settled", end: "2026-10-01T00:00:00Z" })] });
+    const fetcher = vi.fn<typeof fetch>(async () => response({}));
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorManager
+      vendors={[vendor(settled)]}
+      accounts={[]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialVendorId={5}
+      initialAction="renew"
+    />);
+    expect(host!.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    setInputValue(inputForLabel("下期准确总成本（元）"), "15.00");
+    await click(button("确认整组续费"));
+
+    const [path, options] = fetcher.mock.calls[0];
+    expect(String(path)).toBe("/settlement/api/v1/vendors/5/renew");
+    const body = JSON.parse(String(options?.body));
+    expect(body).toEqual({
+      version: 2,
+      period_version: 4,
+      cost: "15.00",
+      creditor_id: 7,
+    });
+    expect(body).not.toHaveProperty("account_ids");
+    expect(body).not.toHaveProperty("members");
+  });
+
+  it("keeps settled groups and current members visible with one group cost", async () => {
+    const settledCycle = cycle({ id: 11, status: "settled", end: "2026-10-01T00:00:00Z", settlement_id: 9 });
+    const settled = period({ status: "settled", end: "2026-10-01T00:00:00Z", members: [settledCycle] });
+    const settledVendor = {
+      ...vendor(settled),
+      current_members: [{ account_id: 101, name: "Visible account", account_deleted: false, profile_version: 2 }],
+    };
+    const onManage = vi.fn();
+
+    await render(<VendorGroups
+      vendors={[settledVendor]}
+      accounts={[account(101, "Visible account", settledCycle, { mine: null })]}
+      admin
+      query=""
+      filter="all"
+      onSettle={vi.fn()}
+      onManage={onManage}
+      onDetail={vi.fn()}
+    />);
+
+    expect(host!.textContent).toContain("Shared provider");
+    expect(host!.textContent).toContain("Visible account");
+    expect(host!.textContent).toContain("已结算／待续费");
+    expect(host!.textContent!.match(/¥123\.45/g)).toHaveLength(1);
+    expect(host!.textContent).not.toContain("修改组成本");
+    expect(host!.textContent).not.toContain("整组结算");
+
+    await click(button("整组续费"));
+    expect(onManage).toHaveBeenCalledWith(5, "renew");
   });
 });
 

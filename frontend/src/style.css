@@ -1593,3 +1593,14 @@ td small {
 .deletion-targets li span { overflow-wrap:anywhere; }
 .deletion-targets small { flex-shrink:0; color:var(--muted); }
 @media(max-width:640px){.deletion-targets li {flex-direction:column;gap:3px;}}
+
+.vendor-group summary .vendor-heading { flex: 1; min-width: 120px; }
+.vendor-member-stats { flex: 0 0 auto !important; text-align: right; }
+.group-candidate-list { max-height: 280px; overflow: auto; display: grid; gap: 12px; padding-top: 12px; }
+.group-candidate-list .checkline { overflow-wrap: anywhere; }
+.group-member-names { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+@media (max-width: 760px) {
+  .vendor-members > div { flex-wrap: wrap; }
+  .vendor-members > div > div:first-child { flex-basis: 100%; }
+  .vendor-member-stats { text-align: left; margin-right: auto; }
+}

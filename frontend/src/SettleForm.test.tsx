@@ -4,7 +4,7 @@ import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettleForm } from "./main";
-import type { Calculation, Catalog, Cycle, Preview } from "./types";
+import type { Calculation, Catalog, Cycle, Preview, VendorPeriod } from "./types";
 
 let root: Root | undefined;
 let host: HTMLDivElement | undefined;
@@ -80,6 +80,43 @@ function cycle(overrides: Partial<Cycle> = {}): Cycle {
     settlement_id: null,
     cost_kind: "exact",
     ...overrides,
+  };
+}
+
+function groupCycle(id: number, accountId: number, overrides: Partial<Cycle> = {}): Cycle {
+  return cycle({
+    id,
+    account_id: accountId,
+    name: `Group account ${accountId}`,
+    cost_fen: 12_345,
+    vendor_id: 9,
+    vendor_period_id: 55,
+    ...overrides,
+  });
+}
+
+function groupPeriod(members: Cycle[], overrides: Partial<VendorPeriod> = {}): VendorPeriod {
+  return {
+    id: 55,
+    vendor_id: 9,
+    name: "Shared provider",
+    cost_fen: 12_345,
+    creditor_id: 1,
+    start: "2026-09-01T00:00:00Z",
+    end: null,
+    status: "open",
+    start_confirmed: true,
+    version: 4,
+    members,
+    ...overrides,
+  };
+}
+
+function groupPreview(period: VendorPeriod, members: Cycle[], id: string): Preview {
+  return {
+    id,
+    expires_at: new Date(Date.now() + 120_000).toISOString(),
+    cycles: members.map(member => calculation(member, { vendor_period: period })),
   };
 }
 
@@ -198,6 +235,122 @@ describe("SettleForm preview integration", () => {
     const updatedRenewalCost = Array.from(host!.querySelectorAll<HTMLInputElement>("input"))
       .find(input => input.closest("label")?.textContent?.includes("新周期成本（元）"));
     expect(updatedRenewalCost?.value).toBe("66.60");
+  });
+
+  it("uses one group renewal control for two members and preserves the edited group draft", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const initialMembers = [groupCycle(101, 1001), groupCycle(102, 1002)];
+    const initialPeriod = groupPeriod(initialMembers);
+    let previewCalls = 0;
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      if (String(input).endsWith("/previews")) {
+        previewCalls += 1;
+        const members = initialMembers.map(member => ({ ...member, version: previewCalls }));
+        const period = groupPeriod(members, {
+          cost_fen: previewCalls === 1 ? 12_345 : 23_456,
+          version: initialPeriod.version + previewCalls,
+          members,
+        });
+        return response(groupPreview(period, members, `group-preview-${previewCalls}`));
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const props = formProps({
+      ids: initialMembers.map(member => member.id),
+      cycles: initialMembers,
+      vendorPeriods: [initialPeriod],
+      renewByDefault: true,
+    });
+
+    await render(<SettleForm {...props} />);
+    await advance(0);
+
+    expect(previewCalls).toBe(1);
+    const groupRenewalLabels = Array.from(host!.querySelectorAll("label"))
+      .filter(label => label.textContent?.trim() === "结算后整组续费");
+    expect(groupRenewalLabels).toHaveLength(1);
+    expect((groupRenewalLabels[0].querySelector("input") as HTMLInputElement).checked).toBe(true);
+    expect(Array.from(host!.querySelectorAll("label"))
+      .filter(label => label.textContent?.trim() === "结算后续期")).toHaveLength(0);
+    expect(inputForLabel("下期组成本（元）").value).toBe("123.45");
+
+    setInputValue(inputForLabel("下期组成本（元）"), "99.99");
+    const updatedMembers = initialMembers.map(member => ({ ...member, version: 2 }));
+    const updatedPeriod = groupPeriod(updatedMembers, { version: initialPeriod.version + 1 });
+    await render(<SettleForm {...props} cycles={updatedMembers} vendorPeriods={[updatedPeriod]} />);
+    await advance(0);
+
+    expect(previewCalls).toBe(2);
+    expect(inputForLabel("下期组成本（元）").value).toBe("99.99");
+  });
+
+  it("submits one vendor renewal for the whole group without member cycle ids", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const members = [groupCycle(201, 2001, { vendor_period_id: 66 }), groupCycle(202, 2002, { vendor_period_id: 66 })];
+    const period = groupPeriod(members, { id: 66, cost_fen: 23_456, version: 8 });
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/previews")) return response(groupPreview(period, members, "group-settle-preview"));
+      if (path.endsWith("/settlements")) return response({});
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm {...formProps({
+      ids: members.map(member => member.id),
+      cycles: members,
+      vendorPeriods: [period],
+    })} />);
+    await advance(0);
+    const groupRenewal = checkbox("结算后整组续费");
+    expect(groupRenewal.checked).toBe(false);
+    await act(async () => {
+      groupRenewal.click();
+      await Promise.resolve();
+    });
+    expect(groupRenewal.checked).toBe(true);
+
+    await click(button("确认结算"));
+    const settlementCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/settlements"));
+    const payload = JSON.parse(String(settlementCall?.[1]?.body));
+    expect(payload).toMatchObject({
+      preview_id: "group-settle-preview",
+      renewals: [],
+      vendor_renewals: [{ period_id: 66, version: 8, cost: "234.56", creditor_id: 1 }],
+    });
+    expect(payload).not.toHaveProperty("cycle_ids");
+    expect(payload.vendor_renewals[0]).not.toHaveProperty("cycle_ids");
+  });
+
+  it("blocks an empty group renewal when every member is deleted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const members = [
+      groupCycle(301, 3001, { account_deleted: true, vendor_period_id: 77 }),
+      groupCycle(302, 3002, { account_deleted: true, vendor_period_id: 77 }),
+    ];
+    const period = groupPeriod(members, { id: 77, version: 9 });
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      if (String(input).endsWith("/previews")) return response(groupPreview(period, members, "group-deleted-preview"));
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm {...formProps({
+      ids: members.map(member => member.id),
+      cycles: members,
+      vendorPeriods: [period],
+      renewByDefault: true,
+    })} />);
+    await advance(0);
+    expect(checkbox("结算后整组续费").checked).toBe(true);
+
+    await click(button("确认结算"));
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
+    expect(host!.textContent).toContain("没有可续费成员，请取消整组续费");
   });
 
   it("keeps renewal and bill-import drafts when the open cycle is renamed", async () => {
