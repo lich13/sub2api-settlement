@@ -121,65 +121,41 @@ async fn vendor_period_row(harness: &Harness, id: i64) -> Value {
     row
 }
 
-async fn create_cycle(harness: &Harness, account_id: i64, key: &str) -> i64 {
-    mutate(
-        harness,
-        key,
-        "create",
-        &json!({
-            "account_id":account_id,
-            "name":format!("Fixture vendor {account_id}"),
-            "cost":"1.00",
-            "creditor_id":2,
-            "start":START,
-            "start_mode":"exact",
-            "cost_kind":"exact"
-        }),
-    )
-    .await
-    .expect("create vendor member cycle")["id"]
+async fn cycle_for_account(harness: &Harness, account_id: i64) -> i64 {
+    harness
+        .rows("cycles")
+        .await
+        .into_iter()
+        .rev()
+        .find(|cycle| cycle["account_id"] == account_id && cycle["vendor_period_id"].is_i64())
+        .unwrap_or_else(|| panic!("vendor cycle for account {account_id} not found"))["id"]
         .as_i64()
         .unwrap()
 }
 
-async fn create_vendor(harness: &Harness, key: &str) -> Value {
+async fn create_vendor(harness: &Harness, account_ids: &[i64], cost: &str, key: &str) -> Value {
     mutate(
         harness,
         key,
         "create-vendor",
-        &json!({"name":"Fixture Vendor","cost":"6.00","creditor_id":2}),
-    )
-    .await
-    .expect("create vendor")
-}
-
-async fn create_period(
-    harness: &Harness,
-    vendor: &Value,
-    cost: &str,
-    cycles: &[i64],
-    key: &str,
-) -> Result<Value> {
-    let members = futures_util::future::join_all(cycles.iter().map(|id| async move {
-        let cycle = cycle_row(harness, *id).await;
-        json!({"cycle_id":id,"version":cycle["version"]})
-    }))
-    .await;
-    mutate(
-        harness,
-        key,
-        &format!("create-vendor-period:{}", vendor["id"].as_i64().unwrap()),
         &json!({
-            "version":vendor["version"],
+            "name":"Fixture Vendor",
             "cost":cost,
             "creditor_id":2,
+            "account_ids":account_ids,
             "start":START,
-            "start_mode":"exact",
-            "members":members,
-            "detached":[]
+            "start_mode":"exact"
         }),
     )
     .await
+    .expect("create vendor group")
+}
+
+fn period_from_vendor(vendor: &Value) -> Value {
+    vendor
+        .get("period")
+        .cloned()
+        .unwrap_or_else(|| panic!("create-vendor must return period: {vendor}"))
 }
 
 fn bill_csv() -> String {
@@ -286,6 +262,8 @@ async fn vendor_routes_are_connected_before_authentication() {
         (Method::POST, Method::DELETE, "vendors"),
         (Method::PATCH, Method::GET, "vendors/1"),
         (Method::POST, Method::GET, "vendors/1/archive"),
+        (Method::POST, Method::GET, "vendors/1/members"),
+        (Method::POST, Method::GET, "vendors/1/renew"),
         (Method::POST, Method::GET, "vendors/1/periods"),
         (Method::PATCH, Method::GET, "vendor-periods/1"),
         (Method::POST, Method::GET, "vendor-periods/1/start-confirm"),
@@ -315,18 +293,8 @@ async fn vendor_routes_are_connected_before_authentication() {
 #[tokio::test]
 async fn vendor_bill_keeps_sub_fen_difference_visible() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, "vendor-micro-first").await;
-    let second = create_cycle(&harness, 200, "vendor-micro-second").await;
-    let vendor = create_vendor(&harness, "vendor-micro-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-micro-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-micro-create").await;
+    let period = period_from_vendor(&vendor);
     let csv = concat!(
         "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n",
         "2025-01-01T00:00:00+00:00,1.000000,fixture-model,10,20,0,0,fixture-1\n",
@@ -358,18 +326,10 @@ async fn vendor_bill_keeps_sub_fen_difference_visible() {
 #[tokio::test]
 async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, "vendor-drift-cost-first").await;
-    let second = create_cycle(&harness, 200, "vendor-drift-cost-second").await;
-    let vendor = create_vendor(&harness, "vendor-drift-cost-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-drift-cost-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-drift-cost-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
 
     let preview = harness
         .app
@@ -441,10 +401,6 @@ async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
     );
 
     let current = vendor_period_row(&harness, period["id"].as_i64().unwrap()).await;
-    let third = create_cycle(&harness, 300, "vendor-drift-member-third").await;
-    let first_row = cycle_row(&harness, first).await;
-    let second_row = cycle_row(&harness, second).await;
-    let third_row = cycle_row(&harness, third).await;
     let preview = harness
         .app
         .service
@@ -465,26 +421,30 @@ async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
         )
         .await
         .expect("prepare before member drift");
+    let vendor_current = harness
+        .app
+        .service
+        .vendors(&admin())
+        .await
+        .expect("read current vendor")["vendors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == vendor["id"])
+        .cloned()
+        .expect("current vendor row");
     mutate(
         &harness,
         "vendor-drift-member-edit",
-        &format!("edit-vendor-period:{}", period["id"].as_i64().unwrap()),
+        &format!("add-vendor-members:{}", vendor["id"].as_i64().unwrap()),
         &json!({
-            "version":current["version"],
-            "cost":"7.00",
-            "creditor_id":2,
-            "start":START,
-            "start_mode":"exact",
-            "members":[
-                {"cycle_id":first,"version":first_row["version"]},
-                {"cycle_id":second,"version":second_row["version"]},
-                {"cycle_id":third,"version":third_row["version"]}
-            ],
-            "detached":[]
+            "version":vendor_current["version"],
+            "period_version":current["version"],
+            "account_ids":[400]
         }),
     )
     .await
-    .expect("change vendor members");
+    .expect("append unconfigured vendor member");
     assert_error(
         mutate_with_prepared(
             &harness,
@@ -511,18 +471,10 @@ async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
 #[tokio::test]
 async fn vendor_settlement_rejects_usage_revision_without_partial_orders() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, "vendor-revision-first").await;
-    let second = create_cycle(&harness, 200, "vendor-revision-second").await;
-    let vendor = create_vendor(&harness, "vendor-revision-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-revision-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-revision-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     confirm_vendor_bill(&harness, &period, bill_csv(), false)
         .await
         .expect("confirm vendor bill");
@@ -593,18 +545,10 @@ async fn vendor_settlement_rejects_usage_revision_without_partial_orders() {
 #[tokio::test]
 async fn vendor_renewal_preserves_old_end_and_rejects_old_group_retry() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, "vendor-renew-first").await;
-    let second = create_cycle(&harness, 200, "vendor-renew-second").await;
-    let vendor = create_vendor(&harness, "vendor-renew-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-renew-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-renew-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     confirm_vendor_bill(&harness, &period, bill_csv(), false)
         .await
         .expect("confirm vendor bill");
@@ -616,8 +560,7 @@ async fn vendor_renewal_preserves_old_end_and_rejects_old_group_retry() {
             "period_id":period["id"],
             "version":current["version"],
             "cost":"6.00",
-            "creditor_id":2,
-            "cycle_ids":[first,second]
+            "creditor_id":2
         }]),
         "vendor-renew-settle",
     )
@@ -646,8 +589,7 @@ async fn vendor_renewal_preserves_old_end_and_rejects_old_group_retry() {
                 "period_id":old_id,
                 "version":old["version"],
                 "cost":"6.00",
-                "creditor_id":2,
-                "cycle_ids":[first,second]
+                "creditor_id":2
             }]),
             "vendor-renew-old-retry",
         )
@@ -681,18 +623,8 @@ async fn vendor_renewal_preserves_old_end_and_rejects_old_group_retry() {
 #[tokio::test]
 async fn vendor_unmatched_export_is_formula_safe_and_expires() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, "vendor-export-first").await;
-    let second = create_cycle(&harness, 200, "vendor-export-second").await;
-    let vendor = create_vendor(&harness, "vendor-export-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-export-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-export-create").await;
+    let period = period_from_vendor(&vendor);
     let preview = harness
         .app
         .service
@@ -752,18 +684,10 @@ async fn vendor_unmatched_export_is_formula_safe_and_expires() {
 #[tokio::test]
 async fn deleted_vendor_member_keeps_settlement_financial_history() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, "vendor-history-first").await;
-    let second = create_cycle(&harness, 200, "vendor-history-second").await;
-    let vendor = create_vendor(&harness, "vendor-history-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-history-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-history-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     confirm_vendor_bill(&harness, &period, bill_csv(), false)
         .await
         .expect("confirm vendor bill");

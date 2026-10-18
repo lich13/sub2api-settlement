@@ -72,12 +72,15 @@ impl Service {
             sync_error = json!("消费记录同步已中断，请稍后重试");
         }
         for a in accounts {
-            let p=store::optional(&mut db,"SELECT name AS public_name,kind,version AS profile_version FROM profiles WHERE account_id=?",&[a["id"].clone()]).await?.unwrap_or(json!({"public_name":null,"kind":null,"profile_version":null}));
+            let p=store::optional(&mut db,"SELECT name AS public_name,kind,vendor_id,version AS profile_version FROM profiles WHERE account_id=?",&[a["id"].clone()]).await?.unwrap_or(json!({"public_name":null,"kind":null,"profile_version":null}));
             if p["kind"] != "paid" && text(actor, "role") != "admin" {
                 continue;
             }
             let c=store::optional(&mut db,"SELECT * FROM cycles WHERE account_id=? AND status!='cancelled' ORDER BY (status='open') DESC,start DESC,id DESC LIMIT 1",&[a["id"].clone()]).await?;
             let mut row = json!({"id":a["id"],"name":a["name"],"platform":a["platform"],"kind":p["kind"].as_str().unwrap_or("unconfigured"),"deleted":flag(&a,"deleted"),"profile_version":p["profile_version"],"cycle":c});
+            if !p["vendor_id"].is_null() {
+                row["vendor_id"] = p["vendor_id"].clone();
+            }
             if row["cycle"]["status"] == "open" {
                 row["cycle"]["name"] = a["name"].clone();
             }
@@ -133,10 +136,19 @@ impl Service {
                     .find(|s| s["user_id"] == actor["id"])
                     .cloned()
                     .unwrap_or(Value::Null);
+                if !c["vendor_period_id"].is_null() {
+                    row["display"] = self
+                        .present_calculation(calc.clone(), c["status"] == "settled")
+                        .await["display"]
+                        .clone();
+                }
                 row["total_consumption"] = calc["total_consumption"].clone();
                 row["creditor_name"] = json!(name(&mut db, int(&c, "creditor_id")).await?);
                 row["record_count"] = calc["record_count"].clone();
                 if row.get("data_error").is_some_and(|e| !e.is_null()) {
+                    if row.get("display").is_some() {
+                        row["display"]["cost_multiplier"] = Value::Null;
+                    }
                     for key in ["total_consumption", "mine", "record_count"] {
                         row[key] = Value::Null;
                     }

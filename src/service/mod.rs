@@ -6,6 +6,7 @@ mod presentation;
 mod reads;
 mod sync;
 pub mod vendor_billing;
+mod vendor_groups;
 mod vendors;
 use crate::{
     error::{Error, Result},
@@ -103,6 +104,8 @@ impl Service {
             .map(|(a, b)| (a, b.parse::<i64>().unwrap_or(0)))
             .unwrap_or((action, 0));
         let result = match kind {
+            "add-vendor-members" => self.add_vendor_members(&mut db, actor, id, payload).await?,
+            "renew-vendor" => self.renew_vendor(&mut db, actor, id, payload).await?,
             "create-vendor" => self.save_vendor(&mut db, actor, None, payload).await?,
             "edit-vendor" => self.save_vendor(&mut db, actor, Some(id), payload).await?,
             "void-vendor" => self.void_vendor(&mut db, actor, id, payload).await?,

@@ -24,7 +24,7 @@ impl Service {
                 || p["bill_digest"] != snap["digest"]
                 || p["bill_end"] != snap["end"]
             {
-                return Err(Error::conflict("供应商结算依据已变化，请重新预览"));
+                return Err(Error::conflict("账号组结算依据已变化，请重新预览"));
             }
             p["settlement_end"] = snap["end"].clone();
             periods.insert(pid, p);
@@ -32,26 +32,12 @@ impl Service {
         for r in array(&data["vendor_renewals"]) {
             let p = periods
                 .get(&int(r, "period_id"))
-                .ok_or_else(|| Error::invalid("续费供应商不在本次结算中"))?;
+                .ok_or_else(|| Error::invalid("续费账号组不在本次结算中"))?;
             if p["version"] != r["version"] {
-                return Err(Error::conflict("供应商续费设置已变化"));
+                return Err(Error::conflict("账号组续费设置已变化"));
             }
-            if optional(db,"SELECT id FROM vendor_periods WHERE vendor_id=? AND status='open' AND end IS NULL AND id!=?",&[p["vendor_id"].clone(),p["id"].clone()]).await?.is_some(){return Err(Error::conflict("该供应商已有续费周期，不能重复续费"));}
-            let members = Self::vendor_members(db, int(p, "id")).await?;
-            if array(&r["cycle_ids"]).is_empty() {
-                return Err(Error::invalid("请选择下期成员"));
-            }
-            for cid in array(&r["cycle_ids"]) {
-                if !members
-                    .iter()
-                    .any(|c| c["id"] == *cid && !flag(c, "account_deleted"))
-                {
-                    return Err(Error::invalid("下期成员必须是本期仍存在的账号"));
-                }
-                if array(&data["delete_cycle_ids"]).contains(cid) {
-                    return Err(Error::invalid("续费与删除不能同时选择"));
-                }
-            }
+            if optional(db,"SELECT id FROM vendor_periods WHERE vendor_id=? AND status='open' AND end IS NULL AND id!=?",&[p["vendor_id"].clone(),p["id"].clone()]).await?.is_some(){return Err(Error::conflict("该账号组已有续费周期，不能重复续费"));}
+            Self::check_vendor_renewal(db, p, r, &data["delete_cycle_ids"]).await?;
         }
         Ok(periods.into_values().collect())
     }
@@ -72,36 +58,23 @@ impl Service {
             )
             .await?;
             let members = Self::vendor_members(db, pid).await?;
-            for c in &members {
-                exec(db,"UPDATE profiles SET vendor_id=NULL,version=version+1 WHERE account_id=? AND NOT EXISTS(SELECT 1 FROM cycles x WHERE x.account_id=? AND x.status='open' AND x.vendor_period_id IS NOT NULL)",&[c["account_id"].clone(),c["account_id"].clone()]).await?;
-            }
+            // Keep current profile membership after closing a period.
+            exec(
+                db,
+                "UPDATE vendors SET version=version+1 WHERE id=?",
+                &[p["vendor_id"].clone()],
+            )
+            .await?;
             if let Some(r) = array(&data["vendor_renewals"])
                 .iter()
                 .find(|r| r["period_id"] == p["id"])
             {
-                let cost = cents(text(r, "cost"))?;
-                one(
-                    db,
-                    "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-                    &[r["creditor_id"].clone()],
-                )
-                .await?;
-                let new=exec(db,"INSERT INTO vendor_periods(vendor_id,name,cost_fen,creditor_id,start,renewed_from_period_id,created_at) VALUES(?,?,?,?,?,?,?)",&[p["vendor_id"].clone(),p["name"].clone(),json!(cost),r["creditor_id"].clone(),p["settlement_end"].clone(),json!(pid),json!(time::now())]).await?.last_insert_rowid();
-                for cid in array(&r["cycle_ids"]) {
-                    let c = members
-                        .iter()
-                        .find(|c| c["id"] == *cid)
-                        .ok_or_else(Error::unavailable)?;
-                    let created=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":c["current_name"],"cost":"0.00","cost_kind":"exact","creditor_id":r["creditor_id"],"start":p["settlement_end"],"start_mode":"exact","renewed_from_cycle_id":c["id"]})).await?;
-                    exec(db,"UPDATE cycles SET vendor_id=?,vendor_period_id=?,cost_source='vendor_bill' WHERE id=?",&[p["vendor_id"].clone(),json!(new),created["id"].clone()]).await?;
-                    exec(
-                        db,
-                        "UPDATE profiles SET vendor_id=? WHERE account_id=?",
-                        &[p["vendor_id"].clone(), c["account_id"].clone()],
-                    )
+                let mut closed = p.clone();
+                closed["end"] = p["settlement_end"].clone();
+                let renewed = self
+                    .renew_vendor_period(db, actor, &closed, r, &data["delete_cycle_ids"])
                     .await?;
-                }
-                next.push(json!({"previous_period_id":pid,"id":new}));
+                next.push(json!({"previous_period_id":pid,"id":renewed["id"]}));
             }
             audit(db,actor,"settle_vendor",json!(pid),&json!({"cost_fen":p["cost_fen"],"end":p["settlement_end"],"members":members.iter().map(|c|c["id"].clone()).collect::<Vec<_>>()})).await?;
         }
@@ -117,7 +90,7 @@ impl Service {
         admin(actor)?;
         let p = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(pid)]).await?;
         if p["status"] != "settled" || p["version"] != data["version"] {
-            return Err(Error::conflict("供应商结算已变化，请刷新"));
+            return Err(Error::conflict("账号组结算已变化，请刷新"));
         }
         let members = Self::vendor_members(db, pid).await?;
         for c in &members {
@@ -132,7 +105,7 @@ impl Service {
     }
     pub async fn independent_cycle(c: &Value) -> Result<()> {
         if !c["vendor_period_id"].is_null() {
-            return Err(Error::conflict("该账号属于供应商周期，请整组操作"));
+            return Err(Error::conflict("该账号属于账号组周期，请整组操作"));
         }
         Ok(())
     }
@@ -149,6 +122,17 @@ impl Service {
                     p.as_object_mut().map(|o| o.remove("bill_digest"));
                 }
             }
+            v["current_members"] =
+                json!(Self::current_vendor_members(&mut db, int(v, "id")).await?);
+            v["current_period"] = periods
+                .iter()
+                .find(|p| p["status"] == "open" && p["end"].is_null())
+                .cloned()
+                .unwrap_or(Value::Null);
+            v["waiting_renewal"] = json!(
+                v["current_period"].is_null()
+                    && periods.first().is_some_and(|p| p["status"] == "settled")
+            );
             v["periods"] = json!(periods);
         }
         Ok(json!({"vendors":vendors,"account_revision":state["revision"]}))
@@ -170,12 +154,13 @@ impl Service {
         let cost = cents(text(data, "cost"))?;
         let title = text(data, "name").trim();
         if title.is_empty() {
-            return Err(Error::invalid("请填写供应商名称"));
+            return Err(Error::invalid("请填写账号组名称"));
         }
+        let creating = id.is_none();
         let id = if let Some(id) = id {
             let old = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
             if old["version"] != data["version"] || !old["archived_at"].is_null() {
-                return Err(Error::conflict("供应商设置已变化，请刷新"));
+                return Err(Error::conflict("账号组设置已变化，请刷新"));
             }
             exec(
                 db,
@@ -204,7 +189,11 @@ impl Service {
             .last_insert_rowid()
         };
         audit(db, actor, "save_vendor", json!(id), data).await?;
-        one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await
+        let mut v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
+        if creating && data.get("account_ids").is_some() {
+            v["period"] = self.create_vendor_group_period(db, &v, data).await?;
+        }
+        Ok(v)
     }
     pub async fn archive_vendor(
         &self,
@@ -216,7 +205,7 @@ impl Service {
         admin(actor)?;
         let v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
         if v["version"] != data["version"] {
-            return Err(Error::conflict("供应商设置已变化，请刷新"));
+            return Err(Error::conflict("账号组设置已变化，请刷新"));
         }
         if optional(
             db,
@@ -226,7 +215,7 @@ impl Service {
         .await?
         .is_some()
         {
-            return Err(Error::conflict("请先结束供应商的开放周期"));
+            return Err(Error::conflict("请先结束账号组的开放周期"));
         }
         exec(
             db,
@@ -234,7 +223,19 @@ impl Service {
             &[json!(time::now()), json!(id)],
         )
         .await?;
-        audit(db, actor, "archive_vendor", json!(id), &json!({})).await?;
+        let released = Self::current_vendor_members(db, id).await?;
+        for a in &released {
+            Self::assert_not_deleting(db, int(a, "account_id")).await?;
+        }
+        exec(db, "DELETE FROM profiles WHERE vendor_id=?", &[json!(id)]).await?;
+        audit(
+            db,
+            actor,
+            "archive_vendor",
+            json!(id),
+            &json!({"released_members":released}),
+        )
+        .await?;
         Ok(json!({"ok":true}))
     }
     pub async fn invalidate_vendor(db: &mut Db, period: i64) -> Result<()> {
@@ -257,21 +258,40 @@ impl Service {
         editing: bool,
     ) -> Result<Value> {
         admin(actor)?;
-        let old = if editing {
-            Some(one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(id)]).await?)
-        } else {
-            None
-        };
-        let vid = old.as_ref().map_or(id, |p| int(p, "vendor_id"));
+        if !editing {
+            let v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
+            if v["version"] != data["version"] || !v["archived_at"].is_null() {
+                return Err(Error::conflict("账号组已变化，请刷新"));
+            }
+            if data.get("account_ids").is_none() {
+                return Err(Error::conflict(
+                    "请直接选择待配置账号建组，已配置账号不能入组",
+                ));
+            }
+            one(
+                db,
+                "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
+                &[data["creditor_id"].clone()],
+            )
+            .await?;
+            let p = self.create_vendor_group_period(db, &v, data).await?;
+            exec(
+                db,
+                "UPDATE vendors SET version=version+1 WHERE id=?",
+                &[json!(id)],
+            )
+            .await?;
+            audit(db, actor, "save_vendor_period", p["id"].clone(), data).await?;
+            return Ok(p);
+        }
+        let old = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(id)]).await?;
+        let vid = int(&old, "vendor_id");
         let vendor = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(vid)]).await?;
         if !vendor["archived_at"].is_null() {
-            return Err(Error::conflict("供应商已归档"));
+            return Err(Error::conflict("账号组已归档"));
         }
-        let versioned = old.as_ref().unwrap_or(&vendor);
-        if versioned["version"] != data["version"]
-            || old.as_ref().is_some_and(|p| p["status"] != "open")
-        {
-            return Err(Error::conflict("供应商周期已变化，请刷新"));
+        if old["status"] != "open" || old["version"] != data["version"] {
+            return Err(Error::conflict("账号组周期已变化，请刷新"));
         }
         one(
             db,
@@ -281,131 +301,63 @@ impl Service {
         .await?;
         let cost = cents(text(data, "cost"))?;
         let start = self.resolve_start(db, data).await?;
-        if !editing
-            && optional(
-                db,
-                "SELECT id FROM vendor_periods WHERE vendor_id=? AND status='open' AND end IS NULL",
-                &[json!(vid)],
-            )
-            .await?
-            .is_some()
-        {
-            return Err(Error::conflict("供应商已有开放周期，请修改整组配置"));
-        }
-        let previous = if editing {
-            Self::vendor_members(db, id).await?
-        } else {
-            vec![]
-        };
+        let members = Self::vendor_members(db, id).await?;
         let requested = array(&data["members"]);
-        if requested.is_empty() || requested.len() > 100 {
-            return Err(Error::invalid("请选择供应商周期成员"));
-        }
         let ids = requested
             .iter()
             .map(|m| int(m, "cycle_id"))
             .collect::<BTreeSet<_>>();
-        if ids.len() != requested.len() {
-            return Err(Error::invalid("周期成员重复"));
+        let previous_ids = members
+            .iter()
+            .map(|c| int(c, "id"))
+            .collect::<BTreeSet<_>>();
+        if ids.is_empty()
+            || ids.len() != requested.len()
+            || ids != previous_ids
+            || !array(&data["detached"]).is_empty()
+        {
+            return Err(Error::conflict(
+                "当前账期不能移出或替换成员；请使用添加账号入口追加待配置账号",
+            ));
         }
-        let mut selected = Vec::new();
-        for m in requested {
-            let c=one(db,"SELECT c.*,a.deleted AS account_deleted,a.name AS current_name,p.kind FROM cycles c JOIN accounts a ON a.id=c.account_id AND a.root_id=a.id JOIN profiles p ON p.account_id=a.id WHERE c.id=?",&[m["cycle_id"].clone()]).await?;
-            let existing = editing && c["vendor_period_id"] == id;
+        for c in &members {
             if c["status"] != "open"
-                || c["version"] != m["version"]
-                || c["kind"] != "paid"
-                || c["cost_kind"] != "exact"
+                || !requested
+                    .iter()
+                    .any(|m| m["cycle_id"] == c["id"] && m["version"] == c["version"])
             {
-                return Err(Error::conflict("成员必须是最新的准确成本付费开放周期"));
+                return Err(Error::conflict("成员已变化，请刷新"));
             }
-            if !existing && (flag(&c, "account_deleted") || !c["vendor_period_id"].is_null()) {
-                return Err(Error::conflict("不能加入已删除账号或其他供应商周期"));
-            }
-            if !existing && c["start"] != start["start"] {
-                return Err(Error::conflict("成员起点不一致，请先独立处理已有周期"));
-            }
-            if &c["end"] != old.as_ref().map_or(&Value::Null, |p| &p["end"]) {
-                return Err(Error::conflict("成员结束时间不一致"));
-            }
-            if flag(&c, "start_locked")
+            if flag(c, "start_locked")
                 && (c["start"] != start["start"] || c["start_mode"] != start["start_mode"])
             {
                 return Err(Error::conflict("升级付费起点已锁定，不能修改"));
             }
             self.validate_cycle(
                 db,
-                int(&c, "account_id"),
+                int(c, "account_id"),
                 text(&start, "start"),
-                c["end"].as_str(),
-                Some(int(&c, "id")),
+                old["end"].as_str(),
+                Some(int(c, "id")),
                 true,
             )
             .await?;
-            selected.push(c);
         }
-        for c in previous.iter().chain(selected.iter()) {
-            Self::assert_not_deleting(db, int(c, "account_id")).await?;
-            exec(db,"DELETE FROM previews WHERE EXISTS(SELECT 1 FROM json_each(previews.payload) j WHERE json_extract(j.value,'$.cycle.id')=?)",&[c["id"].clone()]).await?;
-        }
-        for c in &previous {
-            if ids.contains(&int(c, "id")) {
-                continue;
-            }
-            if flag(c, "account_deleted") {
-                return Err(Error::conflict("已删除成员仍须保留本周期账务并整组结算"));
-            }
-            let d = array(&data["detached"])
-                .iter()
-                .find(|d| d["cycle_id"] == c["id"])
-                .ok_or_else(|| Error::invalid("移出成员必须填写独立成本、垫付人和版本"))?;
-            if d["version"] != c["version"] {
-                return Err(Error::conflict("移出成员已变化，请刷新"));
-            }
-            one(
-                db,
-                "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-                &[d["creditor_id"].clone()],
-            )
-            .await?;
-            exec(db,"UPDATE cycles SET vendor_id=NULL,vendor_period_id=NULL,cost_fen=?,creditor_id=?,cost_source='manual',bill_import_id=NULL,bill_digest=NULL,bill_end=NULL,bill_difference_confirmed=0,version=version+1 WHERE id=?",&[json!(cents(text(d,"cost"))?),d["creditor_id"].clone(),c["id"].clone()]).await?;
-            exec(
-                db,
-                "UPDATE profiles SET vendor_id=NULL,version=version+1 WHERE account_id=?",
-                &[c["account_id"].clone()],
-            )
-            .await?;
-        }
-        let same = old.as_ref().is_some_and(|p| {
-            p["start"] == start["start"] && p["start_mode"] == start["start_mode"]
-        });
+        let same = old["start"] == start["start"] && old["start_mode"] == start["start_mode"];
         let confirmed = if same {
-            old.as_ref().map_or(0, |p| int(p, "start_confirmed"))
+            int(&old, "start_confirmed")
         } else {
             int(&start, "start_confirmed")
         };
-        // An unconfirmed incoming estimate must never become confirmed by grouping it.
-        let confirmed = if selected
-            .iter()
-            .any(|c| c["start"] == start["start"] && !flag(c, "start_confirmed"))
-        {
-            0
-        } else {
-            confirmed
-        };
-        let pid = if editing {
-            exec(db,"UPDATE vendor_periods SET cost_fen=?,creditor_id=?,start=?,start_mode=?,start_upper=?,start_confirmed=? WHERE id=?",&[json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_upper"].clone(),json!(confirmed),json!(id)]).await?;
-            Self::invalidate_vendor(db, id).await?;
-            id
-        } else {
-            exec(db,"INSERT INTO vendor_periods(vendor_id,name,cost_fen,creditor_id,start,start_mode,start_upper,start_confirmed,created_at) VALUES(?,?,?,?,?,?,?,?,?)",&[json!(vid),vendor["name"].clone(),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_upper"].clone(),json!(confirmed),json!(time::now())]).await?.last_insert_rowid()
-        };
-        for c in selected {
-            // No account cost is assigned before a bill splits the group cost.
-            exec(db,"UPDATE cycles SET vendor_id=?,vendor_period_id=?,cost_fen=0,creditor_id=?,start=?,start_lower=?,start_mode=?,start_upper=?,start_confirmed=?,cost_source='vendor_bill',bill_import_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0,version=version+1 WHERE id=?",&[json!(vid),json!(pid),data["creditor_id"].clone(),start["start"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_upper"].clone(),json!(confirmed),c["id"].clone()]).await?;
+        exec(db,"UPDATE vendor_periods SET cost_fen=?,creditor_id=?,start=?,start_mode=?,start_upper=?,start_confirmed=? WHERE id=?",&[json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_upper"].clone(),json!(confirmed),json!(id)]).await?;
+        Self::invalidate_vendor(db, id).await?;
+        for c in &members {
+            // The group bill determines each member's amount; no independent cost is retained.
+            exec(db,"UPDATE cycles SET cost_fen=0,creditor_id=?,start=?,start_lower=?,start_mode=?,start_upper=?,start_confirmed=?,cost_source='vendor_bill',bill_import_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0,version=version+1 WHERE id=?",&[data["creditor_id"].clone(),start["start"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_upper"].clone(),json!(confirmed),c["id"].clone()]).await?;
+            // Editing an old voided period must not reclaim a member released or configured elsewhere.
             exec(
                 db,
-                "UPDATE profiles SET vendor_id=?,version=version+1 WHERE account_id=?",
+                "UPDATE profiles SET version=version+1 WHERE vendor_id=? AND account_id=?",
                 &[json!(vid), c["account_id"].clone()],
             )
             .await?;
@@ -416,15 +368,21 @@ impl Service {
             )
             .await?;
         }
+        exec(
+            db,
+            "UPDATE vendors SET cost_fen=?,creditor_id=?,version=version+1 WHERE id=?",
+            &[json!(cost), data["creditor_id"].clone(), json!(vid)],
+        )
+        .await?;
         audit(
             db,
             actor,
             "save_vendor_period",
-            json!(pid),
+            json!(id),
             &json!({"before":old,"configuration":data}),
         )
         .await?;
-        one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(pid)]).await
+        one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(id)]).await
     }
     pub async fn confirm_vendor_start(
         &self,
@@ -436,7 +394,7 @@ impl Service {
         admin(actor)?;
         let p = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(id)]).await?;
         if p["status"] != "open" || p["version"] != data["version"] {
-            return Err(Error::conflict("供应商周期已变化，请刷新"));
+            return Err(Error::conflict("账号组周期已变化，请刷新"));
         }
         let start = time::instant(text(data, "start"))?;
         let members = Self::vendor_members(db, id).await?;
@@ -496,7 +454,7 @@ impl Service {
             for m in Self::vendor_members(db, pid).await? {
                 if !selected.contains(&int(&m, "id")) {
                     return Err(Error::conflict(
-                        "供应商周期必须包含全部成员，请刷新并整组结算",
+                        "账号组周期必须包含全部成员，请刷新并整组结算",
                     ));
                 }
             }

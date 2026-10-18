@@ -193,10 +193,29 @@ pub fn normalize(kind: &str, v: Value) -> Result<Value> {
 
 fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
     let fields: &[&str] = match kind {
-        "create-vendor" => &["name", "cost", "creditor_id"],
+        "create-vendor" => &[
+            "name",
+            "cost",
+            "creditor_id",
+            "account_ids",
+            "start",
+            "start_mode",
+        ],
+        "add-vendor-members" => &["version", "period_version", "account_ids"],
+        "renew-vendor" => &["version", "period_version", "cost", "creditor_id"],
         "edit-vendor" => &["name", "cost", "creditor_id", "version"],
         "archive-vendor" | "void-vendor" => &["version"],
-        "create-vendor-period" | "edit-vendor-period" => &[
+        "create-vendor-period" => &[
+            "version",
+            "cost",
+            "creditor_id",
+            "start",
+            "start_mode",
+            "members",
+            "detached",
+            "account_ids",
+        ],
+        "edit-vendor-period" => &[
             "version",
             "cost",
             "creditor_id",
@@ -209,7 +228,7 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
         "vendor-member" => &["cycle_id", "version"],
         "vendor-detached" => &["cycle_id", "version", "cost", "creditor_id"],
         "vendor-renewal" => &["period_id", "version", "cost", "creditor_id", "cycle_ids"],
-        _ => return Err(Error::invalid("供应商操作无效")),
+        _ => return Err(Error::invalid("账号组操作无效")),
     };
     let obj = v
         .as_object()
@@ -225,14 +244,31 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
             ));
         }
     }
-    if fields.contains(&"start_mode") && v.get("start_mode").is_none() {
+    let definition_only = kind == "create-vendor" && v.get("account_ids").is_none();
+    if definition_only && (v.get("start").is_some() || v.get("start_mode").is_some()) {
+        return Err(Error::invalid("建组起点必须同时提供待配置账号"));
+    }
+    if fields.contains(&"start_mode") && !definition_only && v.get("start_mode").is_none() {
         v["start_mode"] = json!("exact");
     }
     if fields.contains(&"detached") && v.get("detached").is_none() {
         v["detached"] = json!([]);
     }
     for k in fields {
-        required(&v, k)?;
+        let optional = (definition_only && ["account_ids", "start", "start_mode"].contains(k))
+            || (kind == "vendor-renewal" && *k == "cycle_ids")
+            || (kind == "create-vendor-period"
+                && (*k == "account_ids" || (*k == "members" && v.get("account_ids").is_some())))
+            || (kind == "add-vendor-members" && *k == "period_version");
+        if !optional {
+            required(&v, k)?;
+        }
+    }
+    if kind == "add-vendor-members" && v.get("period_version").is_none() {
+        v["period_version"] = Value::Null;
+    }
+    if fields.contains(&"period_version") && !v["period_version"].is_null() {
+        positive(&mut v, "period_version")?;
     }
     for k in ["version", "creditor_id", "cycle_id", "period_id"] {
         if fields.contains(&k) {
@@ -245,11 +281,11 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
     if fields.contains(&"cost") {
         cost(&v, "cost", &COST)?;
     }
-    if fields.contains(&"start") {
+    if fields.contains(&"start") && !definition_only {
         string(&v, "start", 1, 100)?;
         v["start"] = json!(date_time(text(&v, "start"))?);
     }
-    if fields.contains(&"start_mode") {
+    if fields.contains(&"start_mode") && !definition_only {
         choice(
             &v,
             "start_mode",
@@ -261,7 +297,7 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
         ("members", "vendor-member", 1),
         ("detached", "vendor-detached", 0),
     ] {
-        if !fields.contains(&key) {
+        if !fields.contains(&key) || v.get(key).is_none() {
             continue;
         }
         let rows = v[key]
@@ -284,8 +320,11 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
         }
         v[key] = json!(rows);
     }
-    if fields.contains(&"cycle_ids") {
+    if fields.contains(&"cycle_ids") && v.get("cycle_ids").is_some() {
         ids(&v, "cycle_ids", 1)?;
+    }
+    if v.get("account_ids").is_some() {
+        ids(&v, "account_ids", 1)?;
     }
     Ok(v)
 }
@@ -561,7 +600,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 let rows = rows
                     .as_array()
                     .filter(|r| r.len() <= 100)
-                    .ok_or_else(|| Error::invalid("供应商续费数据无效"))?;
+                    .ok_or_else(|| Error::invalid("账号组续费数据无效"))?;
                 let rows = rows
                     .iter()
                     .cloned()
@@ -574,7 +613,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                     .len()
                     != rows.len()
                 {
-                    return Err(Error::invalid("供应商续费重复"));
+                    return Err(Error::invalid("账号组续费重复"));
                 }
                 v["vendor_renewals"] = json!(rows);
             }

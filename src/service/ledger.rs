@@ -702,7 +702,7 @@ impl Service {
         Ok(json!({"ok":true}))
     }
     pub async fn void(&self, db: &mut Db, actor: &Value, sid: i64) -> Result<Value> {
-        if optional(db,"SELECT c.id FROM cycles c JOIN settlements s ON s.cycle_id=c.id WHERE s.id=? AND c.vendor_period_id IS NOT NULL",&[json!(sid)]).await?.is_some(){return Err(Error::conflict("供应商结算必须整组作废"));}
+        if optional(db,"SELECT c.id FROM cycles c JOIN settlements s ON s.cycle_id=c.id WHERE s.id=? AND c.vendor_period_id IS NOT NULL",&[json!(sid)]).await?.is_some(){return Err(Error::conflict("账号组结算必须整组作废"));}
         self.void_one(db, actor, sid).await
     }
     pub(super) async fn void_one(&self, db: &mut Db, actor: &Value, sid: i64) -> Result<Value> {

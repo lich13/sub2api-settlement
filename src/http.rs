@@ -337,6 +337,8 @@ impl App {
         let (kind, entity) = match (method, parts.as_slice()) {
             ("POST", ["vendors"]) => ("create-vendor", None),
             ("PATCH", ["vendors", _]) => ("edit-vendor", Some(id(1)?)),
+            ("POST", ["vendors", _, "members"]) => ("add-vendor-members", Some(id(1)?)),
+            ("POST", ["vendors", _, "renew"]) => ("renew-vendor", Some(id(1)?)),
             ("POST", ["vendors", _, "archive"]) => ("archive-vendor", Some(id(1)?)),
             ("POST", ["vendors", _, "periods"]) => ("create-vendor-period", Some(id(1)?)),
             ("PATCH", ["vendor-periods", _]) => ("edit-vendor-period", Some(id(1)?)),
@@ -523,7 +525,7 @@ fn route_methods(path: &str) -> Option<&'static [&'static str]> {
             _,
             "start-confirm" | "bill-previews" | "bill-confirm",
         ]
-        | ["vendors", _, "periods" | "archive"]
+        | ["vendors", _, "periods" | "archive" | "members" | "renew"]
         | [
             "vendor-periods",
             _,

@@ -160,7 +160,7 @@ impl Service {
                 let mut allocations=if valid{a["allocations"].clone()}else{json!([])};
                 Self::apply_names(&mut allocations,&names);
                 let mut calc=merge(json!({"cycle":cycle,"end":end,"vendor_period":group,"total_consumption":a["total_consumption"],"allocations":allocations,"record_count":own_usage.len(),"digest":rules_digest,"can_settle":valid&&flag(&period,"start_confirmed"),"allocation_pending":!valid,"data_quality":if gaps.is_empty(){"complete"}else{"upstream_difference"},"coverage_warnings":gaps}),super::cycles::start_meta(c));
-                if !valid{calc["cost_warning"]=json!("请导入或重新确认本窗口的供应商账单");}
+                if !valid{calc["cost_warning"]=json!("请导入或重新确认本窗口的账号组账单");}
                 if let Some(r)=&resolved {
                     // Members share one import; snapshots retain its identity and the member split.
                     calc["bill"]=merge(without(r.clone(),&["matched","unmatched","outside","weights"]),json!({"rules_version":"vendor-r5-v1","billable_cost_fen":if valid{a["amount_fen"].clone()}else{Value::Null},"import_id":period["bill_import_id"],"file_hash":stored.as_ref().map(|b|&b["file_hash"]),"basis":split["basis"],"group_cost_fen":period["cost_fen"]}));
@@ -183,7 +183,7 @@ impl Service {
         )
         .await?;
         if current["status"] != "open" || current["version"] != p["period"]["version"] {
-            return Err(Error::conflict("供应商周期已变化，请重新预览"));
+            return Err(Error::conflict("账号组周期已变化，请重新预览"));
         }
         let members = Self::vendor_members(db, int(&current, "id")).await?;
         if members.len() != array(&p["versions"]).len() {
@@ -211,7 +211,7 @@ impl Service {
             .as_str()
             .is_some_and(|m| m != "proportional")
         {
-            return Err(Error::invalid("供应商账单只支持比例分摊"));
+            return Err(Error::invalid("账号组账单只支持比例分摊"));
         }
         let end = time::instant(text(data, "end"))?;
         let mut db = self.store.read().await?;
@@ -231,7 +231,7 @@ impl Service {
         )
         .await?;
         if period["version"] != data["version"] || period["status"] != "open" {
-            return Err(Error::conflict("供应商周期已变化，请刷新"));
+            return Err(Error::conflict("账号组周期已变化，请刷新"));
         }
         if end > time::now()
             || end.as_str() <= text(&period, "start")
@@ -381,7 +381,7 @@ impl Service {
             return Err(Error::invalid("没有正金额匹配或本地消费依据，无法分摊"));
         }
         if !flag(&fresh["period"], "start_confirmed") {
-            return Err(Error::conflict("请先确认供应商起点"));
+            return Err(Error::conflict("请先确认账号组起点"));
         }
         if flag(r, "difference_required") && !flag(data, "accept_difference") {
             return Err(Error::invalid("请确认账单总额、未匹配费用与历史覆盖差异"));

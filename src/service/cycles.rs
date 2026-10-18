@@ -132,6 +132,7 @@ impl Service {
         admin(actor)?;
         accurate_cost(data)?;
         let account = int(data, "account_id");
+        Self::assert_independent_account(db, account).await?;
         if optional(
             db,
             "SELECT kind FROM profiles WHERE account_id=?",
@@ -179,6 +180,7 @@ impl Service {
     ) -> Result<Value> {
         admin(actor)?;
         accurate_cost(data)?;
+        Self::assert_independent_account(db, account).await?;
         store::one(
             db,
             "SELECT id FROM accounts WHERE id=? AND root_id=id",
@@ -415,6 +417,7 @@ impl Service {
         data: &Value,
     ) -> Result<Value> {
         admin(actor)?;
+        Self::assert_independent_account(db, account).await?;
         let title = text(data, "name").trim();
         if title.is_empty() {
             return Err(Error::invalid("请填写账号公开名称"));

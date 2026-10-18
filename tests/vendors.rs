@@ -94,64 +94,41 @@ async fn vendor_period_row(harness: &Harness, id: i64) -> Value {
     row
 }
 
-async fn create_cycle(harness: &Harness, account_id: i64, start: &str, key: &str) -> i64 {
-    let result = mutate(
-        harness,
-        key,
-        "create",
-        &json!({
-            "account_id":account_id,
-            "name":format!("Fixture vendor {account_id}"),
-            "cost":"1.00",
-            "creditor_id":2,
-            "start":start,
-            "start_mode":"exact",
-            "cost_kind":"exact"
-        }),
-    )
-    .await
-    .expect("create vendor member cycle");
-    result["id"].as_i64().unwrap()
+async fn cycle_for_account(harness: &Harness, account_id: i64) -> i64 {
+    harness
+        .rows("cycles")
+        .await
+        .into_iter()
+        .rev()
+        .find(|cycle| cycle["account_id"] == account_id && cycle["vendor_period_id"].is_i64())
+        .unwrap_or_else(|| panic!("vendor cycle for account {account_id} not found"))["id"]
+        .as_i64()
+        .unwrap()
 }
 
-async fn create_vendor(harness: &Harness, key: &str) -> Value {
+async fn create_vendor(harness: &Harness, account_ids: &[i64], cost: &str, key: &str) -> Value {
     mutate(
         harness,
         key,
         "create-vendor",
-        &json!({"name":"Fixture Vendor","cost":"6.00","creditor_id":2}),
-    )
-    .await
-    .expect("create vendor")
-}
-
-async fn create_period(
-    harness: &Harness,
-    vendor: &Value,
-    cost: &str,
-    cycles: &[i64],
-    key: &str,
-) -> Result<Value> {
-    let members = futures_util::future::join_all(cycles.iter().map(|id| async move {
-        let cycle = cycle_row(harness, *id).await;
-        json!({"cycle_id":id,"version":cycle["version"]})
-    }))
-    .await;
-    mutate(
-        harness,
-        key,
-        &format!("create-vendor-period:{}", vendor["id"].as_i64().unwrap()),
         &json!({
-            "version":vendor["version"],
+            "name":"Fixture Vendor",
             "cost":cost,
             "creditor_id":2,
+            "account_ids":account_ids,
             "start":START,
-            "start_mode":"exact",
-            "members":members,
-            "detached":[]
+            "start_mode":"exact"
         }),
     )
     .await
+    .expect("create vendor group")
+}
+
+fn period_from_vendor(vendor: &Value) -> Value {
+    vendor
+        .get("period")
+        .cloned()
+        .unwrap_or_else(|| panic!("create-vendor must return period: {vendor}"))
 }
 
 fn bill_csv() -> String {
@@ -295,103 +272,119 @@ fn vendor_allocations_use_matched_upstream_and_reject_zero_basis() {
 }
 
 #[tokio::test]
-async fn vendor_group_requires_one_start_and_detached_member_cost_and_version() {
+async fn vendor_group_edit_requires_complete_original_members() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, START, "vendor-uniform-first").await;
-    let second = create_cycle(&harness, 200, END, "vendor-uniform-second").await;
-    let vendor = create_vendor(&harness, "vendor-uniform").await;
-    assert_error(
-        create_period(
-            &harness,
-            &vendor,
-            "6.00",
-            &[first, second],
-            "vendor-uniform-fail",
-        )
-        .await,
-        409,
-        "成员起点不一致",
-    );
-
-    let third = create_cycle(&harness, 300, START, "vendor-edit-third").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, third],
-        "vendor-edit-create",
-    )
-    .await
-    .expect("create uniform vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-edit-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     let period_id = period["id"].as_i64().unwrap();
     let first_row = cycle_row(&harness, first).await;
-    let stale = json!({
-        "version":period["version"],
-        "cost":"6.00",
-        "creditor_id":2,
-        "start":START,
-        "start_mode":"exact",
-        "members":[{"cycle_id":first,"version":first_row["version"]}],
-        "detached":[]
-    });
     assert_error(
         mutate(
             &harness,
-            "vendor-edit-missing-detached",
+            "vendor-edit-missing-member",
             &format!("edit-vendor-period:{period_id}"),
-            &stale,
+            &json!({
+                "version":period["version"],
+                "cost":"6.00",
+                "creditor_id":2,
+                "start":START,
+                "start_mode":"exact",
+                "members":[{"cycle_id":first,"version":first_row["version"]}],
+                "detached":[]
+            }),
         )
         .await,
-        422,
-        "移出成员必须填写独立成本",
+        409,
+        "不能移出",
     );
 
-    let third_row = cycle_row(&harness, third).await;
-    let edited = mutate(
+    // A separately configured cycle cannot be smuggled into an existing group.
+    let third = mutate(
         &harness,
-        "vendor-edit-detached",
-        &format!("edit-vendor-period:{period_id}"),
+        "vendor-edit-third-independent",
+        "create",
         &json!({
-            "version":period["version"],
-            "cost":"6.00",
+            "account_id":300,
+            "name":"Independent fixture account",
+            "cost":"1.00",
             "creditor_id":2,
             "start":START,
             "start_mode":"exact",
-            "members":[{"cycle_id":first,"version":first_row["version"]}],
-            "detached":[{"cycle_id":third,"version":third_row["version"],"cost":"2.50","creditor_id":3}]
+            "cost_kind":"exact"
         }),
     )
     .await
-    .expect("detach member with independent cost");
-    assert_eq!(edited["id"], period_id);
-    let detached = cycle_row(&harness, third).await;
-    assert!(detached["vendor_period_id"].is_null());
-    assert_eq!(detached["cost_fen"], 250);
-    assert_eq!(detached["creditor_id"], 3);
-    assert_eq!(vendor_period_row(&harness, period_id).await["version"], 2);
+    .expect("create independent configured cycle")["id"]
+        .as_i64()
+        .unwrap();
+    let second_row = cycle_row(&harness, second).await;
+    let third_row = cycle_row(&harness, third).await;
+    assert_error(
+        mutate(
+            &harness,
+            "vendor-edit-extra-member",
+            &format!("edit-vendor-period:{period_id}"),
+            &json!({
+                "version":period["version"],
+                "cost":"6.00",
+                "creditor_id":2,
+                "start":START,
+                "start_mode":"exact",
+                "members":[
+                    {"cycle_id":first,"version":first_row["version"]},
+                    {"cycle_id":second,"version":second_row["version"]},
+                    {"cycle_id":third,"version":third_row["version"]}
+                ],
+                "detached":[]
+            }),
+        )
+        .await,
+        409,
+        "不能移出或替换成员",
+    );
+}
+
+#[tokio::test]
+async fn vendor_group_period_edit_rejects_detached_payload() {
+    let harness = Harness::new().await;
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-edit-detached-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
+    let first_row = cycle_row(&harness, first).await;
+    let second_row = cycle_row(&harness, second).await;
+    assert_error(
+        mutate(
+            &harness,
+            "vendor-edit-detached",
+            &format!("edit-vendor-period:{}", period["id"].as_i64().unwrap()),
+            &json!({
+                "version":period["version"],
+                "cost":"6.00",
+                "creditor_id":2,
+                "start":START,
+                "start_mode":"exact",
+                "members":[
+                    {"cycle_id":first,"version":first_row["version"]},
+                    {"cycle_id":second,"version":second_row["version"]}
+                ],
+                "detached":[{"cycle_id":second,"version":second_row["version"],"cost":"2.50","creditor_id":3}]
+            }),
+        )
+        .await,
+        409,
+        "不能移出或替换成员",
+    );
 }
 
 #[tokio::test]
 async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, START, "vendor-bound-first").await;
-    let second = create_cycle(&harness, 200, START, "vendor-bound-second").await;
-    let old_preview = harness
-        .app
-        .service
-        .preview(&admin(), &json!({"ids":[first],"expense_ids":[],"end":END}))
-        .await
-        .expect("create old account preview");
-    let vendor = create_vendor(&harness, "vendor-bound-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-bound-period",
-    )
-    .await
-    .expect("create vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-bound-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
     let first_row = cycle_row(&harness, first).await;
     assert_error(
         mutate(
@@ -411,7 +404,7 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
         )
         .await,
         409,
-        "属于供应商周期",
+        "账号组周期",
     );
     assert_error(
         mutate(
@@ -422,7 +415,7 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
         )
         .await,
         409,
-        "属于供应商周期",
+        "账号组周期",
     );
     assert_error(
         harness
@@ -435,7 +428,7 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
             )
             .await,
         409,
-        "属于供应商周期",
+        "账号组周期",
     );
     assert_error(
         harness
@@ -446,19 +439,6 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
         409,
         "必须包含全部成员",
     );
-    assert_error(
-        harness
-            .app
-            .service
-            .prepare_settlement(
-                &admin(),
-                &json!({"preview_id":old_preview["id"],"renewals":[],"delete_cycle_ids":[]}),
-            )
-            .await,
-        404,
-        "结算预览不存在",
-    );
-
     confirm_vendor_bill(&harness, &period, bill_csv(), false)
         .await
         .expect("confirm vendor bill");
@@ -482,18 +462,10 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
 #[tokio::test]
 async fn vendor_bill_difference_requires_explicit_confirmation_and_keeps_c_source() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, START, "vendor-difference-first").await;
-    let second = create_cycle(&harness, 200, START, "vendor-difference-second").await;
-    let vendor = create_vendor(&harness, "vendor-difference-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "5.00",
-        &[first, second],
-        "vendor-difference-period",
-    )
-    .await
-    .expect("create difference vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "5.00", "vendor-difference-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     let preview = harness
         .app
         .service
@@ -607,18 +579,10 @@ async fn settle_group(
 #[tokio::test]
 async fn vendor_group_settles_as_one_renews_and_voids_only_as_a_group() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, START, "vendor-settle-first").await;
-    let second = create_cycle(&harness, 200, START, "vendor-settle-second").await;
-    let vendor = create_vendor(&harness, "vendor-settle-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-settle-period",
-    )
-    .await
-    .expect("create settlement vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-settle-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     confirm_vendor_bill(&harness, &period, bill_csv(), false)
         .await
         .expect("confirm settlement bill");
@@ -631,8 +595,7 @@ async fn vendor_group_settles_as_one_renews_and_voids_only_as_a_group() {
             "period_id":period["id"],
             "version":current["version"],
             "cost":"6.00",
-            "creditor_id":2,
-            "cycle_ids":[first,second]
+            "creditor_id":2
         }]),
         "vendor-settle-renew",
     )
@@ -680,18 +643,10 @@ async fn vendor_group_settles_as_one_renews_and_voids_only_as_a_group() {
 #[tokio::test]
 async fn vendor_group_payment_blocks_group_void() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, START, "vendor-paid-first").await;
-    let second = create_cycle(&harness, 200, START, "vendor-paid-second").await;
-    let vendor = create_vendor(&harness, "vendor-paid-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-paid-period",
-    )
-    .await
-    .expect("create paid vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-paid-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     confirm_vendor_bill(&harness, &period, bill_csv(), false)
         .await
         .expect("confirm paid vendor bill");
@@ -704,6 +659,15 @@ async fn vendor_group_payment_blocks_group_void() {
     )
     .await
     .expect("settle paid vendor group");
+    for account_id in [100, 200] {
+        let profile = harness
+            .rows("profiles")
+            .await
+            .into_iter()
+            .find(|profile| profile["account_id"] == account_id)
+            .expect("group member profile");
+        assert_eq!(profile["vendor_id"], vendor["id"]);
+    }
     let order = harness
         .rows("orders")
         .await
@@ -751,18 +715,10 @@ async fn vendor_group_payment_blocks_group_void() {
 #[tokio::test]
 async fn deleted_vendor_member_cannot_be_removed_from_open_group() {
     let harness = Harness::new().await;
-    let first = create_cycle(&harness, 100, START, "vendor-deleted-first").await;
-    let second = create_cycle(&harness, 200, START, "vendor-deleted-second").await;
-    let vendor = create_vendor(&harness, "vendor-deleted-vendor").await;
-    let period = create_period(
-        &harness,
-        &vendor,
-        "6.00",
-        &[first, second],
-        "vendor-deleted-period",
-    )
-    .await
-    .expect("create deletion vendor period");
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "vendor-deleted-create").await;
+    let period = period_from_vendor(&vendor);
+    let first = cycle_for_account(&harness, 100).await;
+    let second = cycle_for_account(&harness, 200).await;
     let mut source = harness.source();
     source["accounts"]
         .as_array_mut()
@@ -797,7 +753,7 @@ async fn deleted_vendor_member_cannot_be_removed_from_open_group() {
         )
         .await,
         409,
-        "已删除成员仍须保留",
+        "不能移出",
     );
     let members = harness.app.service.vendors(&admin()).await.unwrap()["vendors"][0]["periods"][0]
         ["members"]
