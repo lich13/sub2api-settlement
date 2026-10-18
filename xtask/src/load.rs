@@ -180,7 +180,7 @@ async fn edit_cycles(api: &Api) -> Result<Vec<i64>> {
         if [1, 2].contains(&account["id"].as_i64().unwrap_or_default()) {
             let cycle = &account["cycle"];
             let id = cycle["id"].as_i64().ok_or("Missing cycle")?;
-            api.request("PATCH",&format!("/cycles/{id}"),json!({"account_id":account["id"],"name":cycle["name"],"cost":if account["id"]==1{"100.00"}else{"240.00"},"cost_kind":if account["id"]==1{"exact"}else{"estimated"},"creditor_id":1,"start":START,"start_mode":"exact","version":cycle["version"]}),&format!("load-cycle-{id}")).await?;
+            api.request("PATCH",&format!("/cycles/{id}"),json!({"account_id":account["id"],"name":cycle["name"],"cost":if account["id"]==1{"100.00"}else{"240.00"},"cost_kind":"exact","creditor_id":1,"start":START,"start_mode":"exact","version":cycle["version"]}),&format!("load-cycle-{id}")).await?;
             ids.insert(account["id"].as_i64().unwrap(), id);
         }
     }

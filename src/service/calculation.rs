@@ -8,14 +8,14 @@ use crate::{
 };
 
 impl Service {
-    async fn names(db: &mut Db) -> Result<BTreeMap<i64, String>> {
+    pub(super) async fn names(db: &mut Db) -> Result<BTreeMap<i64, String>> {
         Ok(all(db, "SELECT id,name FROM users", &[])
             .await?
             .into_iter()
             .map(|u| (int(&u, "id"), text(&u, "name").to_owned()))
             .collect())
     }
-    fn apply_names(shares: &mut Value, names: &BTreeMap<i64, String>) {
+    pub(super) fn apply_names(shares: &mut Value, names: &BTreeMap<i64, String>) {
         if let Some(a) = shares.as_array_mut() {
             for s in a {
                 let uid = int(s, "user_id");
@@ -49,7 +49,9 @@ impl Service {
         Ok((total, shares))
     }
     pub async fn overview_calculation(&self, db: &mut Db, c: &Value, end: &str) -> Result<Value> {
-        if c["cost_source"] == "upstream_bill" && int(c, "bill_import_id") != 0 {
+        if !c["vendor_period_id"].is_null()
+            || (c["cost_source"] == "upstream_bill" && int(c, "bill_import_id") != 0)
+        {
             return self.preview_calculation(db, c, end).await;
         }
         let permit = self
@@ -84,7 +86,7 @@ impl Service {
             Ok(result)
         }).await.map_err(|_| Error::unavailable())?
     }
-    async fn usage(db: &mut Db, c: &Value, end: &str) -> Result<Vec<UsageRow>> {
+    pub(super) async fn usage(db: &mut Db, c: &Value, end: &str) -> Result<Vec<UsageRow>> {
         use futures_util::TryStreamExt;
         use sqlx::Row;
         let mut stream = sqlx::query("SELECT account_id,amount,created_at,id,root_id,user_id FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id")
@@ -102,7 +104,11 @@ impl Service {
         }
         Ok(rows)
     }
-    async fn details(db: &mut Db, c: &Value, end: &str) -> Result<BTreeMap<i64, RequestDetail>> {
+    pub(super) async fn details(
+        db: &mut Db,
+        c: &Value,
+        end: &str,
+    ) -> Result<BTreeMap<i64, RequestDetail>> {
         use futures_util::TryStreamExt;
         use sqlx::Row;
         let mut stream = sqlx::query("SELECT d.usage_id,d.payload FROM usage_details d JOIN usage u ON u.id=d.usage_id WHERE u.root_id=? AND u.created_at>=? AND u.created_at<?")
@@ -129,6 +135,16 @@ impl Service {
         end: &str,
         include_records: bool,
     ) -> Result<Value> {
+        if let Some(pid) = c["vendor_period_id"].as_i64() {
+            let group = self
+                .vendor_calculation(db, pid, end, None, include_records)
+                .await?;
+            return array(&group["calculations"])
+                .iter()
+                .find(|v| v["cycle"]["id"] == c["id"])
+                .cloned()
+                .ok_or_else(Error::unavailable);
+        }
         let permit = self
             .cpu
             .clone()
@@ -221,6 +237,7 @@ impl Service {
     pub fn redact(mut result: Value, actor: &Value) -> Value {
         result = without(result, &["records"]);
         if text(actor, "role") != "admin" {
+            result = without(result, &["vendor_basis"]);
             result["allocations"] = json!(
                 array(&result["allocations"])
                     .iter()
@@ -262,6 +279,8 @@ impl Service {
         if !ids.is_empty() {
             Self::fresh(&mut db).await?;
         }
+        Self::complete_vendor_selection(&mut db, ids).await?;
+        let mut vendor_cache = BTreeMap::<i64, Value>::new();
         let mut cycles = Vec::new();
         let mut versions = Vec::new();
         let mut expenses = Vec::new();
@@ -284,12 +303,28 @@ impl Service {
                 && !estimate(text(&c, "start_mode"))
                 && c["cost_source"] != "upstream_bill"
                 && c["cost_kind"] != "estimated"
+                && c["vendor_period_id"].is_null()
             {
                 return Err(Error::conflict(gap));
             }
-            let mut calc = self.preview_calculation(&mut db, &c, actual_end).await?;
+            let mut calc = if let Some(pid) = c["vendor_period_id"].as_i64() {
+                if !vendor_cache.contains_key(&pid) {
+                    vendor_cache.insert(
+                        pid,
+                        self.vendor_calculation(&mut db, pid, actual_end, None, false)
+                            .await?,
+                    );
+                }
+                array(&vendor_cache[&pid]["calculations"])
+                    .iter()
+                    .find(|v| v["cycle"]["id"] == c["id"])
+                    .cloned()
+                    .ok_or_else(Error::unavailable)?
+            } else {
+                self.preview_calculation(&mut db, &c, actual_end).await?
+            };
             if let Some(gap) = gap {
-                if c["cost_source"] != "upstream_bill" {
+                if c["cost_source"] != "upstream_bill" && c["vendor_period_id"].is_null() {
                     calc["data_quality"] = json!("incomplete");
                     calc["can_settle"] = json!(false);
                     calc["start_warning"] = json!(gap);
@@ -378,6 +413,7 @@ impl Service {
         let mut db = self.store.read().await?;
         Self::fresh(&mut db).await?;
         let c = one(&mut db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
+        Self::independent_cycle(&c).await?;
         if c["status"] != "open" || c["version"] != data["version"] {
             return Err(Error::conflict("周期已修改或已出单，请重新预览"));
         }
@@ -577,6 +613,7 @@ impl Service {
         let payload: Value = serde_json::from_str(text(&p, "payload"))?;
         let result = &payload["result"];
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
+        Self::independent_cycle(&c).await?;
         if c["status"] != "open"
             || c["version"] != data["version"]
             || c["version"] != result["version"]

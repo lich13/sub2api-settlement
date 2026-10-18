@@ -263,6 +263,7 @@ impl Service {
         }
         let mut db = self.store.read().await?;
         let mut prepared = Prepared::default();
+        let mut vendor_cache = BTreeMap::<i64, Value>::new();
         for snap in cycles {
             let c = one(
                 &mut db,
@@ -271,13 +272,25 @@ impl Service {
             )
             .await?;
             let revision = store::revision(&mut db, int(&c, "account_id")).await?;
-            prepared.calculations.insert(
-                int(&c, "id"),
-                (
-                    self.calculation(&mut db, &c, text(snap, "end")).await?,
-                    revision,
-                ),
-            );
+            let calc = if let Some(pid) = c["vendor_period_id"].as_i64() {
+                if !vendor_cache.contains_key(&pid) {
+                    vendor_cache.insert(
+                        pid,
+                        self.vendor_calculation(&mut db, pid, text(snap, "end"), None, true)
+                            .await?,
+                    );
+                }
+                array(&vendor_cache[&pid]["calculations"])
+                    .iter()
+                    .find(|v| v["cycle"]["id"] == c["id"])
+                    .cloned()
+                    .ok_or_else(Error::unavailable)?
+            } else {
+                self.calculation(&mut db, &c, text(snap, "end")).await?
+            };
+            prepared
+                .calculations
+                .insert(int(&c, "id"), (calc, revision));
         }
         for snap in array(&snaps)
             .iter()
@@ -338,6 +351,12 @@ impl Service {
         if renewals.keys().any(|id| !cycle_ids.contains(id)) {
             return Err(Error::invalid("续期不属于本次结算"));
         }
+        Self::complete_vendor_selection(
+            db,
+            &cycle_ids.iter().map(|id| json!(id)).collect::<Vec<_>>(),
+        )
+        .await?;
+        let vendor_periods = self.validate_vendor_settlement(db, &snaps, data).await?;
         let mut results = Vec::new();
         let mut jobs = Vec::new();
         for snap in array(&snaps) {
@@ -399,6 +418,7 @@ impl Service {
             }
             if let Some(gap) = Self::coverage_error(db, &c, text(snap, "end")).await?
                 && c["cost_source"] != "upstream_bill"
+                && c["vendor_period_id"].is_null()
             {
                 return Err(Error::conflict(gap));
             }
@@ -497,6 +517,7 @@ impl Service {
                 .await?;
             }
             if let Some(r) = renewals.get(&cid) {
+                Self::independent_cycle(&c).await?;
                 super::cycles::accurate_cost(r)?;
                 let kind = "exact";
                 let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":renewal_name,"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":kind,"start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;
@@ -504,7 +525,13 @@ impl Service {
             }
             results.push(result);
         }
+        let next_vendors = self
+            .finish_vendor_settlement(db, actor, &vendor_periods, data)
+            .await?;
         let mut result = json!({"settlements":results});
+        if !next_vendors.is_empty() {
+            result["vendor_renewals"] = json!(next_vendors);
+        }
         if !jobs.is_empty() {
             result["deletions"] = json!(jobs);
         }
@@ -676,6 +703,10 @@ impl Service {
         Ok(json!({"ok":true}))
     }
     pub async fn void(&self, db: &mut Db, actor: &Value, sid: i64) -> Result<Value> {
+        if optional(db,"SELECT c.id FROM cycles c JOIN settlements s ON s.cycle_id=c.id WHERE s.id=? AND c.vendor_period_id IS NOT NULL",&[json!(sid)]).await?.is_some(){return Err(Error::conflict("供应商结算必须整组作废"));}
+        self.void_one(db, actor, sid).await
+    }
+    pub(super) async fn void_one(&self, db: &mut Db, actor: &Value, sid: i64) -> Result<Value> {
         admin(actor)?;
         if optional(db,"SELECT 1 AS found FROM account_deletions WHERE settlement_id=? AND status IN ('queued','running','verify')",&[json!(sid)]).await?.is_some(){return Err(Error::conflict("账号删除处理中，暂不能作废结算"));}
         let s = one(db, "SELECT * FROM settlements WHERE id=?", &[json!(sid)]).await?;

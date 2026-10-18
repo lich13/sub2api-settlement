@@ -13,7 +13,7 @@ use sqlx::{
 use std::path::Path;
 
 async fn candidates(db: &mut SqliteConnection) -> Result<Vec<Value>> {
-    store::all(db, "SELECT c.id,c.account_id,c.version,c.cost_fen,c.creditor_id,c.start,c.start_locked,p.version AS profile_version FROM cycles c JOIN profiles p ON p.account_id=c.account_id WHERE c.status='open' AND c.cost_kind='estimated' AND c.settlement_id IS NULL AND c.vendor_period_id IS NULL AND p.kind='paid' AND NOT EXISTS(SELECT 1 FROM settlements s WHERE s.cycle_id=c.id AND s.status='active') AND NOT EXISTS(SELECT 1 FROM account_deletions d WHERE d.account_id=c.account_id AND d.status IN ('queued','running','verify')) ORDER BY c.id", &[]).await
+    store::all(db, "SELECT c.id,c.account_id,c.version,c.cost_fen,c.creditor_id,c.start,c.start_locked,p.version AS profile_version FROM cycles c JOIN profiles p ON p.account_id=c.account_id WHERE c.status='open' AND c.cost_kind='estimated' AND c.settlement_id IS NULL AND c.vendor_period_id IS NULL AND p.kind='paid' AND NOT EXISTS(SELECT 1 FROM settlements s WHERE s.cycle_id=c.id) AND NOT EXISTS(SELECT 1 FROM account_deletions d WHERE d.account_id=c.account_id AND d.status IN ('queued','running','verify')) ORDER BY c.id", &[]).await
 }
 
 pub async fn preview(path: &Path) -> Result<Value> {

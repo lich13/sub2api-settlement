@@ -53,9 +53,12 @@ import type {
   Share,
   BillMode,
   DeletionJob,
+  Vendor,
+  VendorPeriod,
 } from "./types";
 import { useAutoPreview } from "./useAutoPreview";
 import { useAccountState } from "./useAccountState";
+import { VendorGroups, VendorManager, VendorBillPanel, expandVendorSelection } from "./Vendors";
 import { Select } from "./Select";
 import { NettingList, NettingReceivables, NettingDetails } from "./Netting";
 import { AuditLog, OperationStatus } from "./Operations";
@@ -537,10 +540,10 @@ function Allocation({ value }: { value: Calculation | ExpenseCalculation }) {
           <strong>{title}</strong>
           <span>{period}</span>
         </div>
-        <strong className="amount">{money(amount)}</strong>
+        <strong className="amount">{!isExpense && cycleValue.allocation_pending ? "待账单拆分" : money(amount)}</strong>
       </div>
       {!isExpense && <div className="detail-facts"><span>周期总消费 <b>{consumption(cycleValue.total_consumption)}</b></span><span>调用 <b>{cycleValue.record_count.toLocaleString()}</b></span><span title="本次计费（元）÷ 周期原始总消费">{cycleValue.display?.settled ? "结算倍率" : "预估倍率"} <b>{cycleValue.display?.cost_multiplier != null ? `${cycleValue.display.cost_multiplier}×` : "—"}</b></span></div>}
-      {!isExpense && cycleValue.bill && <div className="detail-facts"><span>{cycleValue.bill.allocation_mode === "matched_only" ? "精准匹配" : "上游扣费分摊"}</span><span>上游总扣费 <b>{money(cycleValue.cycle.cost_fen)}</b></span><span>本次计费 <b>{money(amount)}</b></span><span>已匹配 <b>{cycleValue.bill.matched_count} 条</b></span><span>{cycleValue.bill.allocation_mode === "matched_only" ? "未匹配不计费" : "未匹配"} <b>{cycleValue.bill.unmatched_count} 条 · {billedMoney(cycleValue.bill.unmatched_amount)}</b></span></div>}
+      {!isExpense && cycleValue.bill && !cycleValue.vendor_period && <div className="detail-facts"><span>{cycleValue.bill.allocation_mode === "matched_only" ? "精准匹配" : "上游扣费分摊"}</span><span>上游总扣费 <b>{money(cycleValue.cycle.cost_fen)}</b></span><span>本次计费 <b>{money(amount)}</b></span><span>已匹配 <b>{cycleValue.bill.matched_count} 条</b></span><span>{cycleValue.bill.allocation_mode === "matched_only" ? "未匹配不计费" : "未匹配"} <b>{cycleValue.bill.unmatched_count} 条 · {billedMoney(cycleValue.bill.unmatched_amount)}</b></span></div>}
       <AllocationRows allocations={value.allocations} />
     </section>
   );
@@ -776,6 +779,7 @@ export function SettleForm({
   expenseIds = [],
   expenseRevision = "",
   cycles = [],
+  vendorPeriods = [],
   catalog,
   done,
   close,
@@ -785,6 +789,7 @@ export function SettleForm({
   expenseIds?: number[];
   expenseRevision?: string;
   cycles?: Cycle[];
+  vendorPeriods?: VendorPeriod[];
   catalog: Catalog;
   done: (message?: string) => void;
   close: () => void;
@@ -795,6 +800,7 @@ export function SettleForm({
   const [renew, setRenew] = useState<
     Record<number, { cost: string; creditor_id: number; cost_kind: CostKind }>
   >({});
+  const [vendorRenew, setVendorRenew] = useState<Record<number,{cost:string;creditor_id:number}>>({});
   const renewalDefaultsSet = useRef(false);
   const [deleteIds, setDeleteIds] = useState<number[]>([]);
   const [deleteScopes,setDeleteScopes] = useState<Record<number,DeletionScopeValue|null>>({});
@@ -802,16 +808,17 @@ export function SettleForm({
   const [error, setError] = useState("");
   const { preview, loading, error: previewError, refresh: inspect } = useAutoPreview({
     ids, expenseIds, end, paused: busy,
-    revision: JSON.stringify(cycles.map(c => [c.id, c.version])) + expenseRevision,
+    revision: JSON.stringify(cycles.map(c => [c.id, c.version])) + expenseRevision + JSON.stringify(vendorPeriods.map(p=>[p.id,p.version])),
     onResult(next) {
       setDisplayPreview(next);
       if (renewByDefault && !renewalDefaultsSet.current) {
-        setRenew(Object.fromEntries(next.cycles.map((c) => [c.cycle.id, { cost: costInput(c.cycle.cost_fen), creditor_id: c.cycle.creditor_id, cost_kind: "exact" }])));
+        setRenew(Object.fromEntries(next.cycles.filter(c=>!c.cycle.account_deleted).map((c) => [c.cycle.id, { cost: costInput(c.cycle.cost_fen), creditor_id: c.cycle.creditor_id, cost_kind: "exact" }])));
+        setVendorRenew(Object.fromEntries(next.cycles.filter(c=>c.vendor_period).map(c=>[c.vendor_period!.id,{cost:costInput(c.vendor_period!.cost_fen),creditor_id:c.vendor_period!.creditor_id}])));
         renewalDefaultsSet.current = true;
       }
     },
   });
-  const pendingSubmission = useRef<{preview_id: string; renewals: {cycle_id: number; cost: string; creditor_id: number; cost_kind: CostKind}[]; delete_cycle_ids?: number[];delete_scopes?:Record<string,string>} | null>(null);
+  const pendingSubmission = useRef<{preview_id: string; renewals: {cycle_id: number; cost: string; creditor_id: number; cost_kind: CostKind}[]; delete_cycle_ids?: number[];delete_scopes?:Record<string,string>;vendor_renewals?:{period_id:number;version:number;cost:string;creditor_id:number;cycle_ids:number[]}[]} | null>(null);
   let cutoff = "";
   try { if (end) cutoff = fromInput(end); } catch { /* Date input may be incomplete. */ }
   const cycleMap = new Map<number, Cycle>();
@@ -825,6 +832,9 @@ export function SettleForm({
     if (name) cycleMap.set(id, { ...cycle, name });
   }
   const billCycles = [...cycleMap.values()].filter(canImportBill);
+  const groupMap=new Map(vendorPeriods.filter(p=>p.members?.some(c=>ids.includes(c.id))).map(p=>[p.id,p]));
+  for(const c of displayPreview?.cycles||[])if(c.vendor_period&&(!groupMap.has(c.vendor_period.id)||groupMap.get(c.vendor_period.id)!.version<=c.vendor_period.version))groupMap.set(c.vendor_period.id,c.vendor_period);
+  const groups=[...groupMap.values()];
   const calculations = new Map((preview?.cycles || []).map((calculation) => [calculation.cycle.id, calculation]));
   async function settle() {
     if (!pendingSubmission.current && deleteIds.some(id=>!deleteScopes[id])) {setError("请先核验并确认删除范围");return;}
@@ -837,7 +847,7 @@ export function SettleForm({
       await inspect();
       return;
     }
-    if (!pendingSubmission.current && Object.values(renew).some((x) => !amountPattern.test(x.cost))) {
+    if (!pendingSubmission.current && [...Object.values(renew),...Object.values(vendorRenew)].some((x) => !amountPattern.test(x.cost))) {
       setError("续期成本最多保留两位小数");
       return;
     }
@@ -846,10 +856,11 @@ export function SettleForm({
     try {
       const payload = pendingSubmission.current || {
         preview_id: preview!.id,
-        renewals: Object.entries(renew).map(([id, r]) => ({
+        renewals: Object.entries(renew).filter(([id])=>!cycleMap.get(Number(id))?.vendor_period_id).map(([id, r]) => ({
           cycle_id: Number(id),
           ...r,
         })),
+        ...(groups.length ? {vendor_renewals:groups.filter(g=>[...cycleMap.values()].some(c=>c.vendor_period_id===g.id&&renew[c.id])).map(g=>({period_id:g.id,version:g.version,cost:vendorRenew[g.id]?.cost??costInput(g.cost_fen),creditor_id:vendorRenew[g.id]?.creditor_id??g.creditor_id,cycle_ids:[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id&&renew[c.id]).map(c=>c.id)}))}:{}),
         ...(deleteIds.length ? { delete_cycle_ids: deleteIds,delete_scopes:Object.fromEntries(deleteIds.map(id=>[id,deleteScopes[id]!.digest])) } : {}),
       };
       pendingSubmission.current = payload;
@@ -887,6 +898,7 @@ export function SettleForm({
           </label>}
         </div>
         <fieldset className="settlement-fields" disabled={busy || !!pendingSubmission.current}>
+        {groups.map(g=><div key={g.id}><VendorBillPanel period={g} cycles={[...cycleMap.values()].filter(c=>c.vendor_period_id===g.id)} end={[...cycleMap.values()].find(c=>c.vendor_period_id===g.id&&c.end)?.end||cutoff} previewKey={preview?.id||""} onConfirmed={()=>inspect()}/>{[...cycleMap.values()].some(c=>c.vendor_period_id===g.id&&renew[c.id])&&<div className="form-columns vendor-renewal"><label>下期组成本（元）<input inputMode="decimal" value={vendorRenew[g.id]?.cost??costInput(g.cost_fen)} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{creditor_id:prev[g.id]?.creditor_id??g.creditor_id,cost:e.target.value}}))}/></label><label>下期统一垫付人<Select value={vendorRenew[g.id]?.creditor_id??g.creditor_id} onChange={e=>setVendorRenew(prev=>({...prev,[g.id]:{cost:prev[g.id]?.cost??costInput(g.cost_fen),creditor_id:Number(e.target.value)}}))}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}</div>)}
         {!!billCycles.length && (
           <div className="bill-import-list">
             {billCycles.map((cycle) => (
@@ -904,7 +916,7 @@ export function SettleForm({
         {displayPreview?.cycles.map((c) => (
           <div key={c.cycle.id}>
             <Allocation value={{ ...c, cycle: { ...c.cycle, name: cycleMap.get(c.cycle.id)?.name || c.cycle.name } }} />
-            {!c.start_confirmed && (c.start_mode === "date_estimate" || c.start_mode === "minute_estimate") && (
+            {!c.cycle.vendor_period_id && !c.start_confirmed && (c.start_mode === "date_estimate" || c.start_mode === "minute_estimate") && (
               <StartConfirmation calculation={c} onConfirmed={() => inspect()} />
             )}
             {c.start_warning && c.start_warning !== "周期起点未确认" && <div className="form-error">{c.start_warning}</div>}
@@ -913,7 +925,7 @@ export function SettleForm({
               <input
                 type="checkbox"
                 checked={!!renew[c.cycle.id]}
-                disabled={deleteIds.includes(c.cycle.id)}
+                disabled={deleteIds.includes(c.cycle.id) || !!c.cycle.account_deleted}
                 onChange={(e) =>
                   setRenew((prev) => {
                     const next = { ...prev };
@@ -930,9 +942,9 @@ export function SettleForm({
               />
               结算后续期
             </label>
-            <label className="checkline deletion-option"><input type="checkbox" checked={deleteIds.includes(c.cycle.id)} disabled={!!renew[c.cycle.id]} onChange={e => setDeleteIds(prev => e.target.checked ? [...prev, c.cycle.id] : prev.filter(id => id !== c.cycle.id))} />出单后删除账号</label>
+            <label className="checkline deletion-option"><input type="checkbox" checked={deleteIds.includes(c.cycle.id)} disabled={!!renew[c.cycle.id] || !!c.cycle.account_deleted} onChange={e => setDeleteIds(prev => e.target.checked ? [...prev, c.cycle.id] : prev.filter(id => id !== c.cycle.id))} />出单后删除账号</label>
             {deleteIds.includes(c.cycle.id) && <DeletionScope accountId={c.cycle.account_id} onConfirmed={value=>setDeleteScopes(prev=>({...prev,[c.cycle.id]:value}))}/>}
-            {renew[c.cycle.id] && (
+            {renew[c.cycle.id] && !c.cycle.vendor_period_id && (
               <div className="form-columns">
                 <label>
                   新周期成本（元）
@@ -1023,6 +1035,9 @@ export function App() {
   const [form, setForm] = useState<{ account?: Account; cycle?: Cycle; expense?: ExpenseCalculation; newExpense?: boolean; upgrade?: Account } | null>(
     null,
   );
+  const [vendorsSource, setVendors] = useState<Vendor[]>([]);
+  const [vendorRevision, setVendorRevision] = useState("");
+  const [vendorManager,setVendorManager] = useState(false);
   const [settleIds, setSettleIds] = useState<number[] | null>(null);
   const [settleExpenseIds, setSettleExpenseIds] = useState<number[] | null>(null);
   const [settleRenewDefault, setSettleRenewDefault] = useState(false);
@@ -1051,12 +1066,13 @@ export function App() {
   const overview = overviewSource && { ...overviewSource, accounts: overviewSource.accounts.filter(a => !active || active.has(a.id)).map(a => ({ ...a, name: currentName(a.id, a.name, overviewSource.account_revision), cycle: a.cycle ? currentCycle(a.cycle, overviewSource.account_revision) : null })) };
   const catalog = catalogSource && { ...catalogSource, accounts: catalogSource.accounts.filter(a => !active || active.has(a.id)).map(a => ({ ...a, name: currentName(a.id, a.name, catalogSource.account_revision) })) };
   const history = { ...historySource, cycles: historySource.cycles.filter(c => !active || active.has(c.account_id)).map(c => currentCycle(c, historySource.account_revision)) };
+  const vendors = vendorsSource.map(v => ({...v, periods: v.periods.map(p => ({...p, members: p.members?.map(c => ({...currentCycle(c, vendorRevision), current_name: currentName(c.account_id, c.current_name || c.name, vendorRevision), account_deleted: active && accountState && accountState.revision >= vendorRevision ? !active.has(c.account_id) : c.account_deleted}))}))}));
   const refreshSequence = useRef(0);
 
   useEffect(() => {
     if (!active) return;
     const known = [...(overviewSource?.accounts.flatMap(a => a.cycle ? [a.cycle] : []) || []), ...historySource.cycles];
-    const removed = new Set(known.filter(c => !active.has(c.account_id)).map(c => c.id));
+    const removed = new Set(known.filter(c => !active.has(c.account_id)&&!c.vendor_period_id).map(c => c.id));
     if ((tab === "accounts" && costView === "accounts") || (tab === "manage" && manageTab === "cycles")) {
       setSelected(prev => prev.some(id => removed.has(id)) ? prev.filter(id => !removed.has(id)) : prev);
     }
@@ -1082,6 +1098,7 @@ export function App() {
     const clear = () => {
       setMe(null);
       setOverview(null);
+      setVendors([]);setVendorManager(false);
       setCatalog(null);
       setHistory({cycles: [], audit: []});
       setDeletions([]);
@@ -1106,15 +1123,18 @@ export function App() {
     if (!me) return;
     const sequence = ++refreshSequence.current;
     try {
-      const [data, messages, accounts] = await Promise.all([
+      const [data, messages, accounts, supplierData] = await Promise.all([
         api<Overview>("/overview"),
         api("/inbox"),
         isAdmin ? api<Catalog>("/catalog") : Promise.resolve(null),
+        api<{vendors:Vendor[];account_revision?:string}>("/vendors"),
       ]);
       if (sequence !== refreshSequence.current) return;
       setOverview(data);
       setInbox(messages);
       setCatalog(accounts);
+      setVendors(supplierData.vendors || []);
+      setVendorRevision(supplierData.account_revision || "");
       if (tab === "receivable") {
         setBalances((await api<{ balances: NetBalance[] }>("/netting/balances?scope=receivable")).balances);
       } else if (tab === "bills" || (tab === "manage" && manageTab === "orders")) {
@@ -1177,6 +1197,7 @@ export function App() {
     setFilter("all");
     setError("");
   }
+  function beginSettlement(ids:number[],renew=false){setSettleRenewDefault(renew);setSettleIds(expandVendorSelection(ids,vendors.flatMap(v=>v.periods).filter(p=>p.status==="open")));}
   function toggle(id: number) {
     setSelected((s) =>
       s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
@@ -1250,6 +1271,7 @@ export function App() {
   const filteredAccounts = (overview?.accounts || []).filter(
     (a) =>
       isOperationalAccount(a) &&
+      !(a.cycle?.vendor_period_id && a.cycle.status === "open") &&
       (isAdmin || a.kind === "paid") &&
       (!query ||
         `${a.name} ${a.id}`.toLowerCase().includes(query.toLowerCase())) &&
@@ -1267,7 +1289,9 @@ export function App() {
     if (account.cycle) availableCycles.set(account.cycle.id, account.cycle);
   }
   for (const cycle of history.cycles) availableCycles.set(cycle.id, cycle);
-  const settleCycles = (settleIds || [])
+  for (const v of vendors) for (const p of v.periods) for (const c of p.members||[]) if (!availableCycles.has(c.id) || availableCycles.get(c.id)!.version < c.version) availableCycles.set(c.id,currentCycle(c));
+  const settleSelection=expandVendorSelection(settleIds||[],vendors.flatMap(v=>v.periods).filter(p=>p.status==="open"));
+  const settleCycles = settleSelection
     .map((id) => availableCycles.get(id))
     .filter((cycle): cycle is Cycle => !!cycle);
 
@@ -1340,6 +1364,7 @@ export function App() {
                       ? "—"
                       : money(overview.estimated_fen)}
                   </strong>
+                  {overview.vendor_totals?.some(p=>p.members.some(m=>m.allocation_pending))&&<small>待账单拆分</small>}
                 </div>
                 <div>
                   <span>待收款</span>
@@ -1417,11 +1442,12 @@ export function App() {
                     ))}
                   </Select>}
                 <div className="toolbar-actions">
+                  {tab === "accounts" && costView === "accounts" && isAdmin && <button className="button" disabled={!catalog} onClick={()=>setVendorManager(true)}>供应商管理</button>}
                   {tab === "accounts" && costView === "accounts" && isAdmin && selected.length > 0 && (
                       <button
                         className="button primary"
                         disabled={!catalog}
-                        onClick={() => { setSettleRenewDefault(false); setSettleIds(selected); }}
+                        onClick={() => { beginSettlement(selected); }}
                       >
                         批量结算 ({selected.length})
                       </button>
@@ -1434,6 +1460,7 @@ export function App() {
                 </div>
               </div>
             )}
+            {tab === "accounts" && costView === "accounts" && <VendorGroups vendors={vendors} accounts={overview?.accounts||[]} admin={!!isAdmin} totals={overview?.vendor_totals} selected={selected} onToggle={ids=>setSelected(prev=>ids.some(id=>prev.includes(id))?prev.filter(id=>!ids.includes(id)):[...new Set([...prev,...ids])])} query={query} filter={filter} onSettle={beginSettlement} onManage={()=>setVendorManager(true)} onDetail={showCycle}/>}
             {tab === "accounts" && costView === "accounts" && (
               <div className="table-shell">
                 <table className="accounts-table">
@@ -1488,14 +1515,14 @@ export function App() {
                         <td data-label="成本" className="numeric amount">
                           {a.kind === "free" ? money(0) : a.cycle ? <>
                             <span className="cost-kind">{a.cycle.cost_kind === "estimated" ? "待重新配置" : "准确成本"}</span>
-                            {money(a.cycle.cost_fen)}
+                            {a.allocation_pending ? "待账单拆分" : money(a.cycle.cost_fen)}
                           </> : "—"}
                         </td>
                         <td data-label="垫付人">
                           {a.kind === "free" ? "—" : a.creditor_name || "—"}
                         </td>
                         <td data-label="我的占比" className="numeric">
-                          {a.kind === "free" || !a.cycle || a.data_error ? (
+                          {a.kind === "free" || !a.cycle || a.data_error || a.allocation_pending ? (
                             "—"
                           ) : (
                             <div className="share-meter">
@@ -1516,7 +1543,7 @@ export function App() {
                           <strong className="amount">
                             {a.kind === "free"
                               ? money(0)
-                              : !a.cycle || a.data_error ||
+                              : a.allocation_pending ? "待账单拆分" : !a.cycle || a.data_error ||
                                   (overview.sync_error &&
                                     a.cycle.status === "open")
                                 ? "—"
@@ -1565,8 +1592,8 @@ export function App() {
                               )}
                               {a.kind === "paid" && a.cycle?.status === "open" && (
                                 <>
-                                  <button className="text-button" onClick={() => { setSettleRenewDefault(false); setSettleIds([a.cycle!.id]); }}>结算</button>
-                                  <button className="text-button primary-text" onClick={() => { setSettleRenewDefault(true); setSettleIds([a.cycle!.id]); }}>结算并续费</button>
+                                  <button className="text-button" onClick={() => { beginSettlement([a.cycle!.id]); }}>结算</button>
+                                  <button className="text-button primary-text" onClick={() => { beginSettlement([a.cycle!.id],true); }}>结算并续费</button>
                                 </>
                               )}
                             </div>
@@ -1642,7 +1669,7 @@ export function App() {
                         </td>
                         <td data-label="成本" className="numeric amount">
                           <span className="cost-kind">{c.cost_kind === "estimated" ? "历史待确认成本" : "准确成本"}</span>
-                          {money(c.cost_fen)}
+                          {c.allocation_pending ? "待账单拆分" : money(c.cost_fen)}
                         </td>
                         <td data-label="垫付人">{c.creditor_name}</td>
                         <td data-label="状态">
@@ -1666,18 +1693,18 @@ export function App() {
                             <>
                               <button
                                 className="text-button"
-                                onClick={() => setForm({ cycle: c })}
+                                onClick={() => c.vendor_period_id ? setVendorManager(true) : setForm({ cycle: c })}
                               >
                                 修改
                               </button>
                               <button
                                 className="text-button"
-                                onClick={() => setSettleIds([c.id])}
+                                onClick={() => beginSettlement([c.id])}
                               >
                                 结算
                               </button>
                             </>
-                          ) : (
+                          ) : c.vendor_period_id ? <button className="text-button" onClick={()=>setVendorManager(true)}>整组管理</button> : (
                             <button
                               className="text-button danger"
                               onClick={() =>
@@ -1744,10 +1771,12 @@ export function App() {
           close={() => setForm(null)}
         />
       )}
+      {vendorManager && catalog && <VendorManager vendors={vendors} accounts={overview?.accounts||[]} catalog={catalog} close={()=>setVendorManager(false)} refresh={refresh}/>}
       {settleIds && catalog && (
         <SettleForm
-          ids={settleIds}
+          ids={settleSelection}
           cycles={settleCycles}
+          vendorPeriods={vendors.flatMap(v=>v.periods)}
           catalog={catalog}
           done={saved}
           close={() => { setSettleIds(null); setSettleRenewDefault(false); }}

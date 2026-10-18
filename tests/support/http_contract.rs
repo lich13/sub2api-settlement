@@ -714,10 +714,13 @@ impl Harness {
         ) && step["request"]["json"]["cost_kind"] == "estimated"
     }
 
-    async fn seed_v011_legacy_estimated_cycle(&self, request: &Value) -> TestResult<()> {
-        let payload = request["json"]
-            .as_object()
-            .ok_or_else(|| format!("{}: estimated compatibility request is not an object", self.name))?;
+    async fn seed_v011_legacy_estimated_cycle(&mut self, request: &Value) -> TestResult<()> {
+        let payload = request["json"].as_object().ok_or_else(|| {
+            format!(
+                "{}: estimated compatibility request is not an object",
+                self.name
+            )
+        })?;
         let account_id = payload["account_id"]
             .as_i64()
             .ok_or_else(|| format!("{}: estimated compatibility account is missing", self.name))?;
@@ -731,10 +734,11 @@ impl Harness {
         let creditor_id = payload["creditor_id"]
             .as_i64()
             .ok_or_else(|| format!("{}: estimated compatibility creditor is missing", self.name))?;
-        let start = wire_datetime(payload["start"].clone())
-            .as_str()
-            .ok_or_else(|| format!("{}: estimated compatibility start is missing", self.name))?
-            .to_owned();
+        let start =
+            settlement::time::instant(payload["start"].as_str().ok_or_else(|| {
+                format!("{}: estimated compatibility start is missing", self.name)
+            })?)
+            .map_err(display_error)?;
         let start_meta = json!({
             "start": start.clone(),
             "start_mode": "exact",
@@ -745,9 +749,12 @@ impl Harness {
             "start_confirmed_at": null,
             "start_source_usage_id": null,
         });
-        let created_at = self.workflow["clock"]["value"]
-            .as_str()
-            .ok_or_else(|| format!("{}: fixed compatibility clock is missing", self.name))?;
+        let created_at = settlement::time::instant(
+            self.workflow["clock"]["value"]
+                .as_str()
+                .ok_or_else(|| format!("{}: fixed compatibility clock is missing", self.name))?,
+        )
+        .map_err(display_error)?;
         let mut connection = open_writable(&self.data_dir.join("settlement.sqlite3")).await?;
         sqlx::query(
             "INSERT INTO profiles(account_id,name,kind) VALUES(?,?,'paid') ON CONFLICT(account_id) DO UPDATE SET name=excluded.name,kind='paid'",
@@ -784,6 +791,46 @@ impl Harness {
         .execute(&mut connection)
         .await
         .map_err(display_error)?;
+        let actor = request["actor"]
+            .as_i64()
+            .ok_or_else(|| format!("{}: estimated compatibility actor is missing", self.name))?;
+        let key = request["headers"]["Idempotency-Key"]
+            .as_str()
+            .ok_or_else(|| {
+                format!(
+                    "{}: estimated compatibility idempotency key is missing",
+                    self.name
+                )
+            })?;
+        let method = request["method"]
+            .as_str()
+            .ok_or_else(|| format!("{}: estimated compatibility method is missing", self.name))?;
+        let path = request["path"]
+            .as_str()
+            .ok_or_else(|| format!("{}: estimated compatibility path is missing", self.name))?;
+        let signed = mutation_signature(method, strip_api_prefix(path), request["json"].clone())
+            .ok_or_else(|| {
+                format!(
+                    "{}: estimated compatibility signature is unsupported",
+                    self.name
+                )
+            })?;
+        let signature = sha256_hex(canonical_json(&signed).as_bytes());
+        sqlx::query("INSERT INTO requests(actor_id,key,signature,response) VALUES(?,?,?,?)")
+            .bind(actor)
+            .bind(key)
+            .bind(&signature)
+            .bind(serde_json::to_string(&json!({"id": cycle_id})).map_err(display_error)?)
+            .execute(&mut connection)
+            .await
+            .map_err(display_error)?;
+        self.signatures.insert(
+            (actor, key.to_owned()),
+            SignatureInput {
+                actual: signed.clone(),
+                normalized: self.aliases.normalize_value(&signed),
+            },
+        );
         connection.close().await.map_err(display_error)?;
         Ok(())
     }
@@ -1656,6 +1703,7 @@ impl Harness {
         let mut expected_body = expected["body"].clone();
         self.presentation
             .adapt_response_body(step, &mut expected_body)?;
+        self.adapt_v011_null_vendor_response(&mut expected_body, &actual.body)?;
         self.compare_expected_value(
             &expected_body,
             &actual.body,
@@ -1701,16 +1749,33 @@ impl Harness {
         let label = step["label"].as_str().unwrap_or_default();
         if self.is_v011_estimated_create(step) {
             expected["status"] = json!(422);
-            expected["body"] = json!({"detail":"只支持准确成本，请刷新后重新配置"});
+            expected["body"] = json!({
+                "detail": [{
+                    "type": "literal_error",
+                    "loc": ["body", "cost_kind"],
+                    "msg": "Input should be 'exact'",
+                    "input": "estimated",
+                    "ctx": {"expected": "'exact'"}
+                }]
+            });
             return Ok(());
         }
-        if matches!(self.name.as_str(), "billing-proportional" | "billing-matched-only")
-            && label == "bill-history"
+        if matches!(
+            self.name.as_str(),
+            "billing-proportional" | "billing-matched-only"
+        ) && label == "bill-history"
         {
             if let Some(cycles) = expected["body"]["cycles"].as_array_mut() {
                 for cycle in cycles {
                     if cycle["id"] == 2 {
                         cycle["cost_kind"] = json!("exact");
+                    }
+                }
+            }
+            if let Some(audit) = expected["body"]["audit"].as_array_mut() {
+                for row in audit {
+                    if row["action"] == "create_cycle" && row["entity_id"] == 2 {
+                        row["payload"]["cost_kind"] = json!("exact");
                     }
                 }
             }
@@ -1862,11 +1927,11 @@ impl Harness {
         self.presentation
             .set_source_state(&self.upstream.current_state().await?);
         self.presentation.adapt_database_snapshot(&mut expected);
+        self.adapt_v011_null_vendor_fields(&mut expected).await?;
         if self.v011_cost_contract {
             self.adapt_v011_database_expectations(&mut expected).await?;
         }
-        let expected = &expected;
-        self.wait_for_deletion_snapshot_state(expected).await?;
+        self.wait_for_deletion_snapshot_state(&expected).await?;
         let sql_path = step.get("sql").and_then(Value::as_str).or_else(|| {
             self.workflow["database"]["snapshots"]
                 .as_array()?
@@ -1885,7 +1950,7 @@ impl Harness {
         }
         let actual = database_snapshot(
             &self.data_dir.join("settlement.sqlite3"),
-            expected,
+            &expected,
             SnapshotContext {
                 aliases: &self.aliases,
                 session_key: self.session_key.as_deref(),
@@ -1897,6 +1962,7 @@ impl Harness {
             },
         )
         .await?;
+        self.adapt_v011_null_vendor_snapshot(&mut expected, &actual)?;
         if actual["database"] != expected["database"] {
             return Err(json_difference(
                 &format!("{} / {label} database rows", self.name),
@@ -1940,7 +2006,10 @@ impl Harness {
     }
 
     async fn adapt_v011_database_expectations(&self, expected: &mut Value) -> TestResult<()> {
-        if matches!(self.name.as_str(), "billing-proportional" | "billing-matched-only") {
+        if matches!(
+            self.name.as_str(),
+            "billing-proportional" | "billing-matched-only"
+        ) {
             if let Some(cycles) = expected["database"]["cycles"].as_array_mut() {
                 for cycle in cycles {
                     if cycle["id"] == 2 {
@@ -1956,7 +2025,141 @@ impl Harness {
                 }
             }
         }
-        self.adapt_v011_null_vendor_fields(expected).await
+        Ok(())
+    }
+
+    /// v8 API responses expose the nullable vendor associations on cycle and
+    /// profile projections. Frozen v0.8 response snapshots may omit those
+    /// fields only while the actual value remains NULL.
+    fn adapt_v011_null_vendor_response(
+        &self,
+        expected: &mut Value,
+        actual: &Value,
+    ) -> TestResult<()> {
+        fn visit(
+            expected: &mut Value,
+            actual: &Value,
+            path: &str,
+            workflow: &str,
+        ) -> TestResult<()> {
+            match (expected, actual) {
+                (Value::Object(expected), Value::Object(actual)) => {
+                    for field in ["vendor_id", "vendor_period_id"] {
+                        let Some(actual_value) = actual.get(field) else {
+                            continue;
+                        };
+                        if expected.contains_key(field) {
+                            continue;
+                        }
+                        if !actual_value.is_null() {
+                            return Err(format!(
+                                "{workflow}: frozen compatibility cannot omit non-NULL API field {path}.{field}"
+                            ));
+                        }
+                        expected.insert(field.to_owned(), Value::Null);
+                    }
+                    let keys = expected.keys().cloned().collect::<Vec<_>>();
+                    for key in keys {
+                        let Some(actual_value) = actual.get(&key) else {
+                            continue;
+                        };
+                        let expected_value = expected
+                            .get_mut(&key)
+                            .expect("key collected from expected object");
+                        visit(
+                            expected_value,
+                            actual_value,
+                            &format!("{path}.{key}"),
+                            workflow,
+                        )?;
+                    }
+                }
+                (Value::Array(expected), Value::Array(actual)) => {
+                    for (index, (expected_value, actual_value)) in
+                        expected.iter_mut().zip(actual).enumerate()
+                    {
+                        visit(
+                            expected_value,
+                            actual_value,
+                            &format!("{path}[{index}]"),
+                            workflow,
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+
+        visit(expected, actual, "body", &self.name)
+    }
+
+    fn adapt_v011_null_vendor_snapshot(
+        &self,
+        expected: &mut Value,
+        actual: &Value,
+    ) -> TestResult<()> {
+        fn visit(
+            expected: &mut Value,
+            actual: &Value,
+            path: &str,
+            workflow: &str,
+        ) -> TestResult<()> {
+            match (expected, actual) {
+                (Value::Object(expected), Value::Object(actual)) => {
+                    for field in ["vendor_id", "vendor_period_id"] {
+                        let Some(actual_value) = actual.get(field) else {
+                            continue;
+                        };
+                        if expected.contains_key(field) {
+                            continue;
+                        }
+                        if !actual_value.is_null() {
+                            return Err(format!(
+                                "{workflow}: frozen compatibility cannot omit non-NULL database field {path}.{field}"
+                            ));
+                        }
+                        expected.insert(field.to_owned(), Value::Null);
+                    }
+                    let keys = expected.keys().cloned().collect::<Vec<_>>();
+                    for key in keys {
+                        let Some(actual_value) = actual.get(&key) else {
+                            continue;
+                        };
+                        let expected_value = expected
+                            .get_mut(&key)
+                            .expect("key collected from expected object");
+                        visit(
+                            expected_value,
+                            actual_value,
+                            &format!("{path}.{key}"),
+                            workflow,
+                        )?;
+                    }
+                }
+                (Value::Array(expected), Value::Array(actual)) => {
+                    for (index, (expected_value, actual_value)) in
+                        expected.iter_mut().zip(actual).enumerate()
+                    {
+                        visit(
+                            expected_value,
+                            actual_value,
+                            &format!("{path}[{index}]"),
+                            workflow,
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+
+        visit(
+            &mut expected["database"],
+            &actual["database"],
+            "database",
+            &self.name,
+        )
     }
 
     /// v8 adds nullable vendor associations. Frozen v0.8 snapshots may omit
@@ -2003,9 +2206,7 @@ impl Harness {
                 .as_array_mut()
                 .ok_or_else(|| format!("{}: expected schema for {table} is missing", self.name))?;
             for row in &info {
-                let name = row
-                    .try_get::<String, _>("name")
-                    .map_err(display_error)?;
+                let name = row.try_get::<String, _>("name").map_err(display_error)?;
                 if fields.contains(&name.as_str())
                     && !schema.iter().any(|item| item["name"] == name)
                 {

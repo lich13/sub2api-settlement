@@ -109,7 +109,7 @@ async fn run() -> Result<()> {
     }
     if arguments.len() != 1 {
         return Err(settlement::error::Error::invalid(
-            "命令无效，可用命令：healthcheck、backup、migrate、rotate-session-key",
+            "命令无效，可用命令：healthcheck、backup、migrate、rotate-session-key、reset-estimated",
         ));
     }
     let app = App::new(config).await?;

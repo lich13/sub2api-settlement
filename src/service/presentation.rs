@@ -17,7 +17,7 @@ impl Service {
             .as_i64()
             .unwrap_or_else(|| int(&value["cycle"], "cost_fen"));
         value["display"] = json!({
-            "cost_multiplier": multiplier(cost, value["total_consumption"].as_str()),
+            "cost_multiplier": if crate::json::flag(&value,"allocation_pending"){None}else{multiplier(cost, value["total_consumption"].as_str())},
             "settled": settled,
         });
         value

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, date, downloadCsv, fromInput, money } from "./api";
 
 const actions: Record<string,string> = {
+  save_vendor:"保存供应商默认设置", archive_vendor:"归档供应商", save_vendor_period:"保存供应商整组配置",
+  confirm_vendor_start:"确认供应商起点", confirm_vendor_bill:"确认供应商账单依据", settle_vendor:"供应商整组出单", void_vendor:"供应商整组作废", reset_estimated:"撤销旧待确认成本配置",
   create_cycle:"创建周期", edit_cycle:"修改成本与周期", confirm_cycle_start:"确认周期起点",
   mark_free:"标记免费", upgrade_paid:"升级付费", settle:"结算出单", create_expense:"新增固定费用",
   edit_expense:"修改固定费用", settle_expense:"固定费用出单", void_expense:"作废固定费用结算",

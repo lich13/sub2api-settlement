@@ -251,6 +251,7 @@ impl Service {
         admin(actor)?;
         accurate_cost(data)?;
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
+        Self::independent_cycle(&c).await?;
         if c["status"] != "open" {
             return Err(Error::conflict("已出单成本已锁定"));
         }
@@ -342,6 +343,7 @@ impl Service {
     ) -> Result<Value> {
         admin(actor)?;
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
+        Self::independent_cycle(&c).await?;
         if c["status"] != "open" {
             return Err(Error::conflict("已结算周期不能确认起点"));
         }

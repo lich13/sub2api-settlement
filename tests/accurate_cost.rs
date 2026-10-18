@@ -182,6 +182,8 @@ async fn maintenance_preview_and_reset_only_cancel_eligible_estimated_cycles() {
     insert_active_settlement(&harness, active).await;
     let deleting = insert_cycle(&harness, 300, 300, "estimated", "open", START, 0, None).await;
     insert_deletion_task(&harness, 300).await;
+    let vendor_bound =
+        insert_cycle(&harness, 500, 500, "estimated", "open", START, 0, Some(77)).await;
     let imported = insert_bill_import(&harness, eligible).await;
     insert_audit(&harness, eligible, "fixture_history").await;
     let usage_before = rows(&harness, "usage").await;
@@ -210,6 +212,7 @@ async fn maintenance_preview_and_reset_only_cancel_eligible_estimated_cycles() {
     assert_eq!(cycle_row(&harness, eligible).await["status"], "cancelled");
     assert_eq!(cycle_row(&harness, active).await["status"], "open");
     assert_eq!(cycle_row(&harness, deleting).await["status"], "open");
+    assert_eq!(cycle_row(&harness, vendor_bound).await["status"], "open");
     assert!(
         rows(&harness, "profiles")
             .await

@@ -146,7 +146,10 @@ impl Service {
             let has_bill=resolved.is_some();
             let eligible=has_bill&&flag(&split,"can_confirm");
             let rules_digest=digest(&json!({"rules_version":"vendor-r5-v1","period_id":pid,"members":members.iter().map(|c|json!([c["id"],c["account_id"]])).collect::<Vec<_>>(),"cost_fen":period["cost_fen"],"creditor_id":period["creditor_id"],"start":period["start"],"end":end,"usage_version":digest(&usage),"coverage":gaps,"bill":resolved.as_ref().map(|r|&r["digest"])}));
-            let difference=resolved.as_ref().is_some_and(|r|r["cost_fen"]!=period["cost_fen"]||int(r,"unmatched_count")>0)||!gaps.is_empty();
+            let cost_fen = int(&period,"cost_fen");
+            let exact_cost = Decimal::parse(&format!("{}.{:02}", cost_fen / 100, cost_fen % 100))?;
+            let bill_difference = resolved.as_ref().map(|r| Decimal::parse(text(r,"total")).map(|t| exact_cost.subtract(&t))).transpose()?;
+            let difference=bill_difference.as_ref().is_some_and(|d|d.rational()!=Decimal::zero().rational())||resolved.as_ref().is_some_and(|r|int(r,"unmatched_count")>0)||!gaps.is_empty();
             let valid=eligible&&period["bill_end"]==end&&period["bill_digest"]==rules_digest&&(!difference||flag(&period,"bill_difference_confirmed"));
             let group=json!({"id":pid,"vendor_id":period["vendor_id"],"name":period["name"],"version":period["version"],"cost_fen":period["cost_fen"],"creditor_id":period["creditor_id"],"start":period["start"],"end":end,"start_confirmed":flag(&period,"start_confirmed"),"member_ids":members.iter().map(|c|c["id"].clone()).collect::<Vec<_>>(),"basis":split["basis"],"bill_import_id":period["bill_import_id"],"pending_bill":!valid});
             let mut calculations=Vec::new();
@@ -168,7 +171,7 @@ impl Service {
                 calculations.push(calc);
             }
             for a in split["accounts"].as_array_mut().ok_or_else(Error::unavailable)?{Self::apply_names(&mut a["allocations"],&names);}
-            let result=merge(resolved.unwrap_or(json!({})),json!({"vendor_period":group,"version":period["version"],"digest":rules_digest,"rules_version":"vendor-r5-v1","cost_fen":period["cost_fen"],"bill_total_fen":rows.as_ref().map(|_| calculations.first().and_then(|c|c["bill"]["cost_fen"].as_i64()).unwrap_or(0)),"billable_cost_fen":period["cost_fen"],"accounts":split["accounts"],"basis":split["basis"],"can_confirm":eligible,"difference_required":difference,"coverage_warnings":gaps,"end":end}));
+            let result=merge(resolved.unwrap_or(json!({})),json!({"vendor_period":group,"version":period["version"],"digest":rules_digest,"rules_version":"vendor-r5-v1","cost_fen":period["cost_fen"],"bill_total_fen":rows.as_ref().map(|_| calculations.first().and_then(|c|c["bill"]["cost_fen"].as_i64()).unwrap_or(0)),"billable_cost_fen":period["cost_fen"],"accounts":split["accounts"],"basis":split["basis"],"can_confirm":eligible,"difference_required":difference,"difference_amount":bill_difference.map(|d|d.to_string()),"coverage_warnings":gaps,"end":end}));
             Ok(json!({"result":result,"versions":versions,"period":period,"calculations":calculations}))
         }).await.map_err(|_|Error::unavailable())?
     }
@@ -414,31 +417,47 @@ impl Service {
     ) -> Result<Vec<u8>> {
         admin(actor)?;
         let mut db = self.store.read().await?;
-        let p=one(&mut db,"SELECT payload FROM vendor_bill_previews WHERE id=? AND actor_id=? AND vendor_period_id=?",&[json!(preview),actor["id"].clone(),json!(pid)]).await?;
-        let p: Value = serde_json::from_str(text(&p, "payload"))?;
-        let mut writer = csv::Writer::from_writer(Vec::new());
-        writer
-            .write_record(["行号", "时间", "模型", "扣费", "原因"])
-            .map_err(|_| Error::unavailable())?;
-        for r in array(&p["result"]["unmatched"]) {
-            let fields = [
-                r["row"].to_string(),
-                text(r, "created_at").to_owned(),
-                text(r, "model").to_owned(),
-                text(r, "amount").to_owned(),
-                text(r, "reason").to_owned(),
-            ];
-            let safe = fields.map(|s| {
-                if s.trim_start().starts_with(['=', '+', '-', '@', '\t', '\r']) {
-                    format!("'{s}")
-                } else {
-                    s
-                }
-            });
-            writer
-                .write_record(safe)
-                .map_err(|_| Error::unavailable())?;
+        let p = one(
+            &mut db,
+            "SELECT * FROM vendor_bill_previews WHERE id=? AND actor_id=? AND vendor_period_id=?",
+            &[json!(preview), actor["id"].clone(), json!(pid)],
+        )
+        .await?;
+        if text(&p, "expires_at") <= time::now().as_str() {
+            return Err(Error::conflict("账单预览已过期，请重新匹配"));
         }
-        writer.into_inner().map_err(|_| Error::unavailable())
+        let p: Value = serde_json::from_str(text(&p, "payload"))?;
+        Self::verify_vendor_prepared(&mut db, &p).await?;
+        super::operations::csv_bytes(
+            &[
+                "CSV 行号",
+                "请求时间（UTC）",
+                "模型",
+                "请求标识",
+                "上游扣费（元，原始精度）",
+                "未匹配原因",
+            ],
+            array(&p["result"]["unmatched"])
+                .iter()
+                .map(|r| (r, false))
+                .chain(array(&p["result"]["outside"]).iter().map(|r| (r, true)))
+                .map(|(r, outside)| {
+                    vec![
+                        int(r, "row").to_string(),
+                        text(r, "created_at").to_owned(),
+                        text(r, "model").to_owned(),
+                        text(r, "request_id").to_owned(),
+                        text(r, "amount").to_owned(),
+                        if outside {
+                            "周期范围外"
+                        } else if r["reason"] == "ambiguous" {
+                            "存在歧义"
+                        } else {
+                            "未找到本地请求"
+                        }
+                        .to_owned(),
+                    ]
+                }),
+        )
     }
 }

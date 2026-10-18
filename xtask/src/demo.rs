@@ -428,7 +428,7 @@ pub async fn start(options: &Options, override_source: Option<Value>) -> Result<
         if state["base_seeded"] != true {
             let start = time::format(time::parse(&clock)? - Days::days(7));
             for (id,cost) in [(1,"100.00"),(2,"240.00")] {
-                api.request("POST","/cycles",json!({"account_id":id,"name":ACCOUNTS[id-1],"cost":cost,"creditor_id":1,"start":start,"start_mode":if id==2{"minute_estimate"}else{"exact"},"cost_kind":if id==2{"estimated"}else{"exact"}}),&format!("qa-base-cycle-{id}")).await?;
+                api.request("POST","/cycles",json!({"account_id":id,"name":ACCOUNTS[id-1],"cost":cost,"creditor_id":1,"start":start,"start_mode":if id==2{"minute_estimate"}else{"exact"},"cost_kind":"exact"}),&format!("qa-base-cycle-{id}")).await?;
             }
             api.request("PUT","/accounts/3/free",json!({"name":ACCOUNTS[2],"version":null}),"qa-base-free").await?;
             api.request("POST","/expenses",json!({"name":"固定费用 · 服务订阅","cost":"30.00","incurred_on":&clock[..10],"creditor_id":1,"allocation_mode":"equal","members":[{"user_id":1,"percent":null},{"user_id":2,"percent":null},{"user_id":3,"percent":null}]}),"qa-open-expense").await?;

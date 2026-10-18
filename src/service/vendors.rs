@@ -137,6 +137,7 @@ impl Service {
         Ok(())
     }
     pub async fn vendors(&self, actor: &Value) -> Result<Value> {
+        let state = self.inventory.refresh(false).await;
         let mut db = self.store.read().await?;
         let mut vendors=all(&mut db,"SELECT v.*,u.name AS creditor_name FROM vendors v LEFT JOIN users u ON u.id=v.creditor_id ORDER BY v.id",&[]).await?;
         for v in &mut vendors {
@@ -150,7 +151,7 @@ impl Service {
             }
             v["periods"] = json!(periods);
         }
-        Ok(json!({"vendors":vendors}))
+        Ok(json!({"vendors":vendors,"account_revision":state["revision"]}))
     }
     pub async fn save_vendor(
         &self,

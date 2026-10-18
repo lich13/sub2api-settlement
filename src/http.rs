@@ -289,6 +289,7 @@ impl App {
         if method == "GET" || method == "HEAD" {
             return match parts.as_slice() {
                 ["me"] => Ok(actor.clone()),
+                ["vendors"] => s.vendors(actor).await,
                 ["audit"] => s.audit_log(actor, query, false).await,
                 ["operations", "status"] => s.operation_status(actor).await,
                 ["overview"] => s.overview(actor).await,
@@ -334,6 +335,22 @@ impl App {
             };
         }
         let (kind, entity) = match (method, parts.as_slice()) {
+            ("POST", ["vendors"]) => ("create-vendor", None),
+            ("PATCH", ["vendors", _]) => ("edit-vendor", Some(id(1)?)),
+            ("POST", ["vendors", _, "archive"]) => ("archive-vendor", Some(id(1)?)),
+            ("POST", ["vendors", _, "periods"]) => ("create-vendor-period", Some(id(1)?)),
+            ("PATCH", ["vendor-periods", _]) => ("edit-vendor-period", Some(id(1)?)),
+            ("POST", ["vendor-periods", _, "start-confirm"]) => {
+                ("vendor-start-confirm", Some(id(1)?))
+            }
+            ("POST", ["vendor-periods", _, "bill-previews"]) => {
+                let payload = crate::input::normalize("bill-preview", body)?;
+                return s.vendor_bill_preview(actor, id(1)?, &payload).await;
+            }
+            ("POST", ["vendor-periods", _, "bill-confirm"]) => {
+                ("vendor-bill-confirm", Some(id(1)?))
+            }
+            ("POST", ["vendor-periods", _, "void"]) => ("void-vendor", Some(id(1)?)),
             ("POST", ["cycles"]) => ("create", None),
             ("PATCH", ["cycles", _]) => ("edit", Some(id(1)?)),
             ("POST", ["cycles", _, "start-confirm"]) => ("start-confirm", Some(id(1)?)),
@@ -374,6 +391,12 @@ impl App {
         } else {
             let mut prepared = Prepared::default();
             match kind {
+                "vendor-bill-confirm" => {
+                    prepared.vendor_bill = Some(
+                        s.prepare_vendor_bill(actor, required_entity(entity)?, &payload)
+                            .await?,
+                    );
+                }
                 "settle" => {
                     prepared = s.prepare_settlement(actor, &payload).await?;
                 }
@@ -481,13 +504,15 @@ fn route_methods(path: &str) -> Option<&'static [&'static str]> {
         | ["accounts", _, "deletion-scope"]
         | ["cycles", _, "start-candidate"]
         | ["cycles", _, "bill-previews", _, "unmatched.csv"]
+        | ["vendor-periods", _, "bill-previews", _, "unmatched.csv"]
         | ["netting", "balances"]
         | ["netting", "balances", _, _]
         | ["netting", "payments", _]
         | ["orders"]
         | ["orders", _] => Some(&["GET"]),
         ["cycles", _] => Some(&["PATCH", "GET"]),
-        ["expenses"] | ["netting", "payments"] => Some(&["GET", "POST"]),
+        ["vendors" | "vendor-periods", _] => Some(&["PATCH"]),
+        ["vendors"] | ["expenses"] | ["netting", "payments"] => Some(&["GET", "POST"]),
         ["expenses", _] => Some(&["GET", "PATCH"]),
         ["accounts", _, "free"] => Some(&["PUT"]),
         ["cycles" | "previews" | "settlements" | "batches"]
@@ -495,6 +520,12 @@ fn route_methods(path: &str) -> Option<&'static [&'static str]> {
             "cycles",
             _,
             "start-confirm" | "bill-previews" | "bill-confirm",
+        ]
+        | ["vendors", _, "periods" | "archive"]
+        | [
+            "vendor-periods",
+            _,
+            "start-confirm" | "bill-previews" | "bill-confirm" | "void",
         ]
         | ["accounts", _, "upgrade-paid"]
         | ["settlements", _, "void"]
@@ -566,7 +597,7 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     }
     if method == "GET"
         && let [
-            "cycles",
+            source @ ("cycles" | "vendor-periods"),
             cycle_id,
             "bill-previews",
             preview_id,
@@ -578,10 +609,15 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
             .ok()
             .filter(|id| *id > 0)
             .ok_or_else(|| Error::invalid("周期编号无效"))?;
-        let bytes = app
-            .service
-            .unmatched_bill_csv(&actor, cycle_id, preview_id)
-            .await?;
+        let bytes = if *source == "vendor-periods" {
+            app.service
+                .vendor_unmatched_csv(&actor, cycle_id, preview_id)
+                .await?
+        } else {
+            app.service
+                .unmatched_bill_csv(&actor, cycle_id, preview_id)
+                .await?
+        };
         return Ok((
             [
                 ("Content-Type", "text/csv; charset=utf-8"),

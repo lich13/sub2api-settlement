@@ -992,15 +992,8 @@ async fn estimated_cost_cannot_settle_and_editing_kind_invalidates_the_old_previ
         422,
         "准确成本",
     );
-    let id = inject_legacy_estimated_cycle(
-        &harness,
-        100,
-        "Fixture account 100",
-        10_000,
-        2,
-        START,
-    )
-    .await;
+    let id =
+        inject_legacy_estimated_cycle(&harness, 100, "Fixture account 100", 10_000, 2, START).await;
     assert_eq!(cycle_row(&harness, id).await["cost_kind"], "estimated");
 
     let old = preview(&harness, &[id], &[], END).await;

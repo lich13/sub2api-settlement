@@ -61,6 +61,7 @@ impl Service {
         let (state, accounts) = self.inventory.active_snapshot().await;
         let mut db = self.store.read().await?;
         let mut rows = Vec::new();
+        let mut vendor_cache = BTreeMap::<i64, Value>::new();
         let mut sync_error = store::meta(&mut db, "sync_error").await?;
         let last = store::meta(&mut db, "last_sync").await?;
         if (last.is_null()
@@ -95,14 +96,35 @@ impl Service {
                     let end = c["bill_end"].as_str().or(c["end"].as_str()).unwrap_or(&now);
                     row["data_error"] = if !sync_error.is_null() {
                         sync_error.clone()
-                    } else if c["cost_source"] != "upstream_bill" {
+                    } else if c["cost_source"] != "upstream_bill" && c["vendor_period_id"].is_null()
+                    {
                         json!(Self::coverage_error(&mut db, &c, end).await?)
                     } else {
                         Value::Null
                     };
-                    self.overview_calculation(&mut db, &c, end).await?
+                    if let Some(pid) = c["vendor_period_id"].as_i64() {
+                        if !vendor_cache.contains_key(&pid) {
+                            vendor_cache.insert(
+                                pid,
+                                self.vendor_calculation(&mut db, pid, end, None, false)
+                                    .await?,
+                            );
+                        }
+                        array(&vendor_cache[&pid]["calculations"])
+                            .iter()
+                            .find(|v| v["cycle"]["id"] == c["id"])
+                            .cloned()
+                            .ok_or_else(Error::unavailable)?
+                    } else {
+                        self.overview_calculation(&mut db, &c, end).await?
+                    }
                 };
                 row = merge(row, start_meta(&c));
+                if !calc["vendor_period"].is_null() {
+                    row["vendor_period"] = calc["vendor_period"].clone();
+                    row["allocation_pending"] = calc["allocation_pending"].clone();
+                    row["cycle"]["cost_fen"] = calc["cycle"]["cost_fen"].clone();
+                }
                 row["can_settle"] = calc.get("can_settle").cloned().unwrap_or(json!(true));
                 row["cost_warning"] = calc["cost_warning"].clone();
                 row["mine"] = array(&calc["allocations"])
@@ -131,6 +153,46 @@ impl Service {
             })
             .map(|r| int(&r["mine"], "amount_fen"))
             .sum();
+        let mut vendor_totals = Vec::new();
+        let mut vendor_pending = false;
+        for p in all(
+            &mut db,
+            "SELECT * FROM vendor_periods WHERE status='open' ORDER BY id",
+            &[],
+        )
+        .await?
+        {
+            let pid = int(&p, "id");
+            if !vendor_cache.contains_key(&pid) {
+                let now = time::now();
+                let end = p["bill_end"].as_str().or(p["end"].as_str()).unwrap_or(&now);
+                vendor_cache.insert(
+                    pid,
+                    self.vendor_calculation(&mut db, pid, end, None, false)
+                        .await?,
+                );
+            }
+            let mut members = Vec::new();
+            let mut mine_fen = 0;
+            let mut group_pending = false;
+            for calc in array(&vendor_cache[&pid]["calculations"]) {
+                let pending = flag(calc, "allocation_pending") || !sync_error.is_null();
+                vendor_pending |= pending;
+                group_pending |= pending;
+                let own = array(&calc["allocations"])
+                    .iter()
+                    .find(|a| a["user_id"] == actor["id"]);
+                let amount = own.map_or(0, |a| int(a, "amount_fen"));
+                mine_fen += amount;
+                if !rows.iter().any(|r| r["cycle"]["id"] == calc["cycle"]["id"])
+                    && own.is_some_and(|a| !flag(a, "self_covered"))
+                {
+                    estimated += amount;
+                }
+                members.push(json!({"cycle_id":calc["cycle"]["id"],"amount_fen":if pending{Value::Null}else{json!(amount)},"allocation_pending":pending}));
+            }
+            vendor_totals.push(json!({"id":pid,"mine_fen":if group_pending{Value::Null}else{json!(mine_fen)},"members":members}));
+        }
         for expense in all(&mut db, "SELECT * FROM expenses WHERE status='open'", &[]).await? {
             let calc = self.expense_calculation(&mut db, &expense).await?;
             estimated += array(&calc["allocations"])
@@ -144,9 +206,11 @@ impl Service {
             .find_map(|r| r.get("data_error").filter(|v| !v.is_null()))
             .cloned();
         let submitted=one(&mut db,"SELECT coalesce(sum(amount_fen),0) AS amount FROM orders WHERE payer_id=? AND status='submitted'",&[actor["id"].clone()]).await?;
-        Ok(
-            json!({"accounts":rows,"account_revision":state["revision"],"account_sync_error":state["error"],"estimated_fen":if !sync_error.is_null()||row_error.is_some(){None}else{Some(estimated)},"pending_fen":balances.iter().filter(|b|b["payer_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"receivable_fen":balances.iter().filter(|b|b["creditor_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"submitted_fen":submitted["amount"],"last_sync":last,"sync_error":if sync_error.is_null(){row_error.unwrap_or(Value::Null)}else{sync_error},"coverage_from":store::meta(&mut db,"coverage_from").await?}),
-        )
+        let mut response = json!({"accounts":rows,"account_revision":state["revision"],"account_sync_error":state["error"],"estimated_fen":if !sync_error.is_null()||row_error.is_some()||vendor_pending||rows.iter().any(|r|flag(r,"allocation_pending")){None}else{Some(estimated)},"pending_fen":balances.iter().filter(|b|b["payer_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"receivable_fen":balances.iter().filter(|b|b["creditor_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"submitted_fen":submitted["amount"],"last_sync":last,"sync_error":if sync_error.is_null(){row_error.unwrap_or(Value::Null)}else{sync_error},"coverage_from":store::meta(&mut db,"coverage_from").await?});
+        if !vendor_totals.is_empty() {
+            response["vendor_totals"] = json!(vendor_totals);
+        }
+        Ok(response)
     }
     pub async fn expenses(&self, actor: &Value, eid: Option<i64>) -> Result<Value> {
         let mut db = self.store.read().await?;
@@ -311,7 +375,23 @@ impl Service {
         let active = array(&state["active_ids"]);
         let mut db = self.store.read().await?;
         let mut cycles = Vec::new();
-        for mut c in all(&mut db,"SELECT c.*,s.drift FROM cycles c JOIN accounts a ON a.id=c.account_id AND a.deleted=0 LEFT JOIN settlements s ON s.id=c.settlement_id ORDER BY c.id DESC",&[]).await?{if !active.contains(&c["account_id"]){continue;}c["creditor_name"]=json!(name(&mut db,int(&c,"creditor_id")).await?);self.present_cycle(&mut c).await;cycles.push(c);}
+        let mut vendor_cache = BTreeMap::new();
+        for mut c in all(&mut db,"SELECT c.*,s.drift FROM cycles c JOIN accounts a ON a.id=c.account_id AND a.deleted=0 LEFT JOIN settlements s ON s.id=c.settlement_id WHERE c.status!='cancelled' ORDER BY c.id DESC",&[]).await? {
+            if !active.contains(&c["account_id"]) { continue; }
+            if c["status"] == "open" && let Some(pid) = c["vendor_period_id"].as_i64() {
+                if !vendor_cache.contains_key(&pid) {
+                    let now = time::now();
+                    let end = c["bill_end"].as_str().or(c["end"].as_str()).unwrap_or(&now);
+                    vendor_cache.insert(pid, self.vendor_calculation(&mut db, pid, end, None, false).await?);
+                }
+                let calc = array(&vendor_cache[&pid]["calculations"]).iter().find(|r|r["cycle"]["id"]==c["id"]).ok_or_else(Error::unavailable)?;
+                c["cost_fen"] = calc["cycle"]["cost_fen"].clone();
+                c["allocation_pending"] = calc["allocation_pending"].clone();
+            }
+            c["creditor_name"]=json!(name(&mut db,int(&c,"creditor_id")).await?);
+            self.present_cycle(&mut c).await;
+            cycles.push(c);
+        }
         let mut audit = all(
             &mut db,
             "SELECT * FROM audit ORDER BY id DESC LIMIT 100",
@@ -346,12 +426,14 @@ impl Service {
                 && !estimate(text(&c, "start_mode"))
                 && c["cost_source"] != "upstream_bill"
                 && c["cost_kind"] != "estimated"
+                && c["vendor_period_id"].is_null()
             {
                 return Err(Error::conflict(gap));
             }
             let mut r = self.preview_calculation(&mut db, &c, end).await?;
             if let Some(gap) = gap
                 && c["cost_source"] != "upstream_bill"
+                && c["vendor_period_id"].is_null()
             {
                 r["data_quality"] = json!("incomplete");
                 r["can_settle"] = json!(false);

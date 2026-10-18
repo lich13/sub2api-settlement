@@ -98,7 +98,9 @@ fn choice(v: &Value, k: &str, values: &[&str], nullable: bool) -> Result<()> {
     if values.contains(&text(v, k)) {
         return Ok(());
     }
-    let expected = if values.len() == 2 {
+    let expected = if values.len() == 1 {
+        format!("'{last}'")
+    } else if values.len() == 2 {
         format!("'{}' or '{}'", values[0], values[1])
     } else {
         format!(
@@ -188,7 +190,112 @@ pub fn normalize(kind: &str, v: Value) -> Result<Value> {
         error
     })
 }
+
+fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
+    let fields: &[&str] = match kind {
+        "create-vendor" => &["name", "cost", "creditor_id"],
+        "edit-vendor" => &["name", "cost", "creditor_id", "version"],
+        "archive-vendor" | "void-vendor" => &["version"],
+        "create-vendor-period" | "edit-vendor-period" => &[
+            "version",
+            "cost",
+            "creditor_id",
+            "start",
+            "start_mode",
+            "members",
+            "detached",
+        ],
+        "vendor-start-confirm" => &["version", "start", "members"],
+        "vendor-member" => &["cycle_id", "version"],
+        "vendor-detached" => &["cycle_id", "version", "cost", "creditor_id"],
+        "vendor-renewal" => &["period_id", "version", "cost", "creditor_id", "cycle_ids"],
+        _ => return Err(Error::invalid("供应商操作无效")),
+    };
+    let obj = v
+        .as_object()
+        .ok_or_else(|| Error::invalid("请求必须是对象"))?;
+    for (key, val) in obj {
+        if !fields.contains(&key.as_str()) {
+            return Err(issue(
+                "extra_forbidden",
+                key,
+                "Extra inputs are not permitted",
+                val,
+                None,
+            ));
+        }
+    }
+    if fields.contains(&"start_mode") && v.get("start_mode").is_none() {
+        v["start_mode"] = json!("exact");
+    }
+    if fields.contains(&"detached") && v.get("detached").is_none() {
+        v["detached"] = json!([]);
+    }
+    for k in fields {
+        required(&v, k)?;
+    }
+    for k in ["version", "creditor_id", "cycle_id", "period_id"] {
+        if fields.contains(&k) {
+            positive(&mut v, k)?;
+        }
+    }
+    if fields.contains(&"name") {
+        string(&v, "name", 1, 120)?;
+    }
+    if fields.contains(&"cost") {
+        cost(&v, "cost", &COST)?;
+    }
+    if fields.contains(&"start") {
+        string(&v, "start", 1, 100)?;
+        v["start"] = json!(date_time(text(&v, "start"))?);
+    }
+    if fields.contains(&"start_mode") {
+        choice(
+            &v,
+            "start_mode",
+            &["exact", "minute_estimate", "date_estimate"],
+            false,
+        )?;
+    }
+    for (key, sub, min) in [
+        ("members", "vendor-member", 1),
+        ("detached", "vendor-detached", 0),
+    ] {
+        if !fields.contains(&key) {
+            continue;
+        }
+        let rows = v[key]
+            .as_array()
+            .filter(|a| a.len() >= min && a.len() <= 100)
+            .ok_or_else(|| Error::invalid("成员数量无效"))?;
+        let rows = rows
+            .iter()
+            .cloned()
+            .map(|r| normalize_vendor(sub, r))
+            .collect::<Result<Vec<_>>>()?;
+        if rows
+            .iter()
+            .map(|r| int(r, "cycle_id"))
+            .collect::<BTreeSet<_>>()
+            .len()
+            != rows.len()
+        {
+            return Err(Error::invalid("成员重复"));
+        }
+        v[key] = json!(rows);
+    }
+    if fields.contains(&"cycle_ids") {
+        ids(&v, "cycle_ids", 1)?;
+    }
+    Ok(v)
+}
 fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
+    if kind == "vendor-bill-confirm" {
+        return normalize("bill-confirm", v);
+    }
+    if kind.contains("vendor") {
+        return normalize_vendor(kind, v);
+    }
     if !v.is_object() {
         return Err(Error::invalid("请求必须是对象"));
     }
@@ -280,6 +387,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 "renewals",
                 "delete_cycle_ids",
                 "delete_scopes",
+                "vendor_renewals",
             ],
             json!({"renewals":[],"delete_cycle_ids":[]}),
         ),
@@ -324,7 +432,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         if !matches!(
             (kind, *k),
             ("netting-payment", "note" | "reference")
-                | ("settle", "delete_scopes")
+                | ("settle", "delete_scopes" | "vendor_renewals")
                 | ("delete-retry", "scope_digest")
         ) {
             required(&v, k)?;
@@ -449,6 +557,27 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             }
         }
         "settle" => {
+            if let Some(rows) = v.get("vendor_renewals") {
+                let rows = rows
+                    .as_array()
+                    .filter(|r| r.len() <= 100)
+                    .ok_or_else(|| Error::invalid("供应商续费数据无效"))?;
+                let rows = rows
+                    .iter()
+                    .cloned()
+                    .map(|r| normalize_vendor("vendor-renewal", r))
+                    .collect::<Result<Vec<_>>>()?;
+                if rows
+                    .iter()
+                    .map(|r| int(r, "period_id"))
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    != rows.len()
+                {
+                    return Err(Error::invalid("供应商续费重复"));
+                }
+                v["vendor_renewals"] = json!(rows);
+            }
             ids(&v, "delete_cycle_ids", 0)?;
             if let Some(scopes) = v.get("delete_scopes") {
                 let scopes = scopes

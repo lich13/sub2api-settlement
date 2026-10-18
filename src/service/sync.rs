@@ -214,14 +214,39 @@ impl Service {
         )
         .await?;
         let mut drift = Vec::new();
+        let mut vendor_cache = BTreeMap::<i64, Value>::new();
         for s in settlements {
             let snap: Value = serde_json::from_str(text(&s, "snapshot"))?;
-            if changed.contains(&int(&snap["cycle"], "account_id")) || !array(&gaps).is_empty() {
-                let calc = self
-                    .preview_calculation(&mut db, &snap["cycle"], text(&snap, "end"))
-                    .await?;
+            let pid = int(&snap["cycle"], "vendor_period_id");
+            let affected = if pid != 0 {
+                Self::vendor_members(&mut db, pid)
+                    .await?
+                    .iter()
+                    .any(|c| changed.contains(&int(c, "account_id")))
+            } else {
+                changed.contains(&int(&snap["cycle"], "account_id"))
+            };
+            if affected || !array(&gaps).is_empty() {
+                let calc = if pid != 0 {
+                    if !vendor_cache.contains_key(&pid) {
+                        vendor_cache.insert(
+                            pid,
+                            self.vendor_calculation(&mut db, pid, text(&snap, "end"), None, false)
+                                .await?,
+                        );
+                    }
+                    array(&vendor_cache[&pid]["calculations"])
+                        .iter()
+                        .find(|c| c["cycle"]["id"] == snap["cycle"]["id"])
+                        .cloned()
+                        .ok_or_else(Error::unavailable)?
+                } else {
+                    self.preview_calculation(&mut db, &snap["cycle"], text(&snap, "end"))
+                        .await?
+                };
                 if calc["digest"] != s["digest"]
                     || (snap["cycle"]["cost_source"] != "upstream_bill"
+                        && pid == 0
                         && Self::coverage_error(&mut db, &snap["cycle"], text(&snap, "end"))
                             .await?
                             .is_some())

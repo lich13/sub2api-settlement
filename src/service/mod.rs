@@ -5,6 +5,8 @@ pub mod operations;
 mod presentation;
 mod reads;
 mod sync;
+pub mod vendor_billing;
+mod vendors;
 use crate::{
     error::{Error, Result},
     inventory::Inventory,
@@ -30,6 +32,7 @@ pub struct Prepared {
     pub calculations: BTreeMap<i64, (Value, i64)>,
     pub expenses: BTreeMap<i64, Value>,
     pub bill: Option<(Value, i64)>,
+    pub vendor_bill: Option<Value>,
 }
 impl Service {
     pub async fn new(store: Store, source: Source) -> Result<Self> {
@@ -100,6 +103,26 @@ impl Service {
             .map(|(a, b)| (a, b.parse::<i64>().unwrap_or(0)))
             .unwrap_or((action, 0));
         let result = match kind {
+            "create-vendor" => self.save_vendor(&mut db, actor, None, payload).await?,
+            "edit-vendor" => self.save_vendor(&mut db, actor, Some(id), payload).await?,
+            "void-vendor" => self.void_vendor(&mut db, actor, id, payload).await?,
+            "archive-vendor" => self.archive_vendor(&mut db, actor, id, payload).await?,
+            "create-vendor-period" => {
+                self.save_vendor_period(&mut db, actor, id, payload, false)
+                    .await?
+            }
+            "edit-vendor-period" => {
+                self.save_vendor_period(&mut db, actor, id, payload, true)
+                    .await?
+            }
+            "vendor-start-confirm" => {
+                self.confirm_vendor_start(&mut db, actor, id, payload)
+                    .await?
+            }
+            "vendor-bill-confirm" => {
+                self.confirm_vendor_bill(&mut db, actor, id, payload, prepared.vendor_bill)
+                    .await?
+            }
             "create" => self.create_cycle(&mut db, actor, payload).await?,
             "edit" => self.edit_cycle(&mut db, actor, id, payload).await?,
             "start-confirm" => self.confirm_start(&mut db, actor, id, payload).await?,

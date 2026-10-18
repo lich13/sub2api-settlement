@@ -19,6 +19,34 @@
   --shadow: 0 16px 60px #102b2726;
   color-scheme: light;
 }
+.vendor-groups { display: grid; gap: 12px; margin: 0 24px 16px; }
+.vendor-group { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.vendor-group summary { display: flex; align-items: center; gap: 20px; padding: 16px 18px; cursor: pointer; list-style: none; }
+.vendor-group summary::-webkit-details-marker { display: none; }
+.vendor-group summary > div:first-child { flex: 1; min-width: 0; }
+.vendor-group summary strong, .vendor-members strong { display: block; overflow-wrap: anywhere; }
+.vendor-group small { display: block; margin-top: 5px; color: var(--muted); }
+.vendor-total { text-align: right; }
+.vendor-group[open] summary > svg { transform: rotate(180deg); }
+.vendor-members { border-top: 1px solid var(--line); padding: 0 18px; }
+.vendor-members > div { display: flex; gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.vendor-members > div > div { flex: 1; min-width: 0; }
+.vendor-actions { padding: 12px 18px; }
+.vendor-period-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.vendor-member-edit { padding: 10px 0; }
+.vendor-member-edit .checkline { flex-wrap: wrap; }
+.vendor-member-edit small { color: var(--muted); }
+.vendor-renewal { padding: 12px 0; }
+@media (max-width: 640px) {
+  .vendor-groups { margin: 0 12px 12px; }
+  .vendor-group summary { gap: 12px; padding: 14px; flex-wrap: wrap; }
+  .vendor-group summary > div:first-child { flex-basis: 55%; }
+  .vendor-group summary > span { flex: 1; color: var(--muted); }
+  .vendor-members { padding: 0 14px; }
+  .vendor-members > div { gap: 10px; }
+  .vendor-period-row { align-items: start; }
+  .vendor-actions { flex-wrap: wrap; }
+}
 :root[data-theme="dark"] {
   --bg: #111c1a;
   --surface: #192622;

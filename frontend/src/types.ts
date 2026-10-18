@@ -18,6 +18,11 @@ export type Share = {
   self_covered: boolean;
 };
 export type Cycle = {
+  allocation_pending?: boolean;
+  vendor_id?: number | null;
+  vendor_period_id?: number | null;
+  account_deleted?: boolean | number;
+  current_name?: string;
   id: number;
   account_id: number;
   name: string;
@@ -53,6 +58,8 @@ export type Cycle = {
   can_settle?: boolean;
 };
 export type Account = {
+  vendor_period?: VendorPeriod;
+  allocation_pending?: boolean;
   id: number;
   name: string;
   platform: string;
@@ -76,6 +83,7 @@ export type Account = {
   cost_warning?: string | null;
 };
 export type Overview = {
+  vendor_totals?: {id:number;mine_fen:number|null;members:{cycle_id:number;amount_fen:number|null;allocation_pending:boolean}[]}[];
   account_revision?: string;
   account_sync_error?: string | null;
   accounts: Account[];
@@ -136,6 +144,8 @@ export type ReceivableOrder = {
   status: string;
 };
 export type Calculation = {
+  vendor_period?: VendorPeriod;
+  allocation_pending?: boolean;
   display?: { cost_multiplier: string | null; settled: boolean };
   cycle: Cycle;
   end: string;
@@ -169,6 +179,19 @@ export type Calculation = {
     local_unmatched_count?: number;
     difference_required?: boolean;
   };
+};
+export type VendorPeriod = {
+  id: number; vendor_id: number; name: string; cost_fen: number; creditor_id: number;
+  creditor_name?: string; start: string; end: string | null; start_mode?: StartMode;
+  start_confirmed: boolean | number; version: number; status?: string;
+  members?: Cycle[]; member_ids?: number[]; bill_import_id?: number | null;
+  pending_bill?: boolean; basis?: "matched_upstream" | "local_consumption";
+};
+export type Vendor = { id: number; name: string; cost_fen: number; creditor_id: number; creditor_name?: string; version: number; archived_at: string | null; periods: VendorPeriod[] };
+export type VendorBillPreview = BillPreview & {
+  difference_amount?: string;
+  bill_total_fen: number; accounts: {account_id:number;cycle_id:number;name:string;amount_fen:number|null;total_consumption:string;allocations:Share[]}[];
+  basis: "matched_upstream" | "local_consumption"; coverage_warnings: {account_id:number;warning:string}[];
 };
 export type ExpenseMember = {
   user_id: number;
