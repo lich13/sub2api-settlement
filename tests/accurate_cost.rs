@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 mod support;
 
 use serde_json::{Value, json};
@@ -22,43 +23,44 @@ async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> 
         .await
 }
 
-async fn insert_cycle(
-    harness: &Harness,
+struct CycleFixture<'a> {
     account_id: i64,
     cost_fen: i64,
-    cost_kind: &str,
-    status: &str,
-    start: &str,
+    cost_kind: &'a str,
+    status: &'a str,
+    start: &'a str,
     start_locked: i64,
     vendor_period_id: Option<i64>,
-) -> i64 {
+}
+
+async fn insert_cycle(harness: &Harness, fixture: CycleFixture<'_>) -> i64 {
     let mut db = harness.app.service.store.write().await.unwrap();
     sqlx::query(
         "INSERT INTO profiles(account_id,name,kind) VALUES(?,?,'paid') ON CONFLICT(account_id) DO UPDATE SET name=excluded.name,kind='paid'",
     )
-    .bind(account_id)
-    .bind(format!("Fixture account {account_id}"))
+    .bind(fixture.account_id)
+    .bind(format!("Fixture account {}", fixture.account_id))
     .execute(&mut *db)
     .await
     .unwrap();
     let id = sqlx::query(
         "INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_confirmed,start_locked,cost_kind,vendor_period_id) VALUES(?,?,?,2,?,'exact',?,1,?,?,?)",
     )
-    .bind(account_id)
-    .bind(format!("Fixture account {account_id}"))
-    .bind(cost_fen)
-    .bind(start)
-    .bind(start)
-    .bind(start_locked)
-    .bind(cost_kind)
-    .bind(vendor_period_id)
+    .bind(fixture.account_id)
+    .bind(format!("Fixture account {}", fixture.account_id))
+    .bind(fixture.cost_fen)
+    .bind(fixture.start)
+    .bind(fixture.start)
+    .bind(fixture.start_locked)
+    .bind(fixture.cost_kind)
+    .bind(fixture.vendor_period_id)
     .execute(&mut *db)
     .await
     .unwrap()
     .last_insert_rowid();
-    if status != "open" {
+    if fixture.status != "open" {
         sqlx::query("UPDATE cycles SET status=? WHERE id=?")
-            .bind(status)
+            .bind(fixture.status)
             .bind(id)
             .execute(&mut *db)
             .await
@@ -177,13 +179,60 @@ fn assert_error<T: std::fmt::Debug>(result: Result<T>, status: u16, message: &st
 #[tokio::test]
 async fn maintenance_preview_and_reset_only_cancel_eligible_estimated_cycles() {
     let harness = Harness::new().await;
-    let eligible = insert_cycle(&harness, 400, 100, "estimated", "open", START, 0, None).await;
-    let active = insert_cycle(&harness, 200, 200, "estimated", "open", START, 0, None).await;
+    let eligible = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 400,
+            cost_fen: 100,
+            cost_kind: "estimated",
+            status: "open",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: None,
+        },
+    )
+    .await;
+    let active = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 200,
+            cost_fen: 200,
+            cost_kind: "estimated",
+            status: "open",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: None,
+        },
+    )
+    .await;
     insert_active_settlement(&harness, active).await;
-    let deleting = insert_cycle(&harness, 300, 300, "estimated", "open", START, 0, None).await;
+    let deleting = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 300,
+            cost_fen: 300,
+            cost_kind: "estimated",
+            status: "open",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: None,
+        },
+    )
+    .await;
     insert_deletion_task(&harness, 300).await;
-    let vendor_bound =
-        insert_cycle(&harness, 500, 500, "estimated", "open", START, 0, Some(77)).await;
+    let vendor_bound = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 500,
+            cost_fen: 500,
+            cost_kind: "estimated",
+            status: "open",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: Some(77),
+        },
+    )
+    .await;
     let imported = insert_bill_import(&harness, eligible).await;
     insert_audit(&harness, eligible, "fixture_history").await;
     let usage_before = rows(&harness, "usage").await;
@@ -264,8 +313,32 @@ async fn maintenance_preview_and_reset_only_cancel_eligible_estimated_cycles() {
 #[tokio::test]
 async fn stale_estimated_reset_digest_fails_atomically() {
     let harness = Harness::new().await;
-    let first = insert_cycle(&harness, 100, 100, "estimated", "open", START, 0, None).await;
-    let second = insert_cycle(&harness, 200, 200, "estimated", "open", START, 0, None).await;
+    let first = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 100,
+            cost_fen: 100,
+            cost_kind: "estimated",
+            status: "open",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: None,
+        },
+    )
+    .await;
+    let second = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 200,
+            cost_fen: 200,
+            cost_kind: "estimated",
+            status: "open",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: None,
+        },
+    )
+    .await;
     let before = maintenance::preview(&harness.app.service.store.path)
         .await
         .unwrap();
@@ -295,8 +368,19 @@ async fn stale_estimated_reset_digest_fails_atomically() {
 #[tokio::test]
 async fn cancelled_cycles_do_not_overlap_but_locked_upgrade_start_remains_a_boundary() {
     let harness = Harness::new().await;
-    let cancelled =
-        insert_cycle(&harness, 100, 100, "estimated", "cancelled", START, 0, None).await;
+    let cancelled = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 100,
+            cost_fen: 100,
+            cost_kind: "estimated",
+            status: "cancelled",
+            start: START,
+            start_locked: 0,
+            vendor_period_id: None,
+        },
+    )
+    .await;
     assert_eq!(cycle_row(&harness, cancelled).await["status"], "cancelled");
     let replacement = mutate(
         &harness,
@@ -311,7 +395,19 @@ async fn cancelled_cycles_do_not_overlap_but_locked_upgrade_start_remains_a_boun
         "open"
     );
 
-    let locked = insert_cycle(&harness, 200, 200, "exact", "cancelled", END, 1, None).await;
+    let locked = insert_cycle(
+        &harness,
+        CycleFixture {
+            account_id: 200,
+            cost_fen: 200,
+            cost_kind: "exact",
+            status: "cancelled",
+            start: END,
+            start_locked: 1,
+            vendor_period_id: None,
+        },
+    )
+    .await;
     assert_eq!(cycle_row(&harness, locked).await["start_locked"], 1);
     assert_error(
         mutate(
