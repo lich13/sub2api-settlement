@@ -444,10 +444,11 @@ impl App {
             self.deletion_wake.notify_one();
         }
         if kind == "delete-retry" {
-            self.deletion_wake.notify_one();
             let items = self
                 .deletion_list(actor, Some(&[required_entity(entity)?]))
                 .await?;
+            // Capture the response before waking the worker, as settlement does above.
+            self.deletion_wake.notify_one();
             return Ok(items["items"][0].clone());
         }
         Ok(result)
