@@ -4,7 +4,7 @@
 
 A self-hosted ledger for shared Sub2API account costs, fixed expenses and offline payments. A Rust service and React frontend run under `/settlement/`, with same-origin sign-in from Sub2API.
 
-Allocate exact costs using original consumption or upstream charges, split a supplier’s fixed total across a shared account cycle, renew cycles, and settle reciprocal debts as a single net payment. Amounts are stored in integer cents; frozen settlement records remain unchanged.
+Allocate exact costs using original consumption or upstream charges, configure unconfigured accounts as a group sharing one exact total, renew cycles, and settle reciprocal debts as a single net payment. Amounts are stored in integer cents; frozen settlement records remain unchanged.
 
 ![Settlement center with synthetic demonstration data](docs/assets/demo.jpg)
 
