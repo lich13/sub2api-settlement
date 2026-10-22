@@ -28,7 +28,7 @@ num-integer = "0.1"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 fernet = { version = "0.2", default-features = false, features = ["rustcrypto"] }
 rand = "0.8"
 subtle = "2"
