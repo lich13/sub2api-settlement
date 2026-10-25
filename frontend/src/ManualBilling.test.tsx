@@ -337,7 +337,7 @@ describe("billing for an individual cycle", () => {
 
     const reset = fetcher.mock.calls.find(([, init]) => init?.method === "PATCH");
     expect(JSON.parse(String(reset?.[1]?.body))).toMatchObject({
-      version: 3, cost: "100.00", creditor_id: 1,
+      account_id: 101, version: 3, cost: "100.00", creditor_id: 1,
       start: "2026-09-01T00:00:00Z", cost_source: "manual", cost_kind: "exact",
     });
     expect(button("确认结算").disabled).toBe(false);

@@ -729,6 +729,7 @@ function BillImportPanel({
     setError("");
     try {
       await api(`/cycles/${effectiveCycle.id}`, "PATCH", {
+        account_id: effectiveCycle.account_id,
         version: effectiveCycle.version,
         name: effectiveCycle.name,
         cost: costInput(effectiveCycle.cost_fen),

@@ -38,6 +38,10 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
+        Self::with_read_only(true).await
+    }
+
+    async fn with_read_only(read_only: bool) -> Self {
         let verify_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let verify_address = verify_listener.local_addr().unwrap();
         let verify_task = tokio::spawn(async move {
@@ -50,12 +54,9 @@ impl TestServer {
         });
 
         let temporary = TempDir::new().unwrap();
-        let app = App::new(app_config(
-            temporary.path(),
-            format!("http://{verify_address}"),
-        ))
-        .await
-        .unwrap();
+        let mut config = app_config(temporary.path(), format!("http://{verify_address}"));
+        config.read_only = read_only;
+        let app = App::new(config).await.unwrap();
         let api_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = api_listener.local_addr().unwrap();
         let router = app
@@ -202,6 +203,107 @@ async fn seed_audit(app: &App) -> Value {
     }
     db.commit().await.unwrap();
     original
+}
+
+#[tokio::test]
+async fn independent_cycle_can_clear_manual_draft_and_settle_through_http() {
+    let server = TestServer::with_read_only(false).await;
+    server.app.service.sync(true).await.unwrap();
+    let cookie = server.login("fixture-admin-token", 9).await;
+    let me: Value = server
+        .client
+        .get(server.api_url("me"))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let write = async |method, path: &str, payload: Value| {
+        let response = server
+            .client
+            .request(method, server.api_url(path))
+            .header(header::COOKIE, &cookie)
+            .header(header::ORIGIN, &server.app.config.origin)
+            .header("X-CSRF-Token", me["csrf"].as_str().unwrap())
+            .header("Idempotency-Key", uuid::Uuid::new_v4().to_string())
+            .json(&payload)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        body
+    };
+    let mut edit = json!({
+        "account_id": 100, "name": "Fixture cycle", "cost": "10.00",
+        "creditor_id": 2, "start": "2025-01-01T00:00:00Z",
+        "start_mode": "exact", "cost_kind": "exact",
+    });
+    let cycle = write(reqwest::Method::POST, "cycles", edit.clone()).await;
+    let id = cycle["id"].as_i64().unwrap();
+    let end = "2025-02-01T00:00:00Z";
+    let preview_payload = json!({"ids": [id], "end": end});
+    let initial = write(reqwest::Method::POST, "previews", preview_payload.clone()).await;
+    let version = &initial["cycles"][0]["cycle"]["version"];
+    write(
+        reqwest::Method::POST,
+        &format!("cycles/{id}/bill-previews"),
+        json!({
+            "version": version, "end": end, "allocation_mode": "matched_only",
+            "manual_basis": {
+                "source": "local_only",
+                "rates": [{"account_id": 100, "rate": "2"}],
+                "ambiguous_usage_ids": [],
+            },
+        }),
+    )
+    .await;
+    let blocked = write(reqwest::Method::POST, "previews", preview_payload.clone()).await;
+    assert_eq!(blocked["cycles"][0]["can_settle"], false);
+
+    edit["version"] = version.clone();
+    edit["cost_source"] = json!("manual");
+    write(reqwest::Method::PATCH, &format!("cycles/{id}"), edit).await;
+    let preview = write(reqwest::Method::POST, "previews", preview_payload).await;
+    let calculation = &preview["cycles"][0];
+    assert_eq!(calculation["can_settle"], true);
+    assert_eq!(calculation["cycle"]["cost_source"], "manual");
+    assert_eq!(calculation["cycle"]["cost_fen"], 1000);
+    assert!(calculation.get("bill").is_none());
+    let allocations: Vec<_> = calculation["allocations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["user_id"].as_i64().unwrap(),
+                row["amount_fen"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(allocations, vec![(2, 100), (3, 500), (4, 400)]);
+    write(
+        reqwest::Method::POST,
+        "settlements",
+        json!({"preview_id": preview["id"]}),
+    )
+    .await;
+    let mut db = server.app.service.store.read().await.unwrap();
+    let settled = store::one(
+        &mut db,
+        "SELECT status, settlement_id FROM cycles WHERE id=?",
+        &[json!(id)],
+        "fixture cycle missing",
+    )
+    .await
+    .unwrap();
+    assert_eq!(settled["status"], "settled");
+    assert!(settled["settlement_id"].as_i64().is_some());
+    db.commit().await.unwrap();
+    server.close().await;
 }
 
 #[tokio::test]

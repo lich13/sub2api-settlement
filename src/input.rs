@@ -360,6 +360,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 "start",
                 "start_mode",
                 "cost_kind",
+                "cost_source",
                 "version",
             ],
             json!({"start":null,"start_mode":"exact","cost_kind":null}),
@@ -475,6 +476,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 | ("settle", "delete_scopes" | "vendor_renewals")
                 | ("delete-retry", "scope_digest")
                 | ("bill-preview", "manual_basis")
+                | ("edit", "cost_source")
         ) {
             required(&v, k)?;
         }
@@ -510,6 +512,9 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             &["exact"],
             matches!(kind, "edit" | "renewal"),
         )?;
+    }
+    if fields.contains(&"cost_source") {
+        choice(&v, "cost_source", &["manual"], true)?;
     }
     if fields.contains(&"start_mode") {
         choice(
@@ -737,6 +742,38 @@ pub fn query_choices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_cost_source_is_optional_and_preserves_existing_edit_payloads() {
+        let payload = json!({
+            "account_id": 100, "name": "Fixture cycle", "cost": "10.00",
+            "creditor_id": 2, "version": 1,
+        });
+        let normalized = normalize("edit", payload.clone()).unwrap();
+        assert_eq!(
+            normalized,
+            json!({
+                "account_id": 100, "name": "Fixture cycle", "cost": "10.00",
+                "creditor_id": 2, "version": 1,
+                "start": null, "start_mode": "exact", "cost_kind": null,
+            })
+        );
+        let mut local = payload;
+        local["cost_source"] = json!("manual");
+        assert_eq!(
+            normalize("edit", local.clone()).unwrap()["cost_source"],
+            "manual"
+        );
+        for invalid in [json!("upstream_bill"), json!("manual_bill"), json!(true)] {
+            local["cost_source"] = invalid;
+            let error = normalize("edit", local.clone()).unwrap_err();
+            assert_eq!(error.status, 422);
+            assert_eq!(
+                error.detail.unwrap()[0]["loc"],
+                json!(["body", "cost_source"])
+            );
+        }
+    }
 
     #[test]
     fn malformed_objects_and_empty_choice_definitions_return_errors() {
