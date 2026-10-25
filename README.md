@@ -10,7 +10,7 @@ Allocate exact costs using original consumption or upstream charges, configure u
 
 ## Quick start
 
-Use Rust 1.99.0, Node 24.21.0 and pnpm 12.11.2, as pinned in this repository. To try the application with a temporary, synthetic ledger:
+Use Rust 1.99.1, Node 24.22.1 and pnpm 12.11.2, as pinned in this repository. To try the application with a temporary, synthetic ledger:
 
 ```sh
 pnpm --dir frontend install --frozen-lockfile

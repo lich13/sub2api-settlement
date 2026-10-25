@@ -1,6 +1,6 @@
 # 部署
 
-Rust stable（当前 1.99.0）、Node 24.21.0 LTS、pnpm 12.11.2。运行镜像只包含 Rust 服务与静态前端，不需要 Python。通过 Docker Compose 运行，使用已有 `sub2api_sub2api-network`，仅映射 `127.0.0.1:18082`。
+Rust 1.99.1、Node 24.22.1 LTS、pnpm 12.11.2。运行镜像只包含 Rust 服务与静态前端，不需要 Python。通过 Docker Compose 运行，使用已有 `sub2api_sub2api-network`，仅映射 `127.0.0.1:18082`。
 
 创建 `.env`（参考 `.env.example`，权限 0600）和 `data/`（UID/GID 10002，权限 0700）。SQLite、WAL 及 `session.key` 属于持久数据，备份时使用 SQLite backup API，保留同一密钥。单实例运行，不挂载网络文件系统。
 

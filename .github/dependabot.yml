@@ -2,13 +2,85 @@ version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    versioning-strategy: lockfile-only
+    allow:
+      - dependency-type: all
+    groups:
+      rust-compatible:
+        applies-to: version-updates
+        patterns: ['*']
+      rust-security:
+        applies-to: security-updates
+        patterns: ['*']
   - package-ecosystem: npm
     directory: /frontend
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 3
+    allow:
+      - dependency-type: all
+        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
+    groups:
+      react:
+        applies-to: version-updates
+        patterns: ['react', 'react-dom', '@types/react', '@types/react-dom']
+      frontend-runtime:
+        applies-to: version-updates
+        dependency-type: production
+        exclude-patterns: ['react', 'react-dom']
+      frontend-tooling:
+        applies-to: version-updates
+        dependency-type: development
+        exclude-patterns: ['@types/react', '@types/react-dom']
+      frontend-security:
+        applies-to: security-updates
+        patterns: ['*']
   - package-ecosystem: docker
     directory: /
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-type: all
+        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
+    groups:
+      base-images:
+        patterns: ['*']
   - package-ecosystem: github-actions
     directory: /
-    schedule: { interval: weekly }
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Taipei
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-type: all
+        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
+    groups:
+      actions-compatible:
+        applies-to: version-updates
+        patterns: ['*']
+      actions-security:
+        applies-to: security-updates
+        patterns: ['*']

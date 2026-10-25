@@ -1,6 +1,6 @@
-ARG NODE_IMAGE=node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
-ARG RUST_IMAGE=rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
-ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
+ARG NODE_IMAGE=node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
+ARG RUST_IMAGE=rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
+ARG RUNTIME_IMAGE=debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 FROM ${NODE_IMAGE} AS frontend
 WORKDIR /build
 RUN corepack enable
@@ -32,7 +32,7 @@ COPY --from=runtime-root / /
 ARG APP_REVISION=development
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV DATA_DIR=/data APP_REVISION=${APP_REVISION} SETTLEMENT_ASSETS=/app/frontend/dist
-LABEL org.opencontainers.image.title="Sub2API Settlement" org.opencontainers.image.version="0.12.0" org.opencontainers.image.revision=${APP_REVISION}
+LABEL org.opencontainers.image.title="Sub2API Settlement" org.opencontainers.image.version="0.12.1" org.opencontainers.image.revision=${APP_REVISION}
 WORKDIR /app
 COPY --from=backend /build/target/release/settlement ./settlement
 COPY --from=frontend /build/dist ./frontend/dist

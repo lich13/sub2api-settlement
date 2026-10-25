@@ -10,7 +10,7 @@
 
 ## 快速开始
 
-仓库已固定 Rust 1.99.0、Node 24.21.0 和 pnpm 12.11.2。使用临时演示账本体验：
+仓库已固定 Rust 1.99.1、Node 24.22.1 和 pnpm 12.11.2。使用临时演示账本体验：
 
 ```sh
 pnpm --dir frontend install --frozen-lockfile

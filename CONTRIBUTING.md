@@ -29,6 +29,18 @@ Playwright starts a separate Rust demo service and temporary ledger for each sce
 - Keep `tests/golden/` byte-for-byte unchanged. HTTP contracts, legacy SQL ledgers and synthetic session vectors in `tests/fixtures/` are immutable references; new behavior needs explicit tests rather than silent fixture replacement.
 - Schema migrations may only add compatible columns, auxiliary tables or indexes. Never recalculate frozen historical amounts.
 
+## Dependency maintenance
+
+Dependabot checks Cargo, frontend packages, Docker images and GitHub Actions every Monday at 09:00 Asia/Taipei. Ordinary releases have a seven-day cooldown. Version-update PR limits are one for Cargo, three for the frontend, one for Docker and one for Actions. Security alerts and security-update PRs are enabled separately in the repository settings; they do not wait for the ordinary update window or cooldown. All merges remain manual, and merged branches are deleted automatically.
+
+Cargo version updates maintain direct and transitive dependencies within the existing manifest constraints using `lockfile-only`. The frontend separates React, other runtime packages and development tools. Keep `react` and `react-dom` at the same exact version, and update their type packages together. Version-update rules allow minor and patch releases for npm, Docker and Actions; they do not suppress security fixes. Cargo `0.x` minor releases can break compatibility and must stay within the existing manifest range.
+
+Once a month, review the pinned Rust, Node, pnpm, audit and signing tools, CI service images and deferred major releases. Use the same versions locally, in CI and in Docker, retain image digests and Action commit pins, and use supported stable versions. Apply security patches sooner. Refresh the existing lockfiles with `cargo update` and `pnpm --dir frontend update` without `--latest`, then run frozen-lockfile installation, the existing tests and the dependency checks from CI. Keep lockfile changes separate from unrelated features.
+
+The sha2/hmac compatibility-line migration, toml 1.x, jsdom 30 and lucide-react 1.x are deferred until a required fix, feature or end of support justifies them. Evaluate sha2 and hmac together, including their shared digest API. A security fix that requires changing constraints takes priority and needs an explicit compatibility review; never silence it with a new advisory ignore. Preserve the documented RSA exception only while the compiled feature graph excludes both `rsa` and `sqlx-mysql`.
+
+For a failing dependency PR, read all failed checks once. Address shared security failures before retrying unrelated updates; retry infrastructure failures only when their cause has changed. Split a failing group when necessary to isolate its cause. Do not bypass checks, increase test timeouts without a reproduced cause, or repeatedly rerun unchanged failures. Close superseded or deliberately deferred proposals only after confirming their changes are accounted for; remove only bot-owned branches without additional commits.
+
 ## Pull requests
 
 Explain the concrete problem, changed behavior, compatibility implications and relevant test results. Include a short Chinese changelog entry for user-visible changes. UI checks should identify synthetic data, viewport and theme; do not include production screenshots.
