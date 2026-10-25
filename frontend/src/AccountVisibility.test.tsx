@@ -116,7 +116,7 @@ const historicalOrder: Order = {
 function settlementPreview(value: Cycle = removedCycle): Preview {
   return {
     id: `preview-${value.id}`,
-    expires_at: "2026-10-02T00:00:00Z",
+    expires_at: new Date(Date.now() + 120_000).toISOString(),
     cycles: [{
       cycle: value,
       end: "2026-10-01T00:00:00Z",
