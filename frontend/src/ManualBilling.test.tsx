@@ -250,55 +250,30 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("manual billing for an individual cycle", () => {
-  it("previews local-only usage without a CSV and posts its manual basis", async () => {
+describe("billing for an individual cycle", () => {
+  it("settles the configured cost from local consumption without a CSV or multiplier", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const value = cycle({ cost_source: "manual" });
     const fetcher = vi.fn<typeof fetch>(async input => {
-      const path = String(input);
-      if (path.endsWith("/previews")) return response(settlementPreview(cycle()));
-      if (path.endsWith("/bill-previews")) {
-        return response(billPreview({
-          total: null,
-          file_name: "",
-          manual_basis: { source: "local_only", rates: [{ account_id: 101, rate: "1.5" }], ambiguous_usage_ids: [] },
-          manual_summary: {
-            source: "local_only",
-            amount: "3.00",
-            accounts: [{ account_id: 101, rate: "1.5", request_count: 2, excluded_count: 0, local_amount: "2.00", amount: "3.00" }],
-          },
-          local_unmatched: [],
-        }));
-      }
+      if (String(input).endsWith("/previews")) return response(settlementPreview(value));
       return response({});
     });
     vi.stubGlobal("fetch", fetcher);
 
-    await render(<SettleForm ids={[7]} cycles={[cycle()]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
+    await render(<SettleForm ids={[7]} cycles={[value]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
     await advance(0);
 
-    setSelectValue(selectForLabel("账单来源"), "local_only");
-    setInputValue(rateInput("Synthetic account"), "1.5");
-    await click(button("账单预览"));
+    expect(host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
+    expect(host!.textContent).not.toContain("缺失请求补计");
+    expect(button("确认结算").disabled).toBe(false);
+    await click(button("确认结算"));
 
-    const billCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
-    const body = JSON.parse(String(billCall?.[1]?.body));
-    expect(body).toMatchObject({
-      version: 3,
-      manual_basis: {
-        source: "local_only",
-        rates: [{ account_id: 101, rate: "1.5" }],
-        ambiguous_usage_ids: [],
-      },
-    });
-    expect(body).not.toHaveProperty("csv");
-    expect(body).not.toHaveProperty("file_name");
-    expect(host!.textContent).toContain("未提供");
-    expect(host!.textContent).toContain("手动补计");
-    expect(host!.textContent).toContain("确认计费依据");
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(true);
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-previews"))).toBe(false);
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
   });
 
-  it("keeps the legacy payload free of manual_basis when supplementation is disabled", async () => {
+  it("keeps an optional upstream bill free of manual multipliers", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
     const csv = "timestamp,cost\n2026-09-20T00:00:00Z,100\n";
@@ -312,7 +287,7 @@ describe("manual billing for an individual cycle", () => {
 
     await render(<SettleForm ids={[7]} cycles={[cycle()]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
     await advance(0);
-    expect(checkbox("缺失请求补计").checked).toBe(false);
+    expect(host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
     const fileInput = host!.querySelector<HTMLInputElement>(".bill-import input[type=file]");
     if (!fileInput) throw new Error("bill CSV input not found");
     setFile(fileInput, "usage.csv", csv);
@@ -330,38 +305,64 @@ describe("manual billing for an individual cycle", () => {
     expect(body).not.toHaveProperty("manual_basis");
   });
 
-  it("locks settlement while a manual billing draft is unconfirmed and unlocks after confirmation", async () => {
+  it("returns a blocked legacy manual cycle to local consumption without changing its cost", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
-    const fetcher = vi.fn<typeof fetch>(async input => {
+    let value = cycle({ cost_source: "manual_bill", bill_allocation_mode: "matched_only" });
+    let local = false;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
-      if (path.endsWith("/previews")) return response(settlementPreview(cycle()));
-      if (path.endsWith("/bill-previews")) {
-        return response(billPreview({
-          manual_basis: { source: "local_only", rates: [{ account_id: 101, rate: "1" }], ambiguous_usage_ids: [] },
-          manual_summary: { source: "local_only", amount: "2.00", accounts: [] },
-        }));
+      if (path.endsWith("/previews")) return response(settlementPreview(value, { can_settle: local }));
+      if (path.endsWith("/cycles/7") && init?.method === "PATCH") {
+        local = true;
+        value = { ...value, cost_source: "manual", version: 4, bill_allocation_mode: "proportional" };
+        return response({ id: 7, version: 4 });
       }
-      if (path.endsWith("/bill-confirm")) return response({});
-      if (path.endsWith("/settlements")) return response({});
       return response({});
     });
     vi.stubGlobal("fetch", fetcher);
 
-    await render(<SettleForm ids={[7]} cycles={[cycle()]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
+    await render(<SettleForm ids={[7]} cycles={[value]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
     await advance(0);
-    expect(button("确认结算").disabled).toBe(false);
-
-    setSelectValue(selectForLabel("账单来源"), "local_only");
     expect(button("确认结算").disabled).toBe(true);
 
-    setInputValue(rateInput("Synthetic account"), "1");
-    await click(button("账单预览"));
-    await click(button("确认计费依据"));
+    const fileInput = host!.querySelector<HTMLInputElement>(".bill-import input[type=file]")!;
+    setFile(fileInput, "unused.csv", "timestamp,cost\n2026-09-20T00:00:00Z,100\n");
+    await act(async () => {
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(button("账单预览").disabled).toBe(false);
+    await click(button("按本地消费比例分摊"));
     await advance(0);
 
-    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-confirm"))).toBe(true);
+    const reset = fetcher.mock.calls.find(([, init]) => init?.method === "PATCH");
+    expect(JSON.parse(String(reset?.[1]?.body))).toMatchObject({
+      version: 3, cost: "100.00", creditor_id: 1,
+      start: "2026-09-01T00:00:00Z", cost_source: "manual", cost_kind: "exact",
+    });
     expect(button("确认结算").disabled).toBe(false);
+    expect(button("账单预览").disabled).toBe(true);
+    expect(host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-previews"))).toBe(false);
+    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
+  });
+
+  it("keeps settlement blocked when returning to local consumption is rejected", async () => {
+    vi.useFakeTimers();
+    const value = cycle({ cost_source: "manual_bill" });
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith("/previews")) return response(settlementPreview(value, { can_settle: false }));
+      if (init?.method === "PATCH") return response({ detail: "周期已更新，请刷新" }, 409);
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm ids={[7]} cycles={[value]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
+    await advance(0);
+    await click(button("按本地消费比例分摊"));
+
+    expect(host!.textContent).toContain("周期已更新，请刷新");
+    expect(button("确认结算").disabled).toBe(true);
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
   });
 });

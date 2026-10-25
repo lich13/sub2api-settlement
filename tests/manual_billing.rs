@@ -245,6 +245,152 @@ async fn confirm_cycle(
 }
 
 #[tokio::test]
+async fn independent_cycle_can_return_to_local_proportions_with_the_same_cost() {
+    for source in ["local_only", "upstream"] {
+        let harness = Harness::new().await;
+        let cycle_id = create_cycle(&harness, 100, "10.00", "local-proportion-create").await;
+        let (config, csv_text) = if source == "local_only" {
+            (Some(basis("local_only", &[("100", "1")], &[])), None)
+        } else {
+            (
+                None,
+                Some(csv(&[(START, "10.00", "fixture-model", "fixture-1")])),
+            )
+        };
+        let bill = preview_cycle(&harness, cycle_id, config, csv_text, "matched_only")
+            .await
+            .expect("old billing basis preview");
+        confirm_cycle(&harness, cycle_id, &bill, false)
+            .await
+            .expect("confirm old billing basis");
+        let before = cycle_row(&harness, cycle_id).await;
+        assert_eq!(before["cost_fen"], 1000);
+        let saved_bases = manual_basis_rows(&harness).await;
+        let saved_imports = harness.rows("bill_imports").await;
+        let old_preview = harness
+            .app
+            .service
+            .preview(&admin(), &json!({"ids":[cycle_id],"end":END}))
+            .await
+            .expect("old settlement preview");
+        let old_payload = json!({"preview_id":old_preview["id"],"renewals":[]});
+        let old_prepared = harness
+            .app
+            .service
+            .prepare_settlement(&admin(), &old_payload)
+            .await
+            .expect("prepare old settlement");
+        preview_cycle(
+            &harness,
+            cycle_id,
+            Some(basis("local_only", &[("100", "2")], &[])),
+            None,
+            "matched_only",
+        )
+        .await
+        .expect("leave an unconfirmed manual billing draft");
+        let blocked = harness
+            .app
+            .service
+            .preview(&admin(), &json!({"ids":[cycle_id],"end":END}))
+            .await
+            .expect("blocked settlement preview");
+        assert_eq!(blocked["cycles"][0]["can_settle"], false);
+
+        let mut reset = cycle_payload(100, "10.00");
+        reset["version"] = before["version"].clone();
+        reset["cost_source"] = json!("manual");
+        harness
+            .app
+            .service
+            .mutate(
+                &admin(),
+                "return-to-local-proportions",
+                &format!("edit:{cycle_id}"),
+                &reset,
+                Prepared::default(),
+                None,
+            )
+            .await
+            .expect("return to local proportions without changing the cost");
+        let current = cycle_row(&harness, cycle_id).await;
+        assert_eq!(current["cost_fen"], before["cost_fen"]);
+        assert_eq!(current["cost_source"], "manual");
+        assert_eq!(current["bill_allocation_mode"], "proportional");
+        for key in [
+            "bill_import_id",
+            "manual_basis_id",
+            "bill_end",
+            "bill_digest",
+            "billable_cost_fen",
+        ] {
+            assert!(current[key].is_null(), "stale billing field: {key}");
+        }
+        assert_error(
+            harness
+                .app
+                .service
+                .mutate(
+                    &admin(),
+                    "reject-old-billing-settlement",
+                    "settle",
+                    &old_payload,
+                    old_prepared,
+                    None,
+                )
+                .await,
+            409,
+            "成本或周期已修改",
+        );
+
+        let preview = harness
+            .app
+            .service
+            .preview(&admin(), &json!({"ids":[cycle_id],"end":END}))
+            .await
+            .expect("local consumption settlement preview");
+        let calculation = &preview["cycles"][0];
+        assert_eq!(calculation["can_settle"], true);
+        assert!(calculation.get("bill").is_none());
+        let allocations = calculation["allocations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["user_id"].as_i64().unwrap(),
+                    row["amount_fen"].as_i64().unwrap(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(allocations, BTreeMap::from([(2, 100), (3, 500), (4, 400)]));
+        let payload = json!({"preview_id":preview["id"],"renewals":[]});
+        let prepared = harness
+            .app
+            .service
+            .prepare_settlement(&admin(), &payload)
+            .await
+            .expect("prepare local consumption settlement");
+        harness
+            .app
+            .service
+            .mutate(
+                &admin(),
+                "settle-local-proportions",
+                "settle",
+                &payload,
+                prepared,
+                None,
+            )
+            .await
+            .expect("settle without a CSV or manual multiplier");
+        assert_eq!(harness.rows("settlements").await.len(), 1);
+        assert_eq!(manual_basis_rows(&harness).await, saved_bases);
+        assert_eq!(harness.rows("bill_imports").await, saved_imports);
+    }
+}
+
+#[tokio::test]
 async fn normal_csv_preview_replaces_pending_manual_preview_for_independent_and_group() {
     let harness = Harness::new().await;
     let cycle_id = create_cycle(&harness, 100, "10.00", "manual-draft-normal-create").await;

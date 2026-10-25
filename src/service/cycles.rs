@@ -252,6 +252,10 @@ impl Service {
     ) -> Result<Value> {
         admin(actor)?;
         accurate_cost(data)?;
+        let local_basis = data["cost_source"] == "manual";
+        if !data["cost_source"].is_null() && !local_basis {
+            return Err(Error::invalid("修改成本时仅支持切换为本地消费比例"));
+        }
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
         Self::independent_cycle(&c).await?;
         if c["status"] != "open" {
@@ -259,6 +263,9 @@ impl Service {
         }
         if c["version"] != data["version"] {
             return Err(Error::conflict("周期已更新，请刷新后再修改"));
+        }
+        if local_basis && c["cost_kind"] != "exact" {
+            return Err(Error::invalid("请先确认准确成本，再按本地消费比例分摊"));
         }
         let requested_mode = if text(data, "start_mode").is_empty() {
             "exact"
@@ -317,8 +324,16 @@ impl Service {
             return Err(Error::invalid("请填写账号公开名称"));
         }
         exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind=?,version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},json!("exact"),json!(cid)]).await?;
-        if cost != int(&c, "cost_fen") {
+        if cost != int(&c, "cost_fen") || local_basis {
             exec(db,"UPDATE cycles SET cost_source='manual',bill_import_id=NULL,manual_basis_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0 WHERE id=?",&[json!(cid)]).await?;
+            if local_basis {
+                exec(
+                    db,
+                    "UPDATE cycles SET bill_allocation_mode='proportional',billable_cost_fen=NULL WHERE id=?",
+                    &[json!(cid)],
+                )
+                .await?;
+            }
             Self::clear_manual_draft(db, Some(cid), None).await?;
         }
         exec(

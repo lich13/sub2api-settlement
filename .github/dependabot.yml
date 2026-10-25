@@ -13,6 +13,7 @@ updates:
     versioning-strategy: lockfile-only
     allow:
       - dependency-type: all
+        update-types: ['version-update:semver-minor', 'version-update:semver-patch']
     groups:
       rust-compatible:
         applies-to: version-updates

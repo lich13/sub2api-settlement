@@ -1020,6 +1020,20 @@ async fn estimated_cost_cannot_settle_and_editing_kind_invalidates_the_old_previ
     assert!(harness.rows("settlements").await.is_empty());
     assert_eq!(cycle_row(&harness, id).await["status"], "open");
 
+    assert_error(
+        edit_cycle(
+            &harness,
+            id,
+            &admin(),
+            "estimated-cost-local-basis",
+            json!({"cost_kind":"exact","cost_source":"manual"}),
+        )
+        .await,
+        422,
+        "先确认准确成本",
+    );
+    assert_eq!(cycle_row(&harness, id).await["cost_kind"], "estimated");
+
     let edited = edit_cycle(
         &harness,
         id,

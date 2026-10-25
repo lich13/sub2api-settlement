@@ -1,4 +1,3 @@
-import { ManualBillingEditor, useManualBilling } from "./ManualBilling";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -649,11 +648,10 @@ function BillImportPanel({
   const [error, setError] = useState("");
   const effectiveCycle = calculation && calculation.cycle.version >= cycle.version ? calculation.cycle : cycle;
   const [mode, setMode] = useState<BillMode>(effectiveCycle.bill_allocation_mode || "proportional");
-  const manual=useManualBilling(calculation?.bill?.manual_basis);
   function invalidate(){onDraftChange?.(true);++requestVersion.current;setPreview(null);setBusy(false);setAcceptDifference(false);setAcceptOutside(false);}
   const requestVersion = useRef(0);
   const fileRead = useRef(0);
-  const manualWindow = useRef(end);
+  const csvInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setMode(effectiveCycle.bill_allocation_mode || "proportional"); }, [effectiveCycle.id, effectiveCycle.bill_allocation_mode]);
 
@@ -664,15 +662,12 @@ function BillImportPanel({
     setAcceptDifference(false);
     setAcceptOutside(false);
     setError("");
-    manual.clearDiagnostics(manualWindow.current !== end);
-    manualWindow.current = end;
   }, [end, effectiveCycle.id, effectiveCycle.version, previewKey]);
   useEffect(() => () => { ++requestVersion.current; ++fileRead.current; }, []);
 
   async function inspect(useExisting = false, selectedMode = mode) {
     if (!end) { setError("请填写有效的结束时间"); return; }
-    if (!manual.valid){setError("倍率须为非负数，最多六位小数");return;}
-    if (manual.source!=="local_only" && !useExisting && !csv.trim()) {
+    if (!useExisting && !csv.trim()) {
       setError("请选择 CSV 文件");
       return;
     }
@@ -684,12 +679,10 @@ function BillImportPanel({
         version: effectiveCycle.version,
         end,
         allocation_mode: selectedMode,
-        ...(manual.source==="local_only"?{}:useExisting ? { import_id: effectiveCycle.bill_import_id } : { csv, file_name: fileName || "usage.csv" }),
-        ...(manual.basis?{manual_basis:manual.basis}:{}),
+        ...(useExisting ? { import_id: effectiveCycle.bill_import_id } : { csv, file_name: fileName || "usage.csv" }),
       });
       if (token !== requestVersion.current) return;
       setPreview(result);
-      manual.setDiagnostics(result);
       setAcceptDifference(false);
       setAcceptOutside(false);
     } catch (e) {
@@ -728,23 +721,54 @@ function BillImportPanel({
       setBusy(false);
     }
   }
+  async function useLocalConsumption() {
+    invalidate();
+    ++fileRead.current;
+    const token = requestVersion.current;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/cycles/${effectiveCycle.id}`, "PATCH", {
+        version: effectiveCycle.version,
+        name: effectiveCycle.name,
+        cost: costInput(effectiveCycle.cost_fen),
+        creditor_id: effectiveCycle.creditor_id,
+        start: effectiveCycle.start,
+        start_mode: effectiveCycle.start_mode || "exact",
+        cost_kind: "exact",
+        cost_source: "manual",
+      });
+      if (token !== requestVersion.current) return;
+      setCsv("");
+      setFileName("");
+      if (csvInput.current) csvInput.current.value = "";
+      setMode("proportional");
+      onDraftChange?.(false);
+      await onConfirmed();
+    } catch (e) {
+      if (token === requestVersion.current) setError((e as Error).message);
+    } finally {
+      if (token === requestVersion.current) setBusy(false);
+    }
+  }
   return (
     <div className="bill-import">
-      <div className="bill-import-head"><strong>上游账单</strong><span>{effectiveCycle.cost_source === "upstream_bill" ? "替换账单" : "独立账号"}</span></div>
-      <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={[{account_id:effectiveCycle.account_id,name:effectiveCycle.name}]} changed={invalidate} proportional={mode==="proportional"} />
-      {manual.source!=="local_only"&&<><label>分摊方式<Select value={mode} disabled={busy} onChange={(e) => {
+      <div className="bill-import-head"><strong>单账号计费</strong><span>{effectiveCycle.name}</span></div>
+      <p className="field-hint">本期总成本 {money(effectiveCycle.cost_fen)}，可直接按本地原始消费占比分摊，无需上传账单或填写倍率。</p>
+      <button className="button" disabled={busy || effectiveCycle.cost_kind === "estimated"} onClick={useLocalConsumption}>按本地消费比例分摊</button>
+      <div className="bill-import-head"><strong>上游账单（可选）</strong><span>{effectiveCycle.cost_source === "upstream_bill" ? "替换账单" : "独立账号"}</span></div>
+      <label>分摊方式<Select value={mode} disabled={busy} onChange={(e) => {
         const next = e.target.value as BillMode;
         setMode(next); invalidate();
-        manual.clearDiagnostics();
         if (csv.trim() || effectiveCycle.bill_import_id) void inspect(!csv.trim(), next);
       }}><option value="proportional">比例分摊</option><option value="matched_only">精准匹配</option></Select></label>
       <label>CSV 文件
-        <input type="file" accept=".csv,text/csv" onChange={async (e) => {
+        <input ref={csvInput} type="file" accept=".csv,text/csv" disabled={busy} onChange={async (e) => {
           const file = e.target.files?.[0];
           if (!file) return;
           if (file.size > 10 * 1024 * 1024) { setError("CSV 不能超过 10 MB"); return; }
           const token = ++fileRead.current;
-          invalidate();manual.clearDiagnostics();
+          invalidate();
           setBusy(false);
           setPreview(null);
           const content = await file.text();
@@ -753,10 +777,9 @@ function BillImportPanel({
           setCsv(content);
         }} />
       </label>
-      </>}
       <div className="start-actions">
-        <button className="button" disabled={busy || !manual.valid || (manual.source!=="local_only"&&!csv.trim()) || !end} onClick={() => inspect()}>{busy && !preview ? "匹配中…" : "账单预览"}</button>
-        {manual.source!=="local_only" && !!effectiveCycle.bill_import_id && <button className="button" disabled={busy} onClick={() => inspect(true)}>沿用已导入账单</button>}
+        <button className="button" disabled={busy || !csv.trim() || !end} onClick={() => inspect()}>{busy && !preview ? "匹配中…" : "账单预览"}</button>
+        {!!effectiveCycle.bill_import_id && <button className="button" disabled={busy} onClick={() => inspect(true)}>沿用已导入账单</button>}
       </div>
       {preview && <div className="bill-stats">
         {preview.file_name&&<div><span>文件</span><b>{preview.file_name}</b></div>}
