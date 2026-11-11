@@ -48,3 +48,5 @@ Explain the concrete problem, changed behavior, compatibility implications and r
 Run `gitleaks git --config .gitleaks.toml` before publishing a branch. Allowlisting is limited to exact, public synthetic fixture values. Do not add broad exclusions.
 
 Report suspected security vulnerabilities privately through the repository's GitHub Security Advisory feature. Do not put credentials or exploit details in a public issue.
+
+Temporary advisory waiver: RUSTSEC-2026-0459 (`libsqlite3-sys` 0.30.1, uninitialized memory read in WAL mode, local attack vector) is ignored in `deny.toml` and in the `cargo audit` flag in `ci.yml` until 2027-01-11, because the fixed `libsqlite3-sys` (>= 0.39) is rejected by sqlx 0.8 and 0.9.0. Remove it when a sqlx release allowing it ships (launchbadge/sqlx#4516, PR #4517): migrate to sqlx 0.9 (wrap dynamic SQL in `sqlx::AssertSqlSafe`, enable `runtime-tokio` + `tls-rustls`) and bump `libsqlite3-sys` to 0.39. The `security` job fails after the review date so the waiver cannot linger silently.
