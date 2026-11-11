@@ -33,7 +33,7 @@ fn command(program: &str, args: &[&str]) -> Result<String> {
 }
 
 fn version() -> Result<String> {
-    let manifest: toml::Value = fs::read_to_string(root().join("Cargo.toml"))?.parse()?;
+    let manifest: toml::Table = fs::read_to_string(root().join("Cargo.toml"))?.parse()?;
     Ok(manifest["package"]["version"]
         .as_str()
         .ok_or("Missing version")?
