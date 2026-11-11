@@ -4,7 +4,7 @@ Discuss changes that affect accounting rules before implementation. Keep fixes f
 
 ## Development
 
-Use the pinned Rust, Node and pnpm versions and preserve both lockfiles. The `settlement-tools demo` command in the README provides a loopback-only environment. No production access is needed for development or tests.
+Use the current stable Rust, the current Node.js LTS and the current pnpm (`rust-toolchain.toml` selects `stable`; no `packageManager` field or Corepack is used), and preserve both lockfiles. The `settlement-tools demo` command in the README provides a loopback-only environment. No production access is needed for development or tests.
 
 ```sh
 cargo fmt --all -- --check
@@ -35,7 +35,7 @@ Dependabot checks Cargo, frontend packages, Docker images and GitHub Actions eve
 
 Cargo version updates maintain direct and transitive dependencies within the existing manifest constraints using `lockfile-only` plus explicit minor/patch update types. Cargo's update-type rules classify changes to the leftmost nonzero version component as breaking, so `rand 0.8 -> 0.10` is excluded from ordinary updates. Keep both settings: `lockfile-only` alone can produce an inconsistent lockfile when multiple versions of a crate are present. The frontend separates React, other runtime packages and development tools. Keep `react` and `react-dom` at the same exact version, and update their type packages together. Version-update rules allow minor and patch releases for all four ecosystems; they do not suppress security fixes. The existing frozen-lockfile checks must pass before merging any dependency PR.
 
-Once a month, review the pinned Rust, Node, pnpm, audit and signing tools, CI service images and deferred major releases. Use the same versions locally, in CI and in Docker, retain image digests and Action commit pins, and use supported stable versions. Apply security patches sooner. Refresh the existing lockfiles with `cargo update` and `pnpm --dir frontend update` without `--latest`, then run frozen-lockfile installation, the existing tests and the dependency checks from CI. Keep lockfile changes separate from unrelated features.
+Once a month, review the audit and signing tools, CI service images and deferred major releases. Rust, Node.js (LTS channel only, never a Current or alpha build) and pnpm follow their stable channels locally, in CI and in Docker; the runtime image and GitHub Actions keep their digest and commit pins. If a new pnpm major changes the lockfile format, regenerate `frontend/pnpm-lock.yaml` in a separate commit before merging anything else. Apply security patches sooner. Refresh the existing lockfiles with `cargo update` and `pnpm --dir frontend update` without `--latest`, then run frozen-lockfile installation, the existing tests and the dependency checks from CI. Keep lockfile changes separate from unrelated features.
 
 The sha2/hmac compatibility-line migration, toml 1.x, jsdom 30 and lucide-react 1.x are deferred until a required fix, feature or end of support justifies them. Evaluate sha2 and hmac together, including their shared digest API. A security fix that requires changing constraints takes priority and needs an explicit compatibility review; never silence it with a new advisory ignore. Preserve the documented RSA exception only while the compiled feature graph excludes both `rsa` and `sqlx-mysql`.
 
