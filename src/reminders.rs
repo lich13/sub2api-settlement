@@ -6,7 +6,7 @@ use crate::{
     store, time,
 };
 use chrono::Timelike;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::sync::Mutex;
