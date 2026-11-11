@@ -16,7 +16,7 @@ use axum::{
     routing::{any, get},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
+use rand::Rng;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use subtle::ConstantTimeEq;
@@ -468,7 +468,7 @@ fn cookie(h: &HeaderMap) -> &str {
 }
 fn random() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 fn params(request: &Request) -> BTreeMap<String, String> {
