@@ -84,7 +84,7 @@ SSO 默认每个客户端 IP 每分钟 30 次；业务写入默认每个已验�
 
 Nginx 配置已关闭结算路径访问日志并设置 `Referrer-Policy: no-referrer`，避免 SSO 查询参数被记录或带往其他页面。Compose 使用只读根文件系统、移除全部 capabilities、禁止提权和运行时健康检查；仅数据卷与临时目录可写。
 
-基础镜像固定 digest，CI 检查 Rust 与前端依赖，发布时生成 SPDX SBOM，并用 GitHub Actions OIDC 对同一个已测试镜像 digest 签名。源码、静态前端、Linux amd64 镜像包、签名与摘要文件随 Release 提供。依赖许可及唯一的未激活依赖例外见 [SECURITY.md](../SECURITY.md)。
+运行镜像基础层固定 digest，构建用的 Node 和 Rust 镜像跟随稳定通道，CI 检查 Rust 与前端依赖，发布时生成 SPDX SBOM，并用 GitHub Actions OIDC 对同一个已测试镜像 digest 签名。源码、静态前端、Linux amd64 镜像包、签名与摘要文件随 Release 提供。依赖许可及唯一的未激活依赖例外见 [SECURITY.md](../SECURITY.md)。
 
 ## 运行状态与稽核
 

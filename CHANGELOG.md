@@ -1,5 +1,26 @@
 # 更新日志
 
+## v0.12.4 · 2026-11-11
+
+### 调整
+
+- 开发与构建工具链改为跟随稳定通道：Rust 使用 stable，Node.js 使用 LTS（此前 CI 误取到 Node 27 alpha 构建），pnpm 使用当前版本，不再固定 `packageManager` 与 Corepack；同步更新贡献说明和部署文档。
+- 依赖维护：Dependabot 的 minor 与 patch 更新在 `security` 与 `verify` 全部通过后自动合并，主版本升级仍由人工完成。
+- 完成此前延期的依赖升级：sha2 0.11 与 hmac 0.13（一并升级）、rand 0.10、tower-http 0.7、base64 0.23、toml 1（仅发布工具）、jsdom 31、lucide-react 1.70，并刷新其余兼容的传递依赖与前端测试工具、GitHub Actions。除 HMAC 的 `KeyInit` 导入、随机数接口名称和发布工具读取 Cargo.toml 的方式外无代码改动。
+- `num-bigint` 保持 0.4：其配套的 `num-rational` 尚未发布适配 0.5 的版本，金额运算不在两个大整数库之间转换。
+
+### 兼容性
+
+- 沿用 schema 9、已发布迁移校验和原有接口；结算、签名、会话、冻结账单与历史金额规则不变，`tests/golden/` 与 `tests/fixtures/` 没有修改。
+
+### 安全说明
+
+- RUSTSEC-2026-0459（`libsqlite3-sys` 0.30.1 在 WAL 模式下读取未初始化内存，仅本地可利用）暂时豁免，复查期限 2027-01-11，CI 在到期后会失败以免遗留。修复需要 `libsqlite3-sys` 0.39 以上，目前受 sqlx 版本范围限制，待 sqlx 发布放宽范围的版本（launchbadge/sqlx#4516）后迁移。
+
+### 验证
+
+- Rust 测试（206 项）、Clippy、前端测试与构建、浏览器 E2E、演示与负载自检、依赖安全检查均通过；发布流水线继续执行隔离 PostgreSQL、镜像启动和发布产物检查。
+
 ## v0.12.3 · 2026-10-25
 
 ### 修复
