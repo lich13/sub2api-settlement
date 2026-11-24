@@ -222,7 +222,7 @@ impl Service {
             Ok(json!({"result":result,"versions":versions,"period":period,"calculations":calculations}))
         }).await.map_err(|_|Error::unavailable())?
     }
-    pub async fn verify_vendor_prepared(db: &mut Db, p: &Value) -> Result<()> {
+    async fn verify_vendor_prepared(db: &mut Db, p: &Value) -> Result<()> {
         let current = one(
             db,
             "SELECT * FROM vendor_periods WHERE id=?",

@@ -11,7 +11,7 @@ fn positive_query(query: &BTreeMap<String, String>, key: &str, default: i64) -> 
 }
 
 /// Neutralize formulas before CSV quoting, including whitespace-prefixed formulas.
-pub fn csv_cell(value: &str) -> String {
+fn csv_cell(value: &str) -> String {
     let first =
         value.trim_start_matches(|c: char| c.is_whitespace() || c.is_control() || c == '\u{feff}');
     if first.starts_with(['=', '+', '-', '@']) {

@@ -1466,6 +1466,7 @@ export function App() {
         )}
       {vendorManager && catalog && (
         <VendorManager
+          key={`${vendorManager.id ?? "all"}:${vendorManager.action ?? "manage"}`}
           initialVendorId={vendorManager.id}
           initialAction={vendorManager.action}
           vendors={vendors}

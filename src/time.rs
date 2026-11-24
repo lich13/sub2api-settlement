@@ -27,7 +27,7 @@ pub fn format_date(d: Date) -> String {
     format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
 }
 
-pub fn parse_naive_datetime(s: &str) -> Option<PrimitiveDateTime> {
+fn parse_naive_datetime(s: &str) -> Option<PrimitiveDateTime> {
     let (date_part, time_part) = s.split_once('T')?;
     let date = parse_date(date_part)?;
     let (hms, nanos) = if let Some((hms, frac)) = time_part.split_once('.') {

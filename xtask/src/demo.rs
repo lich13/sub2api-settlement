@@ -128,7 +128,7 @@ impl Workspace {
     }
 }
 
-pub fn atomic_json(path: &Path, value: &Value) -> Result<()> {
+fn atomic_json(path: &Path, value: &Value) -> Result<()> {
     let next = path.with_extension("json.next");
     fs::write(&next, serde_json::to_vec(value)?)?;
     fs::rename(next, path)?;

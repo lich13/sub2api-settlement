@@ -677,13 +677,11 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     }
     let query = params(&request);
     let headers = request.headers().clone();
-    let (actor, sid) = app
-        .authenticate(&headers, method != "GET" && method != "HEAD")
-        .await?;
-    if method != "GET" && method != "HEAD" {
+    let (actor, sid) = app.authenticate(&headers, method != "GET").await?;
+    if method != "GET" {
         app.limiter.write(int(&actor, "id")).await?;
     }
-    if app.config.read_only && method != "GET" && method != "HEAD" {
+    if app.config.read_only && method != "GET" {
         return Err(Error::new(403, "当前实例仅用于只读核验"));
     }
     if let Route::AuditCsv = route {

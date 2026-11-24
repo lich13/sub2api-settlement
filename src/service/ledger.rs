@@ -15,7 +15,7 @@ pub fn authorize(actor: &Value, a: i64, b: i64) -> Result<()> {
     }
     Ok(())
 }
-pub fn order_details(rows: &[Value]) -> Value {
+fn order_details(rows: &[Value]) -> Value {
     json!(
         rows.iter()
             .map(|r| {

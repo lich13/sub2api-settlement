@@ -195,11 +195,6 @@ export type VendorBillPreview = BillPreview & {
   bill_total_fen: number|null; accounts: {account_id:number;cycle_id:number;name:string;amount_fen:number|null;total_consumption:string;allocations:Share[]}[];
   basis: "matched_upstream" | "local_consumption" | "manual_supplement"; coverage_warnings: {account_id:number;warning:string}[];
 };
-export type ExpenseMember = {
-  user_id: number;
-  weight?: string | number;
-  percent?: string;
-};
 export type Expense = {
   id: number;
   name: string;
@@ -207,7 +202,11 @@ export type Expense = {
   incurred_on: string;
   creditor_id: number;
   allocation_mode: "equal" | "custom";
-  members?: ExpenseMember[];
+  members?: {
+    user_id: number;
+    weight?: string | number;
+    percent?: string;
+  }[];
   status?: string;
   version: number;
   settlement_id?: number | null;

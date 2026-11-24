@@ -7,7 +7,7 @@ use crate::{
     time,
 };
 use serde_json::{Value, json};
-pub fn public_job(row: Value) -> Value {
+fn public_job(row: Value) -> Value {
     without(row, &["session_id", "account_created_at"])
 }
 pub fn scope(aid: i64, rows: Vec<Value>) -> Result<Value> {

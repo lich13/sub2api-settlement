@@ -481,6 +481,114 @@ describe("vendor manager", () => {
       ],
     });
   });
+
+  it("renews settled groups from the overview and never offers retired first-period setup", async () => {
+    const settled = period({ status: "settled", end: "2026-10-01T00:00:00Z", members: [cycle({ status: "settled", end: "2026-10-01T00:00:00Z" })] });
+    const emptyVendor: Vendor = { ...vendor(settled), id: 6, name: "Boundary group", periods: [] };
+    const fetcher = vi.fn<typeof fetch>(async () => response({}));
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorGroups
+      vendors={[vendor(settled), emptyVendor]}
+      accounts={[]}
+      admin
+      query=""
+      filter="all"
+      onSettle={vi.fn()}
+      onManage={vi.fn()}
+      onDetail={vi.fn()}
+    />);
+    expect(host!.textContent).not.toContain("待配置首期");
+    expect(host!.textContent).not.toContain("配置首期");
+
+    await render(<VendorManager
+      vendors={[vendor(settled), emptyVendor]}
+      accounts={[]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+    />);
+    expect(host!.textContent).not.toContain("配置首期");
+    await click(button("整组续费"));
+    await click(button("确认整组续费"));
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/settlement/api/v1/vendors/5/renew");
+  });
+
+  it("isolates create defaults from initialVendorId, blocks stale non-create fallthrough, and closes after scoped archive", async () => {
+    const legacyOpen = period({
+      cost_fen: 54_321,
+      creditor_id: 99,
+      start: "2026-08-15T00:00:00Z",
+      start_mode: "date_estimate",
+      members: [cycle()],
+    });
+    const fetcher = vi.fn<typeof fetch>(async () => response({ ok: true }));
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorManager
+      key="create-with-stale-vendor-id"
+      vendors={[vendor(legacyOpen)]}
+      accounts={[unconfiguredAccount(102, "Fresh candidate")]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialVendorId={5}
+      initialAction="create"
+    />);
+    expect(inputForLabel("本期准确总成本（元）").value).toBe("0.00");
+    expect(selectForLabel("统一垫付人").value).toBe("7");
+    expect(selectForLabel("起点方式").value).toBe("exact");
+    expect(Array.from(selectForLabel("起点方式").options).map(o => o.value)).not.toContain("date_estimate");
+
+    await render(<VendorManager
+      key="renew-archived-vendor"
+      vendors={[{ ...vendor(legacyOpen), archived_at: "2026-10-02T00:00:00Z" }]}
+      accounts={[unconfiguredAccount(102, "Fresh candidate")]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialVendorId={5}
+      initialAction="renew"
+    />);
+    expect(host!.textContent).toContain("暂无可管理的账号组");
+    expect(host!.querySelector("form")).toBeNull();
+
+    const emptyVendor: Vendor = { ...vendor(legacyOpen), id: 6, name: "Empty periods", periods: [] };
+    await render(<VendorManager
+      key="renew-empty-periods-vendor"
+      vendors={[emptyVendor]}
+      accounts={[]}
+      catalog={catalog()}
+      close={vi.fn()}
+      refresh={vi.fn(async () => {})}
+      initialVendorId={6}
+      initialAction="renew"
+    />);
+    await click(button("确认整组续费"));
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(host!.textContent).toContain("账号组状态已变化，请刷新重试");
+
+    const settled = period({ status: "settled", end: "2026-10-01T00:00:00Z", members: [cycle({ status: "settled", end: "2026-10-01T00:00:00Z" })] });
+    const close = vi.fn();
+    const refresh = vi.fn(async () => {});
+    await render(<VendorManager
+      key="archive-scoped-vendor"
+      vendors={[vendor(settled)]}
+      accounts={[]}
+      catalog={catalog()}
+      close={close}
+      refresh={refresh}
+      initialVendorId={5}
+    />);
+    await click(button("归档"));
+    await click(button("确认归档"));
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/settlement/api/v1/vendors/5/archive");
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("vendor bill panel", () => {

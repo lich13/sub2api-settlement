@@ -57,7 +57,7 @@ function BillAllocation({
   );
 }
 
-export function BillImportPanel({
+function BillImportPanel({
   cycle,
   calculation,
   end,

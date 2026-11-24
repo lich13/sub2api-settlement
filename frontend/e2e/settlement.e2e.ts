@@ -120,3 +120,32 @@ test("failed account deletion can be retried successfully from the management vi
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText("暂无待处理删除", { exact: true })).toBeVisible({ timeout: 45_000 });
 });
+
+test("admin creates and reconfigures an account group without retired first-period prompts", async ({ page, demo }) => {
+  await loginAsAdmin(page, demo);
+
+  await page.getByRole("button", { name: "新建账号组", exact: true }).click();
+  let dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "新建账号组" })).toBeVisible();
+  await dialog.getByLabel("账号组名称").fill("E2E 供应商组");
+  await dialog.getByLabel("本期准确总成本（元）").fill("18.00");
+  await dialog.getByRole("button", { name: "全选", exact: true }).click();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const group = page.locator(".vendor-group").filter({ hasText: "E2E 供应商组" });
+  await expect(group).toContainText("进行中");
+  await expect(group).toContainText("¥18.00");
+  await expect(group).not.toContainText("待配置首期");
+  await group.locator("summary").click();
+  await group.getByRole("button", { name: "管理账号组", exact: true }).click();
+
+  dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "账号组管理" })).toBeVisible();
+  await expect(dialog).not.toContainText("配置首期");
+  await dialog.getByRole("button", { name: "整组配置", exact: true }).click();
+  await dialog.getByLabel("本期准确总成本（元）").fill("24.00");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(group).toContainText("¥24.00");
+});
