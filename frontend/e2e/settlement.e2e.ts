@@ -25,6 +25,8 @@ test("admin can reach settlement controls at desktop and narrow widths in both t
     { width: 390, height: 844, theme: "dark" as const },
     { width: 375, height: 667, theme: "light" as const },
     { width: 375, height: 667, theme: "dark" as const },
+    { width: 360, height: 640, theme: "light" as const },
+    { width: 360, height: 640, theme: "dark" as const },
   ];
 
   for (const variant of variants) {
@@ -60,6 +62,36 @@ test("admin can reach settlement controls at desktop and narrow widths in both t
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(variant.width);
     await assertNoHorizontalOverflow(page);
   }
+
+  await page.route("**/settlement/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    await route.fulfill({
+      response,
+      json: {
+        ...json,
+        name: "组织运营结算中心超长管理员名称验证_admin_super_long_identifier@example.invalid",
+      },
+    });
+  });
+
+  for (const width of [768, 361]) {
+    await page.setViewportSize({ width, height: 900 });
+    await loginAsAdmin(page, demo, "light");
+    await expect(page.locator(".topbar .identity-name")).toBeVisible();
+    const brandBox = await page.locator(".topbar .brand").boundingBox();
+    const rightBox = await page.locator(".topbar .header-right").boundingBox();
+    expect(brandBox).not.toBeNull();
+    expect(rightBox).not.toBeNull();
+    expect(brandBox!.x + brandBox!.width).toBeLessThanOrEqual(rightBox!.x);
+    if (width >= 761) {
+      const badgeBox = await page.locator(".topbar .identity small").boundingBox();
+      expect(badgeBox).not.toBeNull();
+      expect(badgeBox!.height).toBeLessThanOrEqual(24);
+    }
+    await assertNoHorizontalOverflow(page);
+  }
+  await page.unroute("**/settlement/api/v1/me");
 });
 
 test("admin settles an account cycle and voids the resulting settlement", async ({ page, demo }) => {

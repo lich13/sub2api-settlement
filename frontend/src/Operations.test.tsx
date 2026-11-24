@@ -99,6 +99,44 @@ describe("OperationStatus", () => {
     expect(dom.host!.querySelector('[role="alert"]')).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
+
+  it("renders both consumption and account sync errors without dropping either or duplicating identical messages", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => {
+        calls += 1;
+        return response({
+          last_sync: null,
+          sync_error: "消费同步异常",
+          accounts: {
+            checked_at: null,
+            error: calls === 1 ? "账号同步受阻" : "消费同步异常",
+          },
+          pending_deletions: 0,
+          checkpoint: null,
+        });
+      }),
+    );
+
+    await mount(<OperationStatus />);
+    expect(
+      Array.from(dom.host!.querySelectorAll('[role="alert"]')).map((el) =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(["消费同步异常", "账号同步受阻"]);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      Array.from(dom.host!.querySelectorAll('[role="alert"]')).map((el) =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(["消费同步异常"]);
+  });
 });
 
 describe("AuditLog", () => {
@@ -147,6 +185,8 @@ describe("AuditLog", () => {
 
     await mount(<AuditLog />);
     await flush();
+    expect(dom.host!.querySelector(".audit-list")).toBeNull();
+    expect(dom.host!.textContent).toContain("暂无操作记录");
 
     await act(async () => {
       const select = dom.host!.querySelector<HTMLSelectElement>("select")!;

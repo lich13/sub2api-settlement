@@ -616,12 +616,18 @@ describe("App account visibility", () => {
     expect(participantChecks.every((c) => c.checked)).toBe(true);
   });
 
-  it("displays fallback version before login, updates from /me, skips redundant polling on manage subtabs, and cancels closed detail requests", async () => {
+  it("displays fallback version before login, updates from /me, skips redundant polling on manage subtabs, and cancels stale detail requests on navigation or close", async () => {
+    vi.useFakeTimers();
     const meDeferred = deferred<Response>();
-    const cycleDeferred = deferred<Response>();
+    const cycle1Deferred = deferred<Response>();
+    const cycle2Deferred = deferred<Response>();
+    const cycle3Deferred = deferred<Response>();
     let overviewCalls = 0;
     let catalogCalls = 0;
     let vendorCalls = 0;
+    let inboxCalls = 0;
+    let detailCalls = 0;
+    let includeExtraAccount = false;
 
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const path = String(input);
@@ -631,8 +637,9 @@ describe("App account visibility", () => {
           ...stateSnapshot([
             { id: 1, name: "Removed account" },
             { id: 2, name: "Active account" },
+            ...(includeExtraAccount ? [{ id: 77, name: "Discovered later" }] : []),
           ]),
-          error: "账号同步受阻",
+          error: includeExtraAccount ? null : "账号同步受阻",
         });
       }
       if (path.endsWith("/overview")) {
@@ -659,7 +666,10 @@ describe("App account visibility", () => {
           checkpoint: null,
         });
       }
-      if (path.endsWith("/inbox")) return response({ items: [], unread: 0 });
+      if (path.endsWith("/inbox")) {
+        inboxCalls += 1;
+        return response({ items: [], unread: 0 });
+      }
       if (path.endsWith("/expenses")) return response({ expenses: [] });
       if (path.endsWith("/history")) {
         return response({ cycles: [removedCycle, activeCycle] });
@@ -673,7 +683,12 @@ describe("App account visibility", () => {
       if (path.includes("/orders")) return response({ orders: [] });
       if (path.includes("/netting/balances")) return response({ balances: [] });
       if (path.includes("/netting/payments")) return response({ payments: [] });
-      if (/\/cycles\/\d+$/.test(path)) return cycleDeferred.promise;
+      if (/\/cycles\/\d+$/.test(path)) {
+        detailCalls += 1;
+        if (detailCalls === 1) return cycle1Deferred.promise;
+        if (detailCalls === 2) return cycle2Deferred.promise;
+        return cycle3Deferred.promise;
+      }
       return response({});
     });
     vi.stubGlobal("fetch", fetcher);
@@ -696,7 +711,7 @@ describe("App account visibility", () => {
     expect(vendorCalls).toBe(1);
     expect(dom.host!.querySelectorAll('[role="alert"]').length).toBe(2);
 
-    // Start an async cycle detail request, then switch to manage -> deletions
+    // Start an async cycle detail request, then navigate away before it resolves
     const detailBtn = rowFor("Removed account").querySelector<HTMLButtonElement>(
       'button[aria-label="Removed account 周期明细"]',
     )!;
@@ -710,25 +725,9 @@ describe("App account visibility", () => {
     expect(catalogCalls).toBe(1);
     expect(vendorCalls).toBe(1);
 
-    // Switch to manage tab -> deletions: top-level sync alerts are deduplicated in favor of OperationStatus,
-    // and cached overview/catalog/vendors are preserved without redundant fetches
-    await click(topButton("管理"));
-    await flush();
-    expect(
-      Array.from(dom.host!.querySelectorAll('[role="alert"]')).map((el) =>
-        el.textContent?.trim(),
-      ),
-    ).toEqual(["消费同步异常"]);
-    const beforeDeletions = { overviewCalls, catalogCalls, vendorCalls };
-    await click(topButton("账号删除"));
-    await flush();
-    expect({ overviewCalls, catalogCalls, vendorCalls }).toEqual(
-      beforeDeletions,
-    );
-
-    // Resolve the earlier cycle detail, then close it and ensure closing invalidates subsequent stale resolves
+    // Stale detail from previous tab must not pop open after tab navigation
     await act(async () => {
-      cycleDeferred.resolve(
+      cycle1Deferred.resolve(
         response({
           cycle: removedCycle,
           end: "2026-10-01T00:00:00Z",
@@ -739,9 +738,69 @@ describe("App account visibility", () => {
       );
     });
     await flush();
+    expect(dom.host!.querySelector("dialog[open]")).toBeNull();
+
+    // Switch to manage tab: top-level sync alerts are deduplicated while OperationStatus preserves both distinct errors
+    await click(topButton("管理"));
+    await flush();
+    expect(
+      Array.from(dom.host!.querySelectorAll('[role="alert"]')).map((el) =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(["消费同步异常", "账号同步受阻"]);
+
+    // On manage -> cycles, start two overlapping detail requests, open the newer one, close it, then resolve the older one
+    const historyButtons = Array.from(
+      dom.host!.querySelectorAll<HTMLButtonElement>(".history-table button"),
+    ).filter((btn) => btn.textContent?.trim() === "明细");
+    await click(historyButtons[0]!);
+    await click(historyButtons[1]!);
+    await act(async () => {
+      cycle3Deferred.resolve(
+        response({
+          cycle: activeCycle,
+          end: "2026-10-01T00:00:00Z",
+          total_consumption: "2.00",
+          allocations: [],
+          record_count: 1,
+        }),
+      );
+    });
+    await flush();
     const openedDialog = dom.host!.querySelector<HTMLDialogElement>("dialog[open]")!;
     expect(openedDialog.textContent).toContain("周期明细");
     await click(openedDialog.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')!);
     expect(dom.host!.querySelector("dialog[open]")).toBeNull();
+
+    await act(async () => {
+      cycle2Deferred.resolve(
+        response({
+          cycle: removedCycle,
+          end: "2026-10-01T00:00:00Z",
+          total_consumption: "1.00",
+          allocations: [],
+          record_count: 1,
+        }),
+      );
+    });
+    await flush();
+    expect(dom.host!.querySelector("dialog[open]")).toBeNull();
+
+    // Switch to manage -> deletions: cached overview/catalog/vendors are preserved without redundant fetches,
+    // and account-state roster additions do not trigger pointless refreshes while overview is inactive
+    const beforeDeletions = { overviewCalls, catalogCalls, vendorCalls };
+    await click(topButton("账号删除"));
+    await flush();
+    expect({ overviewCalls, catalogCalls, vendorCalls }).toEqual(
+      beforeDeletions,
+    );
+    const inboxBeforeDiscovery = inboxCalls;
+    includeExtraAccount = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await flush();
+    expect(overviewCalls).toBe(beforeDeletions.overviewCalls);
+    expect(inboxCalls).toBe(inboxBeforeDiscovery);
   });
 });

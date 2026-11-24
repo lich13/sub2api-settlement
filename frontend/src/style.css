@@ -153,18 +153,29 @@ small {
 }
 .header-right {
   gap: 20px;
+  min-width: 0;
 }
 .identity {
   display: flex;
   align-items: center;
   gap: 9px;
   font-size: 13px;
+  min-width: 0;
+}
+.identity-name {
+  min-width: 0;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .identity small {
   font-size: 11px;
   border: 1px solid var(--line);
   padding: 2px 5px;
   border-radius: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .icon-button {
   background: none;
@@ -1196,15 +1207,12 @@ td small {
   }
   .header-right {
     gap: 10px;
-    min-width: 0;
   }
   .identity {
-    display: block;
     font-size: 11px;
+  }
+  .identity-name {
     max-width: 96px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   .identity small {
     display: none;

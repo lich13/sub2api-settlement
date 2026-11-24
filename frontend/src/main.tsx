@@ -381,22 +381,31 @@ export function App() {
   }, [me, tab, manageTab]);
   const discoveredAccounts = useRef("");
   useEffect(() => {
-    if (!accountState?.accounts || !overviewSource || accountState.error)
+    const canRefreshOverview =
+      !overviewSource || tab !== "manage" || manageTab === "cycles";
+    if (
+      !canRefreshOverview ||
+      !accountState?.accounts ||
+      !overviewSource ||
+      accountState.error
+    )
       return;
     const known = new Set(overviewSource.accounts.map((a) => a.id));
     const added = accountState.active_ids
       .filter((id) => !known.has(id))
       .sort((a, b) => a - b)
       .join(",");
-    if (added && added !== discoveredAccounts.current) void refresh();
+    if (added && added !== discoveredAccounts.current)
+      void latestRefresh.current();
     discoveredAccounts.current = added;
-  }, [accountState, overviewSource]);
+  }, [accountState, overviewSource, tab, manageTab]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 3500);
     return () => clearTimeout(timer);
   }, [toast]);
   function move(next: string) {
+    closeDetail();
     setTab(next);
     setSelected([]);
     setQuery("");
@@ -612,7 +621,7 @@ export function App() {
         <div className="header-right">
           {me && (
             <span className="identity">
-              {me.name}
+              <span className="identity-name">{me.name}</span>
               <small>{isAdmin ? "管理员" : "成员"}</small>
             </span>
           )}
@@ -697,6 +706,7 @@ export function App() {
                 <button
                   className={costView === "accounts" ? "active" : ""}
                   onClick={() => {
+                    closeDetail();
                     setCostView("accounts");
                     setQuery("");
                     setSelected([]);
@@ -709,6 +719,7 @@ export function App() {
                 <button
                   className={costView === "expenses" ? "active" : ""}
                   onClick={() => {
+                    closeDetail();
                     setCostView("expenses");
                     setQuery("");
                     setSelected([]);
@@ -733,6 +744,7 @@ export function App() {
                     key={key}
                     className={manageTab === key ? "active" : ""}
                     onClick={() => {
+                      closeDetail();
                       setManageTab(key);
                       setSelected([]);
                       setFilter("all");

@@ -728,6 +728,8 @@ async fn identity_errors_and_session_boundaries_enforce_live_verification_csrf_a
         .await
         .unwrap();
     let admin_csrf = me1["csrf"].as_str().unwrap().to_owned();
+    assert_eq!(me1["version"], settlement::VERSION);
+    assert!(me1.get("revision").is_none());
     let sso_reopen = client
         .get(format!(
             "{origin}/settlement/sso/start?token=token-admin&user_id=1"
