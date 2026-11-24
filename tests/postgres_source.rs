@@ -97,31 +97,33 @@ async fn create_fixture(
     let database = ident(database);
     let password = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
 
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(admin)
         .await
         .map_err(|error| sql_failure("create isolated fixture schema", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE ROLE {role} LOGIN PASSWORD {}",
         literal(&password)
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("create column-limited source role", &error))?;
-    sqlx::query(&format!("GRANT CONNECT ON DATABASE {database} TO {role}"))
-        .execute(admin)
-        .await
-        .map_err(|error| sql_failure("grant test database connection", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "GRANT CONNECT ON DATABASE {database} TO {role}"
+    )))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("grant test database connection", &error))?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER ROLE {role} SET search_path TO {schema}, pg_catalog"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("set source role search path", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER ROLE {role} SET application_name TO {}",
         literal(&names.application)
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("tag source role sessions", &error))?;
@@ -188,7 +190,7 @@ async fn create_fixture(
         ALTER TABLE {schema}.usage_logs ENABLE ROW LEVEL SECURITY;
         "#
     );
-    sqlx::raw_sql(&ddl)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(ddl))
         .execute(admin)
         .await
         .map_err(|error| sql_failure("create synthetic source schema", &error))?;
@@ -270,7 +272,7 @@ async fn create_fixture(
         "#,
         user_barrier = names.user_barrier,
     );
-    sqlx::raw_sql(&seed)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(seed))
         .execute(admin)
         .await
         .map_err(|error| sql_failure("seed synthetic read-only source fixture", &error))?;
@@ -583,16 +585,16 @@ async fn verify_reconciliation_source(
 ) -> TestResult<()> {
     let schema = ident(&names.schema);
     let precise_amount = "12345678901234567890.1234567890123456789";
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET total_cost = $1::numeric WHERE id = 30000"
-    ))
+    )))
     .bind(precise_amount)
     .execute(admin)
     .await
     .map_err(|error| sql_failure("set precise reconciliation fixture amount", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET created_at = $1::timestamptz WHERE id = 40000"
-    ))
+    )))
     .bind("2026-01-15T12:34:56.123457+00:00")
     .execute(admin)
     .await
@@ -608,9 +610,9 @@ async fn verify_reconciliation_source(
         "daily PostgreSQL fingerprint did not preserve count and full numeric precision",
     )?;
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET user_id = 2 WHERE id = 30000"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("change reconciliation fixture user", &error))?;
@@ -626,9 +628,9 @@ async fn verify_reconciliation_source(
         "daily fingerprint did not detect a user change with unchanged count and amount",
     )?;
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET input_tokens = 77 WHERE id = 30000"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("change reconciliation fixture token count", &error))?;
@@ -722,15 +724,15 @@ async fn verify_reconciliation_source(
     )?;
     drop(restricted);
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET total_cost = 7.0000, user_id = 1, input_tokens = NULL WHERE id = 30000"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("restore reconciliation usage fixture", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET created_at = '2026-03-15T12:00:00+00:00'::timestamptz WHERE id = 40000"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("restore reconciliation timestamp fixture", &error))?;
@@ -776,9 +778,9 @@ async fn verify_schema_startup_validation(
     let schema = ident(&names.schema);
     let role = ident(&names.role);
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER TABLE {schema}.usage_logs DROP COLUMN requested_model"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("remove required source fixture column", &error))?;
@@ -787,22 +789,22 @@ async fn verify_schema_startup_validation(
         "源数据库字段缺失或类型不兼容：usage_logs.requested_model",
     )
     .await?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER TABLE {schema}.usage_logs ADD COLUMN requested_model TEXT"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("restore required source fixture column", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "GRANT SELECT (requested_model) ON {schema}.usage_logs TO {role}"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("restore source fixture column grant", &error))?;
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER TABLE {schema}.usage_logs ALTER COLUMN requested_model TYPE BIGINT USING NULL::BIGINT"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("change required source fixture column type", &error))?;
@@ -811,16 +813,16 @@ async fn verify_schema_startup_validation(
         "源数据库字段缺失或类型不兼容：usage_logs.requested_model",
     )
     .await?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "ALTER TABLE {schema}.usage_logs ALTER COLUMN requested_model TYPE TEXT USING NULL::TEXT"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("restore required source fixture column type", &error))?;
 
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "REVOKE SELECT (requested_model) ON {schema}.usage_logs FROM {role}"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("remove source fixture column grant", &error))?;
@@ -829,9 +831,9 @@ async fn verify_schema_startup_validation(
         "源数据库缺少字段读取权限：usage_logs.requested_model",
     )
     .await?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "GRANT SELECT (requested_model) ON {schema}.usage_logs TO {role}"
-    ))
+    )))
     .execute(admin)
     .await
     .map_err(|error| sql_failure("restore source fixture column grant", &error))?;
@@ -892,9 +894,9 @@ async fn verify_column_and_write_permissions(
             "permission probe remained read-only and would mask role grants",
         )?;
 
-        let update = sqlx::query(&format!(
+        let update = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE {schema}.accounts SET status = 'unexpected-fixture-write' WHERE id = 101"
-        ))
+        )))
         .execute(&probe)
         .await;
         let update_code = update.err().and_then(|error| error_code(&error));
@@ -903,9 +905,9 @@ async fn verify_column_and_write_permissions(
             "restricted role UPDATE was not rejected by PostgreSQL privilege checks",
         )?;
 
-        let private_read = sqlx::query(&format!(
+        let private_read = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT api_key FROM {schema}.accounts WHERE id = 101"
-        ))
+        )))
         .fetch_one(&probe)
         .await;
         let private_code = private_read.err().and_then(|error| error_code(&error));
@@ -924,19 +926,21 @@ async fn verify_fixture_unchanged_by_source(
     names: &FixtureNames,
 ) -> TestResult<()> {
     let schema = ident(&names.schema);
-    let usage_count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {schema}.usage_logs"))
-        .fetch_one(admin)
-        .await
-        .map_err(|error| sql_failure("verify usage fixture row count", &error))?;
-    let account_status: String = sqlx::query_scalar(&format!(
+    let usage_count: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) FROM {schema}.usage_logs"
+    )))
+    .fetch_one(admin)
+    .await
+    .map_err(|error| sql_failure("verify usage fixture row count", &error))?;
+    let account_status: String = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "SELECT status FROM {schema}.accounts WHERE id = 101"
-    ))
+    )))
     .fetch_one(admin)
     .await
     .map_err(|error| sql_failure("verify account fixture state", &error))?;
-    let moved: sqlx::postgres::PgRow = sqlx::query(&format!(
+    let moved: sqlx::postgres::PgRow = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT account_id, created_at::text AS created_at, total_cost::text AS amount FROM {schema}.usage_logs WHERE id = 10001"
-    ))
+    )))
     .fetch_one(admin)
     .await
     .map_err(|error| sql_failure("verify moved usage fixture state", &error))?;
@@ -961,21 +965,21 @@ async fn update_fixture_during_snapshot(admin: &PgPool, names: &FixtureNames) ->
         .begin()
         .await
         .map_err(|error| sql_failure("begin fixture-only concurrent update", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.accounts SET status = 'disabled' WHERE id = 101"
-    ))
+    )))
     .execute(&mut *writer)
     .await
     .map_err(|error| sql_failure("update synthetic account state", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.users SET status = 'suspended' WHERE id = 1"
-    ))
+    )))
     .execute(&mut *writer)
     .await
     .map_err(|error| sql_failure("update synthetic user state", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "UPDATE {schema}.usage_logs SET account_id = 103, created_at = $1::timestamptz, total_cost = $2::numeric, model = $3 WHERE id = 10001"
-    ))
+    )))
     .bind("2026-03-01T00:00:00+00:00")
     .bind("9.8765")
     .bind("moved-fixture-model")
@@ -1017,9 +1021,9 @@ async fn hold_usage_table_lock(
         .begin()
         .await
         .map_err(|error| sql_failure("begin usage relation barrier", &error))?;
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "LOCK TABLE {schema}.usage_logs IN ACCESS EXCLUSIVE MODE"
-    ))
+    )))
     .execute(&mut *transaction)
     .await
     .map_err(|error| sql_failure("acquire usage relation barrier", &error))?;
@@ -1067,18 +1071,20 @@ async fn drop_fixture(admin: &PgPool, database: &str, names: &FixtureNames) -> T
             .fetch_one(admin)
             .await
             .map_err(|error| sql_failure("check temporary source role before cleanup", &error))?;
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(admin)
-        .await
-        .map_err(|error| sql_failure("drop isolated fixture schema", &error))?;
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "DROP SCHEMA IF EXISTS {schema} CASCADE"
+    )))
+    .execute(admin)
+    .await
+    .map_err(|error| sql_failure("drop isolated fixture schema", &error))?;
     if role_exists {
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "REVOKE CONNECT ON DATABASE {database} FROM {role}"
-        ))
+        )))
         .execute(admin)
         .await
         .map_err(|error| sql_failure("revoke temporary database connection", &error))?;
-        sqlx::query(&format!("DROP ROLE {role}"))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP ROLE {role}")))
             .execute(admin)
             .await
             .map_err(|error| sql_failure("drop temporary restricted role", &error))?;

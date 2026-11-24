@@ -397,7 +397,7 @@ impl Service {
                 let start = time::instant(text(f, "start_time"))?;
                 let end = time::format(
                     time::parse(text(f, "end_time"))?
-                        .checked_add_signed(chrono::Duration::microseconds(1))
+                        .checked_add(time::Duration::microseconds(1))
                         .ok_or_else(Error::unavailable)?,
                 );
                 if end <= start {

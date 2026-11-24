@@ -71,7 +71,7 @@ async fn create_simple_source(path: &Path) {
 async fn import_legacy_fixture(path: &Path) {
     let sql = fs::read_to_string(LEGACY_SQL).expect("read existing legacy SQL fixture");
     let mut db = connect(path).await;
-    sqlx::raw_sql(&sql)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
         .execute(&mut db)
         .await
         .expect("import existing legacy SQL fixture");
@@ -145,10 +145,12 @@ async fn database_snapshot(path: &Path) -> DatabaseSnapshot {
     let mut tables = Vec::with_capacity(table_names.len());
     for table in table_names {
         let quoted_table = table.replace('"', "\"\"");
-        let rows = sqlx::query(&format!("SELECT * FROM \"{quoted_table}\" ORDER BY rowid"))
-            .fetch_all(&mut db)
-            .await
-            .unwrap();
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "SELECT * FROM \"{quoted_table}\" ORDER BY rowid"
+        )))
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
         let values = rows
             .iter()
             .map(|row| settlement::store::row(row).expect("serialize ledger row"))

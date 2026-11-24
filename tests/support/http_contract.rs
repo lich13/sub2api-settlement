@@ -23,9 +23,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get},
 };
-use chrono::{DateTime, NaiveDateTime, SecondsFormat};
 use fernet::Fernet;
 use serde_json::{Map, Value, json};
+use settlement::time as app_time;
 use sha2::{Digest, Sha256};
 use sqlx::{
     Column, Connection, Row, TypeInfo, ValueRef,
@@ -589,10 +589,12 @@ impl Harness {
                 });
         if recreates_legacy_schema {
             for table in ["manual_bill_bases", "manual_bill_drafts"] {
-                let rows: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                    .fetch_one(&mut connection)
-                    .await
-                    .map_err(display_error)?;
+                let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                    "SELECT COUNT(*) FROM {table}"
+                )))
+                .fetch_one(&mut connection)
+                .await
+                .map_err(display_error)?;
                 if rows != 0 {
                     return Err(format!(
                         "{} / {label}: cannot rebuild legacy schema with {} {table} row(s)",
@@ -609,7 +611,7 @@ impl Harness {
                 .await
                 .map_err(display_error)?;
             for table in ["manual_bill_drafts", "manual_bill_bases"] {
-                sqlx::query(&format!("DROP TABLE {table}"))
+                sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {table}")))
                     .execute(&mut connection)
                     .await
                     .map_err(display_error)?;
@@ -629,7 +631,7 @@ impl Harness {
                 .iter()
                 .map(|param| self.aliases.expand_value(param))
                 .collect::<TestResult<Vec<_>>>()?;
-            let mut query = sqlx::query(sql);
+            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
             for param in &params {
                 query = match param {
                     Value::Null => query.bind(Option::<String>::None),
@@ -2203,10 +2205,12 @@ impl Harness {
             ("profiles", ["vendor_id"].as_slice()),
             ("cycles", ["vendor_id", "vendor_period_id"].as_slice()),
         ] {
-            let info = sqlx::query(&format!("PRAGMA table_info(\"{table}\")"))
-                .fetch_all(&mut connection)
-                .await
-                .map_err(display_error)?;
+            let info = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "PRAGMA table_info(\"{table}\")"
+            )))
+            .fetch_all(&mut connection)
+            .await
+            .map_err(display_error)?;
             for field in fields {
                 let Some(column) = info.iter().find(|row| {
                     row.try_get::<String, _>("name")
@@ -2219,9 +2223,9 @@ impl Harness {
                     ));
                 };
                 let _ = column;
-                let non_null: i64 = sqlx::query_scalar(&format!(
+                let non_null: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                     "SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" IS NOT NULL"
-                ))
+                )))
                 .fetch_one(&mut connection)
                 .await
                 .map_err(display_error)?;
@@ -2319,19 +2323,20 @@ impl Harness {
         }
 
         for table in ["manual_bill_bases", "manual_bill_drafts"] {
-            let table_exists: Option<i64> = sqlx::query_scalar(&format!(
+            let table_exists: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
-            ))
+            )))
             .fetch_optional(&mut connection)
             .await
             .map_err(display_error)?;
             if table_exists.is_none() {
                 return Err(format!("{}: schema9 table {table} is missing", self.name));
             }
-            let rows: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
-                .fetch_one(&mut connection)
-                .await
-                .map_err(display_error)?;
+            let rows: i64 =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(&mut connection)
+                    .await
+                    .map_err(display_error)?;
             if rows != 0 {
                 return Err(format!(
                     "{}: frozen compatibility cannot hide {} {table} row(s)",
@@ -2989,7 +2994,7 @@ async fn seed_database(path: &Path, fixture: &Path) -> TestResult<()> {
     let mut connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(display_error)?;
-    sqlx::raw_sql(&sql)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
         .execute(&mut connection)
         .await
         .map_err(|error| {
@@ -3453,22 +3458,8 @@ fn wire_datetime(value: Value) -> Value {
     let Value::String(value) = value else {
         return value;
     };
-    let normalized = value.replace(' ', "T");
-    if let Ok(value) = DateTime::parse_from_rfc3339(&normalized) {
-        let precision = if value.timestamp_subsec_micros() == 0 {
-            SecondsFormat::Secs
-        } else {
-            SecondsFormat::Micros
-        };
-        return Value::String(value.to_rfc3339_opts(precision, true));
-    }
-    if let Ok(value) = NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%dT%H:%M:%S%.f") {
-        let format = if value.and_utc().timestamp_subsec_micros() == 0 {
-            "%Y-%m-%dT%H:%M:%S"
-        } else {
-            "%Y-%m-%dT%H:%M:%S%.6f"
-        };
-        return Value::String(value.format(format).to_string());
+    if let Some(normalized) = app_time::normalize_datetime(&value, true) {
+        return Value::String(normalized);
     }
     if let Some(value) = value.strip_suffix("+00:00") {
         Value::String(format!("{value}Z"))
@@ -3485,15 +3476,14 @@ fn clock_alias_definition<'a>(clock: &'a Value, alias: &str) -> Option<&'a Value
 }
 
 fn timestamp_epoch(value: &str) -> Option<f64> {
-    let timestamp = DateTime::parse_from_rfc3339(value).ok()?;
-    Some(timestamp.timestamp() as f64 + timestamp.timestamp_subsec_nanos() as f64 / 1_000_000_000.0)
+    let timestamp = app_time::parse(value).ok()?;
+    Some(timestamp.unix_timestamp_nanos() as f64 / 1_000_000_000.0)
 }
 
 fn shift_datetime(value: &str, offset_microseconds: i64) -> Option<String> {
-    let timestamp = DateTime::parse_from_rfc3339(value).ok()?;
-    let shifted =
-        timestamp.checked_add_signed(chrono::Duration::microseconds(offset_microseconds))?;
-    Some(shifted.to_rfc3339_opts(SecondsFormat::Micros, false))
+    let timestamp = app_time::parse(value).ok()?;
+    let shifted = timestamp.checked_add(app_time::Duration::microseconds(offset_microseconds))?;
+    Some(app_time::format(shifted))
 }
 
 fn runtime_clock_value_matches(
@@ -3671,10 +3661,12 @@ async fn database_snapshot(
     let mut database = Map::new();
     let mut schema = Map::new();
     for table in TABLES {
-        let info = sqlx::query(&format!("PRAGMA table_info(\"{table}\")"))
-            .fetch_all(&mut connection)
-            .await
-            .map_err(display_error)?;
+        let info = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "PRAGMA table_info(\"{table}\")"
+        )))
+        .fetch_all(&mut connection)
+        .await
+        .map_err(display_error)?;
         if info.is_empty() {
             return Err(format!("{workflow}: required table {table} is missing"));
         }
@@ -3693,7 +3685,7 @@ async fn database_snapshot(
             .collect::<TestResult<Vec<_>>>()?;
         schema.insert((*table).to_owned(), Value::Array(schema_rows));
 
-        let rows = sqlx::query(&format!("SELECT * FROM \"{table}\""))
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT * FROM \"{table}\"")))
             .fetch_all(&mut connection)
             .await
             .map_err(display_error)?;

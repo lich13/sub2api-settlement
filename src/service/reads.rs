@@ -66,7 +66,7 @@ impl Service {
         let last = store::meta(&mut db, "last_sync").await?;
         if (last.is_null()
             || time::parse(&time::now())? - time::parse(last.as_str().unwrap_or(""))?
-                > chrono::Duration::minutes(3))
+                > time::Duration::minutes(3))
             && sync_error.is_null()
         {
             sync_error = json!("消费记录同步已中断，请稍后重试");

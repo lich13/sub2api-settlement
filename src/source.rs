@@ -180,8 +180,8 @@ impl Source {
             .execute(&mut *tx)
             .await?;
         let accounts=sqlx::query("SELECT id,name,platform,status,parent_account_id,created_at,deleted_at FROM accounts ORDER BY id").fetch_all(&mut *tx).await?.iter().map(account).collect::<Result<Vec<_>>>()?;
-        let users=sqlx::query("SELECT id,username AS name,role,status,deleted_at FROM users ORDER BY id").fetch_all(&mut *tx).await?.iter().map(|r|->Result<Value>{let id:i64=r.try_get("id")?;let name:Option<String>=r.try_get("name")?;Ok(json!({"id":id,"name":name.filter(|s|!s.is_empty()).unwrap_or_else(||format!("用户 #{id}")),"role":r.try_get::<String,_>("role")?,"status":r.try_get::<String,_>("status")?,"deleted":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("deleted_at")?.is_some()}))}).collect::<Result<Vec<_>>>()?;
-        let cleanups=sqlx::query("SELECT id,filters,deleted_rows,finished_at FROM usage_cleanup_tasks WHERE deleted_rows>0 ORDER BY id").fetch_all(&mut *tx).await?.iter().map(|r|->Result<Value>{Ok(json!({"id":r.try_get::<i64,_>("id")?,"filters":r.try_get::<Value,_>("filters")?,"deleted_rows":r.try_get::<i64,_>("deleted_rows")?,"finished_at":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("finished_at")?.map(time::format)}))}).collect::<Result<Vec<_>>>()?;
+        let users=sqlx::query("SELECT id,username AS name,role,status,deleted_at FROM users ORDER BY id").fetch_all(&mut *tx).await?.iter().map(|r|->Result<Value>{let id:i64=r.try_get("id")?;let name:Option<String>=r.try_get("name")?;Ok(json!({"id":id,"name":name.filter(|s|!s.is_empty()).unwrap_or_else(||format!("用户 #{id}")),"role":r.try_get::<String,_>("role")?,"status":r.try_get::<String,_>("status")?,"deleted":r.try_get::<Option<time::OffsetDateTime>,_>("deleted_at")?.is_some()}))}).collect::<Result<Vec<_>>>()?;
+        let cleanups=sqlx::query("SELECT id,filters,deleted_rows,finished_at FROM usage_cleanup_tasks WHERE deleted_rows>0 ORDER BY id").fetch_all(&mut *tx).await?.iter().map(|r|->Result<Value>{Ok(json!({"id":r.try_get::<i64,_>("id")?,"filters":r.try_get::<Value,_>("filters")?,"deleted_rows":r.try_get::<i64,_>("deleted_rows")?,"finished_at":r.try_get::<Option<time::OffsetDateTime>,_>("finished_at")?.map(time::format)}))}).collect::<Result<Vec<_>>>()?;
         declare_cursor(&mut tx, &filter).await?;
         Ok(Snapshot {
             header: Header {
@@ -235,7 +235,7 @@ async fn declare_cursor(tx: &mut sqlx::PgConnection, filter: &Filter) -> Result<
 }
 fn account(r: &sqlx::postgres::PgRow) -> Result<Value> {
     Ok(
-        json!({"id":r.try_get::<i64,_>("id")?,"name":r.try_get::<String,_>("name")?,"platform":r.try_get::<String,_>("platform")?,"status":r.try_get::<String,_>("status")?,"parent_account_id":r.try_get::<Option<i64>,_>("parent_account_id")?,"created_at":time::format(r.try_get("created_at")?),"deleted":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("deleted_at")?.is_some()}),
+        json!({"id":r.try_get::<i64,_>("id")?,"name":r.try_get::<String,_>("name")?,"platform":r.try_get::<String,_>("platform")?,"status":r.try_get::<String,_>("status")?,"parent_account_id":r.try_get::<Option<i64>,_>("parent_account_id")?,"created_at":time::format(r.try_get("created_at")?),"deleted":r.try_get::<Option<time::OffsetDateTime>,_>("deleted_at")?.is_some()}),
     )
 }
 pub struct Snapshot {

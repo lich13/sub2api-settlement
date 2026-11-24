@@ -295,7 +295,7 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
         if TOKEN_FIELDS.iter().any(|k| detail.number(k).is_none()) {
             continue;
         }
-        let stamp = time::parse(local.created_at())?.timestamp_micros();
+        let stamp = time::timestamp_micros(time::parse(local.created_at())?);
         for model in [
             "model",
             "requested_model",
@@ -337,7 +337,7 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
         if identified.contains_key(&r.number("row").unwrap_or(0)) {
             continue;
         }
-        let stamp = time::parse(r.field("created_at"))?.timestamp_micros();
+        let stamp = time::timestamp_micros(time::parse(r.field("created_at"))?);
         let mut found = Vec::new();
         if let Some(group) = by_tokens.get(&signature(*r, r.field("model"))) {
             let lo = group.partition_point(|(t, _)| *t < stamp - 5_000_000);

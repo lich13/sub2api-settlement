@@ -25,14 +25,6 @@ jobs:
         run: |
           cargo install --locked cargo-audit
           cargo install --locked cargo-deny
-      - name: Fail when the temporary RUSTSEC-2026-0459 waiver has expired
-        shell: bash
-        run: |
-          # Waiver in deny.toml and the cargo audit flag below; review by 2027-01-11.
-          if [[ "$(date -u +%F)" > "2027-01-11" ]]; then
-            echo "RUSTSEC-2026-0459 waiver expired on 2027-01-11: upgrade sqlx/libsqlite3-sys or renew the waiver explicitly." >&2
-            exit 1
-          fi
       - name: Check advisories and compiled feature graph
         shell: bash
         run: |
@@ -40,7 +32,7 @@ jobs:
           if grep -E '^(rsa|sqlx-mysql) v' /tmp/settlement-dependencies.txt; then
             exit 1
           fi
-          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459
+          cargo audit
           cargo deny --locked check
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:

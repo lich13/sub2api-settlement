@@ -1,6 +1,5 @@
-use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
-use settlement::{config::Config, http::App};
+use settlement::{config::Config, http::App, time};
 use sqlx::Row;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -117,7 +116,7 @@ async fn usage_row(app: &App, id: i64) -> Option<(i64, i64, String)> {
 
 async fn ids(app: &App, sql: &str) -> Vec<i64> {
     let mut db = app.service.store.read().await.unwrap();
-    let values = sqlx::query_scalar::<_, i64>(sql)
+    let values = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
         .fetch_all(&mut *db)
         .await
         .unwrap();
@@ -150,12 +149,11 @@ async fn fingerprints(app: &App) -> Vec<(i64, String, i64, String, String)> {
 }
 
 fn minutes_before(value: &str, minutes: i64) -> String {
-    DateTime::parse_from_rfc3339(value)
+    let shifted = time::parse(value)
         .unwrap()
-        .with_timezone(&Utc)
-        .checked_sub_signed(chrono::Duration::minutes(minutes))
-        .unwrap()
-        .to_rfc3339_opts(SecondsFormat::Micros, true)
+        .checked_sub(time::Duration::minutes(minutes))
+        .unwrap();
+    time::normalize_datetime(&time::format(shifted), false).unwrap()
 }
 
 #[tokio::test]

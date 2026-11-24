@@ -19,8 +19,7 @@ impl Checkpoint {
         let last = text(&previous, "last_reconciled");
         let due = time::parse(last)
             .map(|at| {
-                time::parse(&time::now())
-                    .is_ok_and(|now| now.signed_duration_since(at).num_seconds() >= 86400)
+                time::parse(&time::now()).is_ok_and(|now| (now - at).whole_seconds() >= 86400)
             })
             .unwrap_or(true);
         Ok(Self {
@@ -56,7 +55,7 @@ impl Checkpoint {
     }
     pub fn since(&self) -> Result<String> {
         Ok(time::format(
-            time::parse(&self.last_incremental)? - chrono::Duration::minutes(10),
+            time::parse(&self.last_incremental)? - time::Duration::minutes(10),
         ))
     }
     pub async fn roots_changed(&self, store: &Store, roots: &BTreeMap<i64, i64>) -> Result<bool> {
@@ -105,7 +104,7 @@ impl Checkpoint {
                 continue;
             }
             let start = time::instant(&format!("{day}T00:00:00Z"))?;
-            let end = time::format(time::parse(&start)? + chrono::Duration::days(1));
+            let end = time::format(time::parse(&start)? + time::Duration::days(1));
             let known_ids = sqlx::query_scalar::<_,i64>("SELECT id FROM usage WHERE account_id=? AND created_at>=? AND created_at<? ORDER BY id")
                 .bind(account).bind(&start).bind(&end).fetch_all(&mut *db).await?;
             scopes.push(Scope {

@@ -86,7 +86,7 @@ pub async fn endpoint(State(app): State<App>, request: Request) -> Result<Respon
     let last = status["last_sync"]
         .as_str()
         .and_then(|s| time::parse(s).ok())
-        .map(|t| t.timestamp())
+        .map(|t| t.unix_timestamp())
         .unwrap_or(0);
     let lag = if last > 0 {
         (time::epoch() as i64 - last).max(0)

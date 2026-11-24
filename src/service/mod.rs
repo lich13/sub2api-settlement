@@ -202,7 +202,7 @@ impl Service {
         if !error.is_null()
             || last.is_null()
             || time::parse(&time::now())? - time::parse(last.as_str().unwrap_or(""))?
-                > chrono::Duration::minutes(3)
+                > time::Duration::minutes(3)
         {
             return Err(Error::new(503, "消费记录尚未同步，暂不能结算"));
         }

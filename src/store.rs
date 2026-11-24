@@ -103,8 +103,8 @@ pub fn row(r: &SqliteRow) -> Result<Value> {
 fn query<'a>(
     sql: &'a str,
     args: &'a [Value],
-) -> Result<sqlx::query::Query<'a, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'a>>> {
-    let mut q = sqlx::query(sql);
+) -> Result<sqlx::query::Query<'a, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>> {
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
     for arg in args {
         q = match arg {
             Value::Null => q.bind(Option::<String>::None),
@@ -126,7 +126,7 @@ fn query<'a>(
                     q.bind(number)
                 }
             }
-            Value::String(s) => q.bind(s.as_str()),
+            Value::String(s) => q.bind(s.to_owned()),
             _ => q.bind(dumps(arg)),
         };
     }

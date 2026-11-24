@@ -1859,9 +1859,9 @@ async fn failed_netting_payment_rolls_back_snapshot_orders_and_request_key() {
     assert!(pair_orders.len() >= 2);
     let fail_order_id = pair_orders.last().unwrap()["id"].as_i64().unwrap();
     let mut db = harness.app.service.store.write().await.unwrap();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TRIGGER fail_netting_order BEFORE UPDATE OF status ON orders WHEN OLD.id={fail_order_id} BEGIN SELECT RAISE(ABORT, 'fixture netting failure'); END"
-    ))
+    )))
     .execute(&mut *db)
     .await
     .unwrap();

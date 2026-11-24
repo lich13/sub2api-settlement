@@ -5,7 +5,6 @@ use crate::{
     service::Service,
     store, time,
 };
-use chrono::Timelike;
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -103,10 +102,10 @@ impl Reminders {
             return Ok(());
         };
         let now = time::parse(&time::now())?;
-        let local = now.with_timezone(&time::LOCAL_OFFSET);
-        if local.hour() >= config.hour {
-            let day = local.format("%Y-%m-%d").to_string();
-            let cutoff = time::format(now - chrono::Duration::hours(24));
+        let local = now.to_offset(time::LOCAL_OFFSET);
+        if u32::from(local.hour()) >= config.hour {
+            let day = time::format_date(local.date());
+            let cutoff = time::format(now - time::Duration::hours(24));
             let mut db = app.service.store.read().await?;
             let pairs=store::all(&mut db,"SELECT min(payer_id,creditor_id) AS a,max(payer_id,creditor_id) AS b FROM orders WHERE status='pending' GROUP BY a,b HAVING min(created_at)<=?",&[json!(cutoff)]).await?;
             drop(db);

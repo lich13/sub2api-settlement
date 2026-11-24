@@ -5,11 +5,14 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{delete, get},
 };
-use chrono::{Duration as Days, Utc};
 use clap::Args;
 use fs2::FileExt;
 use serde_json::{Value, json};
-use settlement::{config::Config, http::App, time};
+use settlement::{
+    config::Config,
+    http::App,
+    time::{self, Duration as Days, OffsetDateTime},
+};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -114,7 +117,7 @@ impl Workspace {
         } else {
             atomic_json(
                 &marker,
-                &json!({"kind":MARKER,"clock":time::format(Utc::now()),"base_seeded":false,"netting_seeded":false}),
+                &json!({"kind":MARKER,"clock":time::format(OffsetDateTime::now_utc()),"base_seeded":false,"netting_seeded":false}),
             )?;
         }
         Ok(Self {

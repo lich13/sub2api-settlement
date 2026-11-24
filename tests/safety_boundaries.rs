@@ -240,12 +240,14 @@ async fn read_only_instance_rejects_mutations_and_skips_external_deletion() {
 
 async fn count_rows(app: &App, table: &str) -> i64 {
     let mut db = app.service.store.read().await.unwrap();
-    let count = sqlx::query(&format!("SELECT count(*) AS count FROM {table}"))
-        .fetch_one(&mut *db)
-        .await
-        .unwrap()
-        .try_get("count")
-        .unwrap();
+    let count = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT count(*) AS count FROM {table}"
+    )))
+    .fetch_one(&mut *db)
+    .await
+    .unwrap()
+    .try_get("count")
+    .unwrap();
     db.commit().await.unwrap();
     count
 }

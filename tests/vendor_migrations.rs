@@ -66,7 +66,7 @@ async fn connect(path: &Path) -> sqlx::SqliteConnection {
 async fn import_legacy_fixture(path: &Path) {
     let sql = fs::read_to_string(LEGACY_SQL).expect("read legacy ledger fixture");
     let mut db = connect(path).await;
-    sqlx::raw_sql(&sql)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
         .execute(&mut db)
         .await
         .expect("import legacy ledger fixture");
@@ -100,7 +100,7 @@ async fn create_published_v8_ledger(path: &Path) {
     create_published_v7_ledger(path).await;
     let mut db = connect(path).await;
     let vendor_schema = fs::read_to_string(VENDOR_SCHEMA).expect("read vendor schema");
-    sqlx::raw_sql(&vendor_schema)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(vendor_schema.as_str()))
         .execute(&mut db)
         .await
         .expect("apply published vendor schema");
@@ -226,9 +226,9 @@ async fn table_names(path: &Path) -> Vec<String> {
 
 async fn columns(path: &Path, table: &str) -> Vec<String> {
     let mut db = connect(path).await;
-    let names = sqlx::query_scalar::<_, String>(&format!(
+    let names = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(format!(
         "SELECT name FROM pragma_table_info('{table}') ORDER BY cid"
-    ))
+    )))
     .fetch_all(&mut db)
     .await
     .expect("read table columns");

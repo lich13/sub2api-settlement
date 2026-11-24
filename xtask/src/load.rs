@@ -2,10 +2,12 @@ use crate::{
     Result,
     demo::{self, Api},
 };
-use chrono::{Duration as Span, TimeZone, Utc};
 use clap::Args;
 use serde_json::{Value, json};
-use settlement::{json::hash, time};
+use settlement::{
+    json::hash,
+    time::{self, Duration as Span},
+};
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -47,7 +49,7 @@ fn fixtures(count: usize, csv_count: usize) -> Result<(Value, String)> {
             json!({"id":id,"name":format!("Load user {id}"),"role":"user","status":"active"}),
         );
     }
-    let beginning = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let beginning = time::parse(START)?;
     let usage=(1..=count).map(|id| {
         // Every account is populated; immutable IDs and integer micro-units make regeneration deterministic.
         let account=(id-1)%12+1;

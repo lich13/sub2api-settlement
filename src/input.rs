@@ -136,24 +136,7 @@ fn cost(v: &Value, k: &str, regex: &Regex) -> Result<()> {
     Ok(())
 }
 fn date_time(s: &str) -> Result<String> {
-    if let Ok(d) = chrono::DateTime::parse_from_rfc3339(&s.replace(' ', "T")) {
-        let precision = if d.timestamp_subsec_micros() == 0 {
-            chrono::SecondsFormat::Secs
-        } else {
-            chrono::SecondsFormat::Micros
-        };
-        return Ok(d.to_rfc3339_opts(precision, true));
-    }
-    if let Ok(d) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Ok(d
-            .format(if d.and_utc().timestamp_subsec_micros() == 0 {
-                "%Y-%m-%dT%H:%M:%S"
-            } else {
-                "%Y-%m-%dT%H:%M:%S%.6f"
-            })
-            .to_string());
-    }
-    Err(Error::invalid("时间格式无效"))
+    time::normalize_datetime(s, false).ok_or_else(|| Error::invalid("时间格式无效"))
 }
 fn ids(v: &Value, k: &str, min: usize) -> Result<()> {
     let Some(values) = v[k].as_array() else {
@@ -561,9 +544,9 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         }
         "create-expense" | "edit-expense" => {
             choice(&v, "allocation_mode", &["equal", "custom"], false)?;
-            let date = chrono::NaiveDate::parse_from_str(text(&v, "incurred_on"), "%Y-%m-%d")
-                .map_err(|_| Error::invalid("费用日期无效"))?;
-            v["incurred_on"] = json!(date.to_string());
+            let date = time::parse_date(text(&v, "incurred_on"))
+                .ok_or_else(|| Error::invalid("费用日期无效"))?;
+            v["incurred_on"] = json!(time::format_date(date));
             let members = v["members"]
                 .as_array()
                 .ok_or_else(|| Error::invalid("参与用户无效"))?;

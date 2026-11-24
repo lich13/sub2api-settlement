@@ -38,13 +38,15 @@ async fn financial_rows(db: &mut SqliteConnection) -> Vec<Vec<Value>> {
     let mut output = Vec::new();
     for table in FINANCIAL_TABLES {
         output.push(
-            sqlx::query(&format!("SELECT * FROM {table} ORDER BY rowid"))
-                .fetch_all(&mut *db)
-                .await
-                .expect("read financial fixture")
-                .iter()
-                .map(|row| settlement::store::row(row).unwrap())
-                .collect(),
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "SELECT * FROM {table} ORDER BY rowid"
+            )))
+            .fetch_all(&mut *db)
+            .await
+            .expect("read financial fixture")
+            .iter()
+            .map(|row| settlement::store::row(row).unwrap())
+            .collect(),
         );
     }
     output
@@ -186,7 +188,7 @@ async fn legacy_written_ledger_and_session_continue_across_rust_restart() {
     let database = directory.join("settlement.sqlite3");
     let sql = std::fs::read_to_string(format!("{FIXTURES}/ledger/legacy-written.sql")).unwrap();
     let mut db = connect(&database).await;
-    sqlx::raw_sql(&sql)
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
         .execute(&mut db)
         .await
         .expect("load actual legacy SQL dump");

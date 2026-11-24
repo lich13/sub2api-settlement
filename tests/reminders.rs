@@ -245,7 +245,7 @@ async fn reminders_wait_24_hours_then_send_the_signed_private_net_amount_once_pe
     app.enable_reminders(&hook.url);
     seed_orders(&app.app, &[(7, 9, 12_400), (9, 7, 4_000)]).await;
 
-    let recent = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false);
+    let recent = settlement::time::format(settlement::time::OffsetDateTime::now_utc());
     set_orders_created_at(&app.app, &recent).await;
     app.app.reminders.tick(&app.app).await.unwrap();
     assert!(hook.requests().is_empty());
