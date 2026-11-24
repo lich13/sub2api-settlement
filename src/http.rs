@@ -252,7 +252,7 @@ impl App {
     async fn dispatch(
         &self,
         method: &str,
-        path: &str,
+        route: Route<'_>,
         query: &BTreeMap<String, String>,
         headers: &HeaderMap,
         body: Value,
@@ -260,107 +260,93 @@ impl App {
     ) -> Result<Value> {
         let (actor, sid) = identity;
         let s = &self.service;
-        let parts = path.trim_matches('/').split('/').collect::<Vec<_>>();
-        let id = |pos: usize| -> Result<i64> {
-            parts
-                .get(pos)
-                .and_then(|s| s.parse::<i64>().ok())
-                .ok_or_else(|| {
-                    let name = match parts.as_slice() {
-                        ["netting","balances",_,_] => if pos==2 { "user_a" } else { "user_b" },
-                        ["netting","payments",_] => "payment_id",
-                        _ => match parts[0] { "cycles"=>"cid","expenses"=>"eid","accounts"=>"aid","account-deletions"=>"jid","settlements"=>"sid",_=>"oid" },
-                    };
-                    Error::validation(json!([{"type":"int_parsing","loc":["path",name],"msg":"Input should be a valid integer, unable to parse string as an integer","input":parts.get(pos).unwrap_or(&"")}]))
-                })
-        };
         let scope = query.get("scope").map(String::as_str).unwrap_or("mine");
-        let query_fields: &[(&str, &[&str])] = match parts.as_slice() {
-            ["netting", "payments"] if method == "GET" => &[("scope", &["mine", "all"])],
-            ["netting", "balances"] => &[("scope", &["mine", "receivable", "all"])],
-            ["orders"] => &[
+        let query_fields: &[(&str, &[&str])] = match route {
+            Route::NettingPayments if method == "GET" => &[("scope", &["mine", "all"])],
+            Route::NettingBalances => &[("scope", &["mine", "receivable", "all"])],
+            Route::Orders => &[
                 ("scope", &["mine", "receivable", "all"]),
                 ("view", &["full"]),
             ],
             _ => &[],
         };
         crate::input::query_choices(query, query_fields)?;
-        if method == "GET" || method == "HEAD" {
-            return match parts.as_slice() {
-                ["me"] => Ok(actor.clone()),
-                ["vendors"] => s.vendors(actor).await,
-                ["audit"] => s.audit_log(actor, query, false).await,
-                ["operations", "status"] => s.operation_status(actor).await,
-                ["overview"] => s.overview(actor).await,
-                ["catalog"] => s.catalog(actor).await,
-                ["accounts", "state"] => s.account_state(actor).await,
-                ["accounts", _, "deletion-scope"] => s.deletion_scope(actor, id(1)?).await,
-                ["account-deletions"] => self.deletion_list(actor, None).await,
-                ["cycles", _, "start-candidate"] => {
+        if method == "GET" {
+            return match route {
+                Route::Me => Ok(actor.clone()),
+                Route::Vendors => s.vendors(actor).await,
+                Route::Audit => s.audit_log(actor, query, false).await,
+                Route::OperationsStatus => s.operation_status(actor).await,
+                Route::Overview => s.overview(actor).await,
+                Route::Catalog => s.catalog(actor).await,
+                Route::AccountsState => s.account_state(actor).await,
+                Route::DeletionScope(aid) => s.deletion_scope(actor, path_id(aid)?).await,
+                Route::AccountDeletions => self.deletion_list(actor, None).await,
+                Route::StartCandidate(cid) => {
                     s.start_candidate(
                         actor,
-                        id(1)?,
+                        path_id(cid)?,
                         query.get("after").map(String::as_str).unwrap_or(""),
                     )
                     .await
                 }
-                ["cycles", _] => s.cycle_detail(actor, id(1)?).await,
-                ["expenses"] => s.expenses(actor, None).await,
-                ["expenses", _] => s.expenses(actor, Some(id(1)?)).await,
-                ["netting", "balances"] => {
+                Route::Cycle(cid) => s.cycle_detail(actor, path_id(cid)?).await,
+                Route::Expenses => s.expenses(actor, None).await,
+                Route::Expense(eid) => s.expenses(actor, Some(path_id(eid)?)).await,
+                Route::NettingBalances => {
                     let mut db = s.store.read().await?;
                     Ok(json!({"balances":Service::balances(&mut db,actor,scope).await?}))
                 }
-                ["netting", "balances", _, _] => s.netting_balance(actor, id(2)?, id(3)?).await,
-                ["netting", "payments"] => s.netting_payments(actor, scope, None).await,
-                ["netting", "payments", _] => s.netting_payments(actor, "mine", Some(id(2)?)).await,
-                ["orders"] => s.orders(actor, scope).await,
-                ["orders", _] => s.detail(actor, id(1)?).await,
-                ["history"] => s.history(actor).await,
-                ["inbox"] => s.inbox(actor).await,
+                Route::NettingPair(a, b) => {
+                    s.netting_balance(actor, path_id(a)?, path_id(b)?).await
+                }
+                Route::NettingPayments => s.netting_payments(actor, scope, None).await,
+                Route::NettingPayment(pid) => {
+                    s.netting_payments(actor, "mine", Some(path_id(pid)?)).await
+                }
+                Route::Orders => s.orders(actor, scope).await,
+                Route::Order(oid) => s.detail(actor, path_id(oid)?).await,
+                Route::History => s.history(actor).await,
+                Route::Inbox => s.inbox(actor).await,
                 _ => Err(Error::new(404, "Not Found")),
             };
         }
-        let (kind, entity) = match (method, parts.as_slice()) {
-            ("POST", ["vendors"]) => ("create-vendor", None),
-            ("POST", ["vendors", _, "members"]) => ("add-vendor-members", Some(id(1)?)),
-            ("POST", ["vendors", _, "renew"]) => ("renew-vendor", Some(id(1)?)),
-            ("POST", ["vendors", _, "archive"]) => ("archive-vendor", Some(id(1)?)),
-            ("PATCH", ["vendor-periods", _]) => ("edit-vendor-period", Some(id(1)?)),
-            ("POST", ["vendor-periods", _, "start-confirm"]) => {
-                ("vendor-start-confirm", Some(id(1)?))
-            }
-            ("POST", ["vendor-periods", _, "bill-previews"]) => {
+        let (kind, entity) = match route {
+            Route::Vendors => ("create-vendor", None),
+            Route::VendorMembers(vid) => ("add-vendor-members", Some(path_id(vid)?)),
+            Route::VendorRenew(vid) => ("renew-vendor", Some(path_id(vid)?)),
+            Route::VendorArchive(vid) => ("archive-vendor", Some(path_id(vid)?)),
+            Route::VendorPeriod(pid) => ("edit-vendor-period", Some(path_id(pid)?)),
+            Route::VendorStartConfirm(pid) => ("vendor-start-confirm", Some(path_id(pid)?)),
+            Route::VendorBillPreviews(pid) => {
                 let payload = crate::input::normalize("vendor-bill-preview", body)?;
-                return s.vendor_bill_preview(actor, id(1)?, &payload).await;
+                return s.vendor_bill_preview(actor, path_id(pid)?, &payload).await;
             }
-            ("POST", ["vendor-periods", _, "bill-confirm"]) => {
-                ("vendor-bill-confirm", Some(id(1)?))
-            }
-            ("POST", ["vendor-periods", _, "void"]) => ("void-vendor", Some(id(1)?)),
-            ("POST", ["cycles"]) => ("create", None),
-            ("PATCH", ["cycles", _]) => ("edit", Some(id(1)?)),
-            ("POST", ["cycles", _, "start-confirm"]) => ("start-confirm", Some(id(1)?)),
-            ("PUT", ["accounts", _, "free"]) => ("free", Some(id(1)?)),
-            ("POST", ["accounts", _, "upgrade-paid"]) => ("upgrade-paid", Some(id(1)?)),
-            ("POST", ["cycles", _, "bill-previews"]) => {
+            Route::VendorBillConfirm(pid) => ("vendor-bill-confirm", Some(path_id(pid)?)),
+            Route::VendorPeriodVoid(pid) => ("void-vendor", Some(path_id(pid)?)),
+            Route::Cycles => ("create", None),
+            Route::Cycle(cid) => ("edit", Some(path_id(cid)?)),
+            Route::CycleStartConfirm(cid) => ("start-confirm", Some(path_id(cid)?)),
+            Route::AccountFree(aid) => ("free", Some(path_id(aid)?)),
+            Route::AccountUpgradePaid(aid) => ("upgrade-paid", Some(path_id(aid)?)),
+            Route::CycleBillPreviews(cid) => {
                 let payload = crate::input::normalize("bill-preview", body)?;
-                return s.bill_preview(actor, id(1)?, &payload).await;
+                return s.bill_preview(actor, path_id(cid)?, &payload).await;
             }
-            ("POST", ["cycles", _, "bill-confirm"]) => ("bill-confirm", Some(id(1)?)),
-            ("POST", ["previews"]) => {
+            Route::CycleBillConfirm(cid) => ("bill-confirm", Some(path_id(cid)?)),
+            Route::Previews => {
                 let payload = crate::input::normalize("preview", body)?;
                 return s.preview(actor, &payload).await;
             }
-            ("POST", ["expenses"]) => ("create-expense", None),
-            ("PATCH", ["expenses", _]) => ("edit-expense", Some(id(1)?)),
-            ("POST", ["settlements"]) => ("settle", None),
-            ("POST", ["settlements", _, "void"]) => ("void", Some(id(1)?)),
-            ("POST", ["netting", "payments"]) => ("netting-payment", None),
-            ("POST", ["orders", _, "actions"]) => ("transition", Some(id(1)?)),
-            ("POST", ["inbox", "read"]) => ("inbox_read", None),
-            ("POST", ["account-deletions", _, "retry"]) => ("delete-retry", Some(id(1)?)),
-            ("POST", ["account-deletions", _, "cancel"]) => ("delete-cancel", Some(id(1)?)),
+            Route::Expenses => ("create-expense", None),
+            Route::Expense(eid) => ("edit-expense", Some(path_id(eid)?)),
+            Route::Settlements => ("settle", None),
+            Route::SettlementVoid(sid) => ("void", Some(path_id(sid)?)),
+            Route::NettingPayments => ("netting-payment", None),
+            Route::OrderActions(oid) => ("transition", Some(path_id(oid)?)),
+            Route::InboxRead => ("inbox_read", None),
+            Route::DeletionRetry(jid) => ("delete-retry", Some(path_id(jid)?)),
+            Route::DeletionCancel(jid) => ("delete-cancel", Some(path_id(jid)?)),
             _ => return Err(Error::new(404, "Not Found")),
         };
         if ["settle", "bill-confirm", "start-confirm", "delete-retry"].contains(&kind)
@@ -389,14 +375,12 @@ impl App {
                     prepared = s.prepare_settlement(actor, &payload).await?;
                 }
                 "bill-confirm" => {
-                    admin(actor)?;
                     prepared.bill = Some(
                         s.prepare_bill(actor, required_entity(entity)?, &payload)
                             .await?,
                     );
                 }
                 "start-confirm" => {
-                    admin(actor)?;
                     s.sync_selection(
                         &[json!(required_entity(entity)?)],
                         &time::now(),
@@ -437,6 +421,10 @@ impl App {
         }
         Ok(result)
     }
+}
+fn path_id(raw: &str) -> Result<i64> {
+    raw.parse::<i64>()
+        .map_err(|_| Error::invalid("路径编号无效"))
 }
 fn required_entity(entity: Option<i64>) -> Result<i64> {
     entity.ok_or_else(|| Error::new(400, "缺少记录编号"))
@@ -479,49 +467,176 @@ async fn health(State(app): State<App>) -> Result<Response> {
     let ok = !synced.is_null() && error.is_null();
     Ok((if ok{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"status":if ok{"ok"}else{"degraded"},"version":crate::VERSION,"revision":app.config.revision,"engine":"rust"}))).into_response())
 }
-fn route_methods(path: &str) -> Option<&'static [&'static str]> {
-    match path
-        .trim_end_matches('/')
-        .split('/')
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        ["me" | "overview" | "catalog" | "history" | "inbox" | "account-deletions"]
-        | ["audit" | "audit.csv"]
-        | ["operations", "status"]
-        | ["accounts", "state"]
-        | ["accounts", _, "deletion-scope"]
-        | ["cycles", _, "start-candidate"]
-        | ["cycles", _, "bill-previews", _, "unmatched.csv"]
-        | ["vendor-periods", _, "bill-previews", _, "unmatched.csv"]
-        | ["netting", "balances"]
-        | ["netting", "balances", _, _]
-        | ["netting", "payments", _]
-        | ["orders"]
-        | ["orders", _] => Some(&["GET"]),
-        ["cycles", _] => Some(&["PATCH", "GET"]),
-        ["vendor-periods", _] => Some(&["PATCH"]),
-        ["vendors"] | ["expenses"] | ["netting", "payments"] => Some(&["GET", "POST"]),
-        ["expenses", _] => Some(&["GET", "PATCH"]),
-        ["accounts", _, "free"] => Some(&["PUT"]),
-        ["cycles" | "previews" | "settlements"]
-        | [
-            "cycles",
-            _,
-            "start-confirm" | "bill-previews" | "bill-confirm",
-        ]
-        | ["vendors", _, "archive" | "members" | "renew"]
-        | [
-            "vendor-periods",
-            _,
-            "start-confirm" | "bill-previews" | "bill-confirm" | "void",
-        ]
-        | ["accounts", _, "upgrade-paid"]
-        | ["settlements", _, "void"]
-        | ["orders", _, "actions"]
-        | ["inbox", "read"]
-        | ["account-deletions", _, "retry" | "cancel"] => Some(&["POST"]),
-        _ => None,
+#[derive(Clone, Copy)]
+enum Route<'a> {
+    Me,
+    Overview,
+    Catalog,
+    History,
+    Inbox,
+    InboxRead,
+    Audit,
+    AuditCsv,
+    OperationsStatus,
+    AccountsState,
+    AccountFree(&'a str),
+    AccountUpgradePaid(&'a str),
+    DeletionScope(&'a str),
+    AccountDeletions,
+    DeletionRetry(&'a str),
+    DeletionCancel(&'a str),
+    Vendors,
+    VendorMembers(&'a str),
+    VendorRenew(&'a str),
+    VendorArchive(&'a str),
+    VendorPeriod(&'a str),
+    VendorStartConfirm(&'a str),
+    VendorBillPreviews(&'a str),
+    VendorBillConfirm(&'a str),
+    VendorPeriodVoid(&'a str),
+    Cycles,
+    Cycle(&'a str),
+    StartCandidate(&'a str),
+    CycleStartConfirm(&'a str),
+    CycleBillPreviews(&'a str),
+    CycleBillConfirm(&'a str),
+    UnmatchedCsv {
+        vendor: bool,
+        cycle_id: &'a str,
+        preview_id: &'a str,
+    },
+    Previews,
+    Expenses,
+    Expense(&'a str),
+    Settlements,
+    SettlementVoid(&'a str),
+    NettingBalances,
+    NettingPair(&'a str, &'a str),
+    NettingPayments,
+    NettingPayment(&'a str),
+    Orders,
+    Order(&'a str),
+    OrderActions(&'a str),
+}
+impl<'a> Route<'a> {
+    fn parse(path: &'a str) -> Option<Self> {
+        Some(
+            match path
+                .trim_end_matches('/')
+                .split('/')
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                ["me"] => Self::Me,
+                ["overview"] => Self::Overview,
+                ["catalog"] => Self::Catalog,
+                ["history"] => Self::History,
+                ["inbox"] => Self::Inbox,
+                ["inbox", "read"] => Self::InboxRead,
+                ["audit"] => Self::Audit,
+                ["audit.csv"] => Self::AuditCsv,
+                ["operations", "status"] => Self::OperationsStatus,
+                ["accounts", "state"] => Self::AccountsState,
+                ["accounts", aid, "free"] => Self::AccountFree(aid),
+                ["accounts", aid, "upgrade-paid"] => Self::AccountUpgradePaid(aid),
+                ["accounts", aid, "deletion-scope"] => Self::DeletionScope(aid),
+                ["account-deletions"] => Self::AccountDeletions,
+                ["account-deletions", jid, "retry"] => Self::DeletionRetry(jid),
+                ["account-deletions", jid, "cancel"] => Self::DeletionCancel(jid),
+                ["vendors"] => Self::Vendors,
+                ["vendors", vid, "members"] => Self::VendorMembers(vid),
+                ["vendors", vid, "renew"] => Self::VendorRenew(vid),
+                ["vendors", vid, "archive"] => Self::VendorArchive(vid),
+                ["vendor-periods", pid] => Self::VendorPeriod(pid),
+                ["vendor-periods", pid, "start-confirm"] => Self::VendorStartConfirm(pid),
+                ["vendor-periods", pid, "bill-previews"] => Self::VendorBillPreviews(pid),
+                ["vendor-periods", pid, "bill-confirm"] => Self::VendorBillConfirm(pid),
+                ["vendor-periods", pid, "void"] => Self::VendorPeriodVoid(pid),
+                [
+                    "vendor-periods",
+                    pid,
+                    "bill-previews",
+                    bpid,
+                    "unmatched.csv",
+                ] => Self::UnmatchedCsv {
+                    vendor: true,
+                    cycle_id: pid,
+                    preview_id: bpid,
+                },
+                ["cycles"] => Self::Cycles,
+                ["cycles", cid] => Self::Cycle(cid),
+                ["cycles", cid, "start-candidate"] => Self::StartCandidate(cid),
+                ["cycles", cid, "start-confirm"] => Self::CycleStartConfirm(cid),
+                ["cycles", cid, "bill-previews"] => Self::CycleBillPreviews(cid),
+                ["cycles", cid, "bill-confirm"] => Self::CycleBillConfirm(cid),
+                ["cycles", cid, "bill-previews", bpid, "unmatched.csv"] => Self::UnmatchedCsv {
+                    vendor: false,
+                    cycle_id: cid,
+                    preview_id: bpid,
+                },
+                ["previews"] => Self::Previews,
+                ["expenses"] => Self::Expenses,
+                ["expenses", eid] => Self::Expense(eid),
+                ["settlements"] => Self::Settlements,
+                ["settlements", sid, "void"] => Self::SettlementVoid(sid),
+                ["netting", "balances"] => Self::NettingBalances,
+                ["netting", "balances", a, b] => Self::NettingPair(a, b),
+                ["netting", "payments"] => Self::NettingPayments,
+                ["netting", "payments", pid] => Self::NettingPayment(pid),
+                ["orders"] => Self::Orders,
+                ["orders", oid] => Self::Order(oid),
+                ["orders", oid, "actions"] => Self::OrderActions(oid),
+                _ => return None,
+            },
+        )
+    }
+    fn methods(self) -> (&'static [&'static str], &'static str) {
+        match self {
+            Self::Me
+            | Self::Overview
+            | Self::Catalog
+            | Self::History
+            | Self::Inbox
+            | Self::Audit
+            | Self::AuditCsv
+            | Self::OperationsStatus
+            | Self::AccountsState
+            | Self::DeletionScope(_)
+            | Self::AccountDeletions
+            | Self::StartCandidate(_)
+            | Self::UnmatchedCsv { .. }
+            | Self::NettingBalances
+            | Self::NettingPair(_, _)
+            | Self::NettingPayment(_)
+            | Self::Orders
+            | Self::Order(_) => (&["GET"], "GET"),
+            Self::Cycle(_) => (&["PATCH", "GET"], "PATCH, GET"),
+            Self::VendorPeriod(_) => (&["PATCH"], "PATCH"),
+            Self::Vendors | Self::Expenses | Self::NettingPayments => {
+                (&["GET", "POST"], "GET, POST")
+            }
+            Self::Expense(_) => (&["GET", "PATCH"], "GET, PATCH"),
+            Self::AccountFree(_) => (&["PUT"], "PUT"),
+            Self::Cycles
+            | Self::Previews
+            | Self::Settlements
+            | Self::CycleStartConfirm(_)
+            | Self::CycleBillPreviews(_)
+            | Self::CycleBillConfirm(_)
+            | Self::VendorArchive(_)
+            | Self::VendorMembers(_)
+            | Self::VendorRenew(_)
+            | Self::VendorStartConfirm(_)
+            | Self::VendorBillPreviews(_)
+            | Self::VendorBillConfirm(_)
+            | Self::VendorPeriodVoid(_)
+            | Self::AccountUpgradePaid(_)
+            | Self::SettlementVoid(_)
+            | Self::OrderActions(_)
+            | Self::InboxRead
+            | Self::DeletionRetry(_)
+            | Self::DeletionCancel(_) => (&["POST"], "POST"),
+        }
     }
 }
 async fn api(State(app): State<App>, request: Request) -> Result<Response> {
@@ -536,7 +651,7 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         .strip_prefix("/settlement/api/v1/")
         .unwrap_or("")
         .to_owned();
-    let Some(methods) = route_methods(&path) else {
+    let Some(route) = Route::parse(&path) else {
         return Err(Error::new(404, "Not Found"));
     };
     if path.ends_with('/') {
@@ -552,11 +667,12 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         );
         return Ok(Redirect::temporary(&target).into_response());
     }
+    let (methods, allow) = route.methods();
     if !methods.contains(&method.as_str()) {
         let mut response = Error::new(405, "Method Not Allowed").into_response();
         response
             .headers_mut()
-            .insert("Allow", HeaderValue::from_static(methods[0]));
+            .insert("Allow", HeaderValue::from_static(allow));
         return Ok(response);
     }
     let query = params(&request);
@@ -570,7 +686,7 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     if app.config.read_only && method != "GET" && method != "HEAD" {
         return Err(Error::new(403, "当前实例仅用于只读核验"));
     }
-    if method == "GET" && path == "audit.csv" {
+    if let Route::AuditCsv = route {
         let bytes = app.service.audit_csv(&actor, &query).await?;
         return Ok((
             [
@@ -584,21 +700,18 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         )
             .into_response());
     }
-    if method == "GET"
-        && let [
-            source @ ("cycles" | "vendor-periods"),
-            cycle_id,
-            "bill-previews",
-            preview_id,
-            "unmatched.csv",
-        ] = path.split('/').collect::<Vec<_>>().as_slice()
+    if let Route::UnmatchedCsv {
+        vendor,
+        cycle_id,
+        preview_id,
+    } = route
     {
         let cycle_id = cycle_id
             .parse::<i64>()
             .ok()
             .filter(|id| *id > 0)
             .ok_or_else(|| Error::invalid("周期编号无效"))?;
-        let bytes = if *source == "vendor-periods" {
+        let bytes = if vendor {
             app.service
                 .vendor_unmatched_csv(&actor, cycle_id, preview_id)
                 .await?
@@ -628,7 +741,7 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         serde_json::from_slice(&bytes).map_err(|_| Error::invalid("请求 JSON 无效"))?
     };
     let result = app
-        .dispatch(&method, &path, &query, &headers, body, (&actor, &sid))
+        .dispatch(&method, route, &query, &headers, body, (&actor, &sid))
         .await;
     if method != "GET" && result.as_ref().is_err_and(|error| error.status == 409) {
         app.metrics.conflict();

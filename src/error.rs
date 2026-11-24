@@ -9,7 +9,6 @@ use serde_json::json;
 pub struct Error {
     pub status: u16,
     pub message: String,
-    pub detail: Option<serde_json::Value>,
 }
 pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
@@ -17,14 +16,6 @@ impl Error {
         Self {
             status,
             message: message.into(),
-            detail: None,
-        }
-    }
-    pub fn validation(detail: serde_json::Value) -> Self {
-        Self {
-            status: 422,
-            message: "请求参数无效".into(),
-            detail: Some(detail),
         }
     }
     pub fn conflict(message: impl Into<String>) -> Self {
@@ -62,7 +53,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let mut response = (
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
-            Json(json!({"detail": self.detail.unwrap_or(serde_json::Value::String(self.message))})),
+            Json(json!({"detail": self.message})),
         )
             .into_response();
         if self.status == 429 {

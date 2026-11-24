@@ -36,7 +36,7 @@ pub async fn preview(path: &Path) -> Result<Value> {
 }
 
 pub async fn reset_estimated(store: &Store, expected: &str) -> Result<Value> {
-    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !crate::json::is_sha256_hex(expected) {
         return Err(Error::invalid("请提供重置预检摘要"));
     }
     let mut db = store.write().await?;

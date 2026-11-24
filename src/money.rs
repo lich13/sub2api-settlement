@@ -177,11 +177,14 @@ impl std::fmt::Display for Decimal {
         }
     }
 }
+pub const AMOUNT_PATTERN: &str = r"^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$";
+pub fn valid_amount(s: &str) -> bool {
+    static RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(AMOUNT_PATTERN).expect("fixed amount regex"));
+    RE.is_match(s)
+}
 pub fn cents(s: &str) -> Result<i64> {
-    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$").unwrap()
-    });
-    if !RE.is_match(s) {
+    if !valid_amount(s) {
         return Err(Error::invalid("金额须为非负数，最多两位小数"));
     }
     Decimal::parse(s)?.fen_half_up()

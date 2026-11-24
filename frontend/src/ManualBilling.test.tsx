@@ -3,7 +3,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SettleForm } from "./main";
+import { SettleForm } from "./SettleForm";
 import { VendorBillPanel } from "./Vendors";
 import type {
   BillPreview,

@@ -2,21 +2,8 @@
 mod support;
 
 use serde_json::{Value, json};
-use settlement::{error::Result, service::Prepared, store};
+use settlement::{error::Result, input as input_contract, service::Prepared, store};
 use support::legacy::{END, Harness, START, admin};
-
-mod error {
-    pub use settlement::error::{Error, Result};
-}
-mod json {
-    pub use settlement::json::{array, int, text};
-}
-mod time {
-    pub use settlement::time::*;
-}
-#[path = "../src/input.rs"]
-#[allow(dead_code)]
-mod input_contract;
 
 async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> Result<Value> {
     harness
