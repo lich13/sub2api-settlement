@@ -445,8 +445,7 @@ export function ExpenseForm({
     source
       ? (source.members || []).map((m) => [
           m.user_id,
-          m.percent ||
-            (m.weight !== undefined ? (Number(m.weight) / 100).toFixed(2) : ""),
+          m.weight !== undefined ? (Number(m.weight) / 100).toFixed(2) : "",
         ])
       : catalog.users.map((u) => [u.id, ""]),
   );

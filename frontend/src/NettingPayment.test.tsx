@@ -91,6 +91,7 @@ describe("netting payment confirmation", () => {
       if (path.endsWith("/accounts/state")) return response({ revision: "1", active_ids: [100], checked_at: null, error: null });
       if (path.endsWith("/overview")) return response({ accounts: [], estimated_fen: null, pending_fen: 500, receivable_fen: 0, last_sync: "", sync_error: null, coverage_from: "2026-01-01T00:00:00Z" });
       if (path.endsWith("/inbox")) return response({ items: [], unread: 0 });
+      if (path.endsWith("/vendors")) return response({ vendors: [] });
       if (path.endsWith("/expenses")) return response({ expenses: [] });
       if (path.endsWith("/orders?scope=mine")) return response({ orders: [] });
       if (path.endsWith("/netting/balances?scope=mine")) return response({ balances: [balance] });

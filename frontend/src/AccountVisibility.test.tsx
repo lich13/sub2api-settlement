@@ -208,9 +208,10 @@ function setupFetch(options: {
       return options.catalogUpdates?.[catalogCalls - 2] || response(options.initialCatalog || catalog);
     }
     if (path.endsWith("/inbox")) return response({ items: [], unread: 0 });
+    if (path.endsWith("/vendors")) return response({ vendors: [] });
     if (path.endsWith("/expenses")) return response({ expenses: [] });
     if (path.endsWith("/previews")) return response(settlementPreview(options.previewCycle));
-    if (path.endsWith("/history")) return response({ cycles: [removedCycle, activeCycle], audit: [] });
+    if (path.endsWith("/history")) return response({ cycles: [removedCycle, activeCycle] });
     if (path.endsWith("/account-deletions")) return response({ items: [] });
     if (path.endsWith("/orders?scope=mine")) return response({ orders: [historicalOrder] });
     if (/\/cycles\/\d+$/.test(path)) return response(options.cycleDetail || {

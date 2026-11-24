@@ -192,7 +192,6 @@ export type Expense = {
   members?: {
     user_id: number;
     weight?: string | number;
-    percent?: string;
   }[];
   status?: string;
   version: number;

@@ -109,8 +109,7 @@ export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{p
   useEffect(()=>()=>{draftCallback.current?.(false);},[]);
   function invalidate(){++seq.current;setPreview(null);setBusy(false);}
   const prevEnd=useRef(end);
-  useEffect(()=>{invalidate();setAmbiguous([]);},[end,period.id,period.version]);
-  useEffect(()=>{if(prevEnd.current!==end){prevEnd.current=end;manual.resetSelection();}},[end]);
+  useEffect(()=>{invalidate();setAmbiguous([]);if(prevEnd.current!==end){prevEnd.current=end;manual.resetSelection();}},[end,period.id,period.version]);
   useEffect(()=>()=>{++seq.current;++reads.current;},[]);
   async function inspect(existing=false){
     if(!period.start_confirmed){setError("请先确认共同起点后再匹配账单");return;}

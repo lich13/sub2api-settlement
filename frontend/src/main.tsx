@@ -183,6 +183,11 @@ export function App() {
     })),
   }));
   const refreshSequence = useRef(0);
+  const detailSequence = useRef(0);
+  function closeDetail() {
+    ++detailSequence.current;
+    setDetail(null);
+  }
 
   useEffect(() => {
     if (!active) return;
@@ -248,7 +253,7 @@ export function App() {
       setInbox({ items: [], unread: 0 });
       setForm(null);
       setSettlement(null);
-      setDetail(null);
+      closeDetail();
       setConfirm(null);
       setShowInbox(false);
       setStartCycle(null);
@@ -262,6 +267,22 @@ export function App() {
     refreshing.current = true;
     const sequence = ++refreshSequence.current;
     const scope = tab === "bills" ? "mine" : "all";
+    const needOverview =
+      !overviewSource || tab !== "manage" || manageTab === "cycles";
+    const needCatalog =
+      !!isAdmin &&
+      (!catalogSource ||
+        tab === "accounts" ||
+        (tab === "manage" && manageTab === "cycles") ||
+        !!form ||
+        !!vendorManager ||
+        !!settlement);
+    const needVendors =
+      tab === "accounts" ||
+      (!!isAdmin &&
+        ((tab === "manage" && manageTab === "cycles") ||
+          !!vendorManager ||
+          !!settlement));
     const needOrders =
       tab === "bills" || (tab === "manage" && manageTab === "orders");
     const needReceivable = tab === "receivable";
@@ -281,10 +302,12 @@ export function App() {
         past,
         jobs,
       ] = await Promise.all([
-        api<Overview>("/overview"),
+        needOverview ? api<Overview>("/overview") : Promise.resolve(null),
         api<{ items: InboxItem[]; unread: number }>("/inbox"),
-        isAdmin ? api<Catalog>("/catalog") : Promise.resolve(null),
-        api<{ vendors: Vendor[]; account_revision?: string }>("/vendors"),
+        needCatalog ? api<Catalog>("/catalog") : Promise.resolve(null),
+        needVendors
+          ? api<{ vendors: Vendor[]; account_revision?: string }>("/vendors")
+          : Promise.resolve(null),
         needReceivable
           ? api<{ balances: NetBalance[] }>(
               "/netting/balances?scope=receivable",
@@ -312,11 +335,13 @@ export function App() {
           : Promise.resolve(null),
       ]);
       if (sequence !== refreshSequence.current) return;
-      setOverview(data);
+      if (data) setOverview(data);
       setInbox(messages);
-      setCatalog(accounts);
-      setVendors(supplierData.vendors || []);
-      setVendorRevision(supplierData.account_revision || "");
+      if (accounts) setCatalog(accounts);
+      if (supplierData) {
+        setVendors(supplierData.vendors);
+        setVendorRevision(supplierData.account_revision || "");
+      }
       if (receivableNet) setBalances(receivableNet.balances);
       if (orderBundle) {
         const [raw, net, paid] = orderBundle;
@@ -333,14 +358,16 @@ export function App() {
       if (sequence === refreshSequence.current) refreshing.current = false;
     }
   }
+  const latestRefresh = useRef(refresh);
+  latestRefresh.current = refresh;
   useEffect(() => {
     if (!me) return;
     if (!(tab === "manage" && manageTab === "audit" && overviewSource)) {
-      void refresh();
+      void latestRefresh.current();
     }
     const poll = () => {
       if (!document.hidden && !refreshing.current) {
-        void refresh();
+        void latestRefresh.current();
       }
     };
     const timer = setInterval(poll, 10_000);
@@ -404,7 +431,7 @@ export function App() {
       setError((e as Error).message);
       if (e instanceof ApiError && e.status === 409) {
         setConfirm(null);
-        setDetail(null);
+        closeDetail();
         await refresh();
       }
     } finally {
@@ -421,23 +448,25 @@ export function App() {
     await refresh();
   }
   async function showOrder(id: number) {
+    const ticket = ++detailSequence.current;
     try {
-      setDetail(
-        await api<{
-          snapshot: Calculation | ExpenseCalculation;
-          order: Order;
-          drift?: boolean;
-        }>(`/orders/${id}`),
-      );
+      const value = await api<{
+        snapshot: Calculation | ExpenseCalculation;
+        order: Order;
+        drift?: boolean;
+      }>(`/orders/${id}`);
+      if (ticket === detailSequence.current) setDetail(value);
     } catch (e) {
-      setError((e as Error).message);
+      if (ticket === detailSequence.current) setError((e as Error).message);
     }
   }
   async function showCycle(id: number) {
+    const ticket = ++detailSequence.current;
     try {
-      setDetail({ snapshot: await api<Calculation>(`/cycles/${id}`) });
+      const snapshot = await api<Calculation>(`/cycles/${id}`);
+      if (ticket === detailSequence.current) setDetail({ snapshot });
     } catch (e) {
-      setError((e as Error).message);
+      if (ticket === detailSequence.current) setError((e as Error).message);
     }
   }
   function orderAction(o: Order) {
@@ -454,14 +483,16 @@ export function App() {
     });
   }
   async function showNetting(value: NetBalance | NetPayment) {
+    const ticket = ++detailSequence.current;
     try {
       const path =
         "id" in value
           ? `/netting/payments/${value.id}`
           : `/netting/balances/${value.user_a}/${value.user_b}`;
-      setDetail({ netting: await api<NetDetail>(path) });
+      const netting = await api<NetDetail>(path);
+      if (ticket === detailSequence.current) setDetail({ netting });
     } catch (e) {
-      setError((e as Error).message);
+      if (ticket === detailSequence.current) setError((e as Error).message);
     }
   }
   function payNetting(value: NetBalance) {
@@ -619,12 +650,15 @@ export function App() {
       </nav>
       <main>
         <FormError error={error} />
-        {overview?.sync_error && <FormError error={overview.sync_error} />}
-        {(accountState?.error || overview?.account_sync_error) && (
-          <FormError
-            error={accountState?.error || overview?.account_sync_error || ""}
-          />
+        {tab !== "manage" && overview?.sync_error && (
+          <FormError error={overview.sync_error} />
         )}
+        {tab !== "manage" &&
+          (accountState?.error || overview?.account_sync_error) && (
+            <FormError
+              error={accountState?.error || overview?.account_sync_error || ""}
+            />
+          )}
         {!me ? (
           <Empty text={error ? "从 Sub2API 菜单重新进入" : "正在验证登录…"} />
         ) : !overview ? (
@@ -901,7 +935,10 @@ export function App() {
                 items={filteredExpenses}
                 actorId={me.id}
                 isAdmin={!!isAdmin}
-                onDetail={(item) => setDetail({ snapshot: item })}
+                onDetail={(item) => {
+                  ++detailSequence.current;
+                  setDetail({ snapshot: item });
+                }}
                 onVoid={(item) =>
                   setConfirm({
                     text: `作废「${item.expense.name}」本次结算？已报已付或结清的账目无法作废。`,
@@ -1069,7 +1106,7 @@ export function App() {
         <DetailDialog
           detail={detail}
           currentCycle={currentCycle}
-          onClose={() => setDetail(null)}
+          onClose={closeDetail}
         />
       )}
       {showInbox && (

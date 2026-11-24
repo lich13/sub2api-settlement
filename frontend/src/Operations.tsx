@@ -15,7 +15,12 @@ const actions: Record<string,string> = {
   submit:"付款方结清", mark_paid:"管理员标记结清", netting_payment:"对冲结清", confirm:"管理员标记结清",
   reject:"退回付款", split:"拆分订单", void:"作废结算",
 };
-type Audit = { id:number; actor_name:string; action:string; entity_id:number; created_at:string; payload: Record<string,any> };
+type AuditPayload = {
+  before?: { cost_fen?: number };
+  after?: { cost_fen?: number };
+  [key: string]: unknown;
+};
+type Audit = { id:number; actor_name:string; action:string; entity_id:number; created_at:string; payload: AuditPayload };
 type AuditPage = {items:Audit[];next_before:number|null};
 type Status = {last_sync:string|null;sync_error:string|null;accounts:{checked_at:string|null;error:string|null};pending_deletions:number;checkpoint:null|{mode:string;watermark:number;last_reconciled:string}};
 
@@ -59,7 +64,7 @@ export function AuditLog() {
       <button className="button" disabled={busy||invalid} onClick={download}>导出 CSV</button>
     </div>
     {error&&<p className="form-error" role="alert">{error}</p>}
-    <div className="audit-list">{page.items.map(a=><div key={a.id}><div><strong>{actions[a.action]||a.action}</strong><span>{a.actor_name} · #{a.entity_id}</span>{a.action==="edit_cycle"&&a.payload.before&&a.payload.after&&<b>{money(a.payload.before.cost_fen)} → {money(a.payload.after.cost_fen)}</b>}<details><summary>记录内容</summary><pre>{JSON.stringify(a.payload,null,2)}</pre></details></div><time>{date(a.created_at)}</time></div>)}</div>
+    <div className="audit-list">{page.items.map(a=><div key={a.id}><div><strong>{actions[a.action]||a.action}</strong><span>{a.actor_name} · #{a.entity_id}</span>{a.action==="edit_cycle"&&typeof a.payload.before?.cost_fen==="number"&&typeof a.payload.after?.cost_fen==="number"&&<b>{money(a.payload.before.cost_fen)} → {money(a.payload.after.cost_fen)}</b>}<details><summary>记录内容</summary><pre>{JSON.stringify(a.payload,null,2)}</pre></details></div><time>{date(a.created_at)}</time></div>)}</div>
     {!page.items.length&&!busy&&!error&&<div className="empty">暂无操作记录</div>}
     {page.next_before&&<button className="button" disabled={busy} onClick={()=>load(page.next_before!)}>加载更多</button>}
     {busy&&<p className="muted" role="status">正在读取…</p>}

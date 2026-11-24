@@ -968,14 +968,15 @@ export function SettleForm({
                       inputMode="decimal"
                       value={renew[c.cycle.id].cost}
                       onChange={(e) => {
+                        const val = e.target.value;
                         setTouched(true);
-                        setRenew({
-                          ...renew,
+                        setRenew((prev) => ({
+                          ...prev,
                           [c.cycle.id]: {
-                            ...renew[c.cycle.id],
-                            cost: e.target.value,
+                            ...prev[c.cycle.id],
+                            cost: val,
                           },
-                        });
+                        }));
                       }}
                     />
                   </label>
@@ -984,14 +985,15 @@ export function SettleForm({
                     <Select
                       value={renew[c.cycle.id].creditor_id}
                       onChange={(e) => {
+                        const cid = Number(e.target.value);
                         setTouched(true);
-                        setRenew({
-                          ...renew,
+                        setRenew((prev) => ({
+                          ...prev,
                           [c.cycle.id]: {
-                            ...renew[c.cycle.id],
-                            creditor_id: Number(e.target.value),
+                            ...prev[c.cycle.id],
+                            creditor_id: cid,
                           },
-                        });
+                        }));
                       }}
                     >
                       {catalog.users.map((u) => (
