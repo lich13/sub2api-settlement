@@ -21,7 +21,7 @@ RUN useradd -u 10002 -M settlement
 ARG APP_REVISION=development
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV DATA_DIR=/data APP_REVISION=${APP_REVISION} SETTLEMENT_ASSETS=/app/frontend/dist
-LABEL org.opencontainers.image.title="Sub2API Settlement" org.opencontainers.image.version="0.13.0" org.opencontainers.image.revision=${APP_REVISION}
+LABEL org.opencontainers.image.title="Sub2API Settlement" org.opencontainers.image.version="0.13.1" org.opencontainers.image.revision=${APP_REVISION}
 WORKDIR /app
 COPY --from=backend /build/target/release/settlement ./settlement
 COPY --from=frontend /build/dist ./frontend/dist

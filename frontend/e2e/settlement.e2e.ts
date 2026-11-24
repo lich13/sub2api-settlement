@@ -77,7 +77,14 @@ test("admin settles an account cycle and voids the resulting settlement", async 
 
   await page.getByRole("navigation", { name: "结算导航" }).getByRole("button", { name: "管理" }).click();
   await page.getByRole("button", { name: "全部订单", exact: true }).click();
-  await expect(page.locator(".raw-orders > summary > svg")).toBeVisible();
+  const rawSummary = page.locator(".raw-orders > summary");
+  const rawChevron = page.locator(".raw-orders > summary > svg");
+  await expect(rawChevron).toBeVisible();
+  const rawSummaryBox = await rawSummary.boundingBox();
+  const rawChevronBox = await rawChevron.boundingBox();
+  expect(rawSummaryBox).not.toBeNull();
+  expect(rawChevronBox).not.toBeNull();
+  expect(rawChevronBox!.x).toBeGreaterThan(rawSummaryBox!.x + rawSummaryBox!.width - 36);
   await page.getByRole("button", { name: "操作记录", exact: true }).click();
   await expect(page.locator(".audit-list details > summary > svg").first()).toBeVisible();
   await page.getByRole("button", { name: "周期", exact: true }).click();

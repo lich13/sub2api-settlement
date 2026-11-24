@@ -1,5 +1,22 @@
 # 更新日志
 
+## v0.13.1 · 2026-11-24
+
+### 界面与版本号展示
+
+- 顶栏标题“结算中心”右侧新增当前版本号展示（`v0.13.1`）：`GET /settlement/api/v1/me` 返回权威版本号，前端注入构建期版本作为未登录态回退，并通过发布单测校验 `Cargo.toml`、`xtask/Cargo.toml`、`frontend/package.json`、`Dockerfile` 与 `CHANGELOG.md` 五处版本一致。
+- 加固顶栏窄屏单行防折行与身份省略排版，确保 `360px / 375px / 390px` 零挤压、零横滚；将补计歧义请求、原始订单与操作日志三处折叠区统一替换为旋转矢量箭头，并收口空状态与错误提示组件。
+
+### 架构减法与契约收紧
+
+- 下线 `start-confirm` 的 `"legacy"` 死分支及 `bill-confirm` / `vendor-bill-confirm` 零读取的 `accept_difference`、`accept_outside` 入参；移除 `GET /overview` 恒零的 `submitted_fen` 查询、`GET /catalog` 的 `earliest_usage_id` 与 `GET /vendors` 仅被单测锁死的 `current_period`、`waiting_renewal` 字段。
+- 拍平冗余包装函数并收口后端文件名清洗、活跃用户校验与有理数最大余数分摊辅助函数；将前端入口拆分为独立受控视图模块，按当前页签收敛后台轮询、消除管理页双份同步告警横幅，并为明细弹窗增加请求序号防陈旧响应覆盖。
+- 清理 `Cargo.toml` 未用特性、前端零读取类型字段、死样式规则与 33 个已除名孤立测试夹具，抽离前后端共享测试辅助函数。
+
+### 兼容性
+
+- 完整保留 schema 1–9 已发布迁移校验和、建表 SQL、最大余数分摊算法、账务摘要字段顺序与全部固定向量（`tests/golden/`）、源库只读隔离、Fernet 会话轮换、CSRF／幂等键与删除范围 `scope_digest` 服务端二次复核。
+
 ## v0.13.0 · 2026-11-24
 
 ### 交互与流程精简

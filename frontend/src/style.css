@@ -1065,14 +1065,19 @@ td small {
 .netting-order strong, .netting-order span { display: block; }
 .netting-order span { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .netting-order b { white-space: nowrap; font-variant-numeric: tabular-nums; }
-:is(.manual-ambiguous, .raw-orders, .audit-list details) > summary {
+.manual-ambiguous > summary,
+.raw-orders > summary,
+.audit-list details > summary {
   cursor: pointer;
   list-style: none;
-  display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-:is(.manual-ambiguous, .raw-orders) > summary {
+.audit-list details > summary {
+  display: inline-flex;
+}
+.manual-ambiguous > summary,
+.raw-orders > summary {
   display: flex;
   justify-content: space-between;
 }
