@@ -1,46 +1,6 @@
 use super::*;
 
 impl Service {
-    pub(super) async fn has_manual_draft(
-        db: &mut Db,
-        cycle: Option<i64>,
-        period: Option<i64>,
-    ) -> Result<bool> {
-        Ok(store::optional(
-            db,
-            "SELECT 1 FROM manual_bill_drafts WHERE cycle_id=? OR vendor_period_id=?",
-            &[json!(cycle), json!(period)],
-        )
-        .await?
-        .is_some())
-    }
-    pub(super) async fn clear_manual_draft(
-        db: &mut Db,
-        cycle: Option<i64>,
-        period: Option<i64>,
-    ) -> Result<()> {
-        store::exec(
-            db,
-            "DELETE FROM manual_bill_drafts WHERE cycle_id=? OR vendor_period_id=?",
-            &[json!(cycle), json!(period)],
-        )
-        .await?;
-        Ok(())
-    }
-    pub(super) async fn mark_manual_draft(
-        db: &mut Db,
-        cycle: Option<i64>,
-        period: Option<i64>,
-    ) -> Result<()> {
-        Self::clear_manual_draft(db, cycle, period).await?;
-        store::exec(
-            db,
-            "INSERT INTO manual_bill_drafts(cycle_id,vendor_period_id,created_at) VALUES(?,?,?)",
-            &[json!(cycle), json!(period), json!(time::now())],
-        )
-        .await?;
-        Ok(())
-    }
     pub(super) async fn manual_config(db: &mut Db, entity: &Value) -> Result<Option<Value>> {
         if entity["manual_basis_id"].is_null() {
             return Ok(None);

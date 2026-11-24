@@ -184,7 +184,7 @@ export type VendorPeriod = {
   manual_basis?: ManualBasis;
   manual_basis_id?: number|null;
   id: number; vendor_id: number; name: string; cost_fen: number; creditor_id: number;
-  creditor_name?: string; start: string; end: string | null; start_mode?: StartMode;
+  creditor_name?: string; start: string; end: string | null; bill_end?: string | null; start_mode?: StartMode;
   start_confirmed: boolean | number; version: number; status?: string;
   members?: Cycle[]; member_ids?: number[]; bill_import_id?: number | null;
   pending_bill?: boolean; basis?: "matched_upstream" | "local_consumption" | "manual_supplement";

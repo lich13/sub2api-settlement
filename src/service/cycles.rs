@@ -334,7 +334,6 @@ impl Service {
                 )
                 .await?;
             }
-            Self::clear_manual_draft(db, Some(cid), None).await?;
         }
         exec(
             db,

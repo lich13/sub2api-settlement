@@ -72,7 +72,10 @@ impl Reminders {
             .timeout(Duration::from_secs(5))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .map_err(|_| Error::unavailable())?;
+            .map_err(|err| {
+                tracing::error!(error = %err, "reminder http client initialization failed");
+                Error::unavailable()
+            })?;
         Ok(Self {
             config,
             lock: Mutex::new(()),
@@ -192,7 +195,27 @@ impl Reminders {
             .body(body.to_owned())
             .send()
             .await;
-        let success = response.as_ref().is_ok_and(|r| r.status().is_success());
+        let success = match &response {
+            Ok(r) if r.status().is_success() => true,
+            Ok(r) => {
+                tracing::warn!(
+                    reminder_id = id,
+                    status = %r.status(),
+                    attempts,
+                    "reminder webhook returned non-success status"
+                );
+                false
+            }
+            Err(err) => {
+                tracing::warn!(
+                    reminder_id = id,
+                    error = %err,
+                    attempts,
+                    "reminder webhook request failed"
+                );
+                false
+            }
+        };
         let status = if success {
             "sent"
         } else if attempts >= 5 {

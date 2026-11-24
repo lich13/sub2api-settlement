@@ -388,17 +388,7 @@ impl Service {
             self.present_cycle(&mut c).await;
             cycles.push(c);
         }
-        let mut audit = all(
-            &mut db,
-            "SELECT * FROM audit ORDER BY id DESC LIMIT 100",
-            &[],
-        )
-        .await?;
-        for a in &mut audit {
-            a["actor_name"] = json!(name(&mut db, int(a, "actor_id")).await?);
-            a["payload"] = serde_json::from_str(text(a, "payload"))?;
-        }
-        Ok(json!({"cycles":cycles,"account_revision":state["revision"],"audit":audit}))
+        Ok(json!({"cycles":cycles,"account_revision":state["revision"]}))
     }
     pub async fn cycle_detail(&self, actor: &Value, cid: i64) -> Result<Value> {
         let mut db = self.store.read().await?;

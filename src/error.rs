@@ -35,17 +35,20 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 impl From<sqlx::Error> for Error {
-    fn from(_: sqlx::Error) -> Self {
+    fn from(err: sqlx::Error) -> Self {
+        tracing::error!(error = %err, "database operation failed");
         Self::unavailable()
     }
 }
 impl From<std::io::Error> for Error {
-    fn from(_: std::io::Error) -> Self {
+    fn from(err: std::io::Error) -> Self {
+        tracing::error!(error = %err, "filesystem operation failed");
         Self::unavailable()
     }
 }
 impl From<serde_json::Error> for Error {
-    fn from(_: serde_json::Error) -> Self {
+    fn from(err: serde_json::Error) -> Self {
+        tracing::error!(error = %err, "json serialization failed");
         Self::unavailable()
     }
 }

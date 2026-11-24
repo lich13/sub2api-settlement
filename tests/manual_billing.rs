@@ -1063,6 +1063,23 @@ async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
     )
     .await
     .expect("changed manual basis preview");
+    let mut read_db = harness.app.service.store.read().await.unwrap();
+    let draft_count = settlement::store::all(&mut read_db, "SELECT * FROM manual_bill_drafts", &[])
+        .await
+        .unwrap()
+        .len();
+    drop(read_db);
+    assert_eq!(draft_count, 0, "preview must not dirty manual_bill_drafts");
+    let overview_during_preview = harness.app.service.overview(&admin()).await.unwrap();
+    assert!(
+        overview_during_preview["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["vendor_id"] == vendor["id"])
+            .all(|a| a["allocation_pending"] == false),
+        "unconfirmed preview must not flip global overview into allocation_pending"
+    );
     let pid = confirmed_period["id"].as_i64().unwrap();
     let prepared_bill = harness
         .app

@@ -103,7 +103,10 @@ impl Inventory {
         self.state.write().await.last_attempt = Some(Instant::now());
         let result=async{
             let raw=self.source.accounts().await?;let current:BTreeMap<_,_>=raw.iter().cloned().map(|a|(int(&a,"id"),a)).collect();
-            if current.len()!=raw.len()||current.keys().any(|id|*id<=0){return Err(Error::unavailable());}
+            if current.len()!=raw.len()||current.keys().any(|id|*id<=0){
+                tracing::warn!("upstream account snapshot contained invalid or duplicate account ids");
+                return Err(Error::unavailable());
+            }
             let prior=self.state.read().await.rows.clone();
             let known=prior.iter().map(|(id,a)|(*id,int(a,"root_id"))).collect();
             let roots=roots(&current,&known)?;
@@ -117,7 +120,8 @@ impl Inventory {
                     }
             Ok::<(),Error>(())
         }.await;
-        if result.is_err() {
+        if let Err(err) = result {
+            tracing::warn!(error = %err, "account inventory refresh failed");
             self.state.write().await.error = json!("账号状态核对失败，暂保留最近列表");
         }
         self.state.read().await.state()

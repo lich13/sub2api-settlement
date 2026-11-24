@@ -129,7 +129,6 @@ impl Service {
         manual_override: Option<Value>,
     ) -> Result<Value> {
         let period = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(pid)]).await?;
-        let pending_manual = Self::has_manual_draft(db, None, Some(pid)).await?;
         let manual = if rows.is_none() {
             Self::manual_config(db, &period).await?
         } else {
@@ -198,8 +197,8 @@ impl Service {
             let exact_cost = Decimal::parse(&format!("{}.{:02}", cost_fen / 100, cost_fen % 100))?;
             let bill_difference = resolved.as_ref().filter(|r|!r["total"].is_null()).map(|r| Decimal::parse(text(r,"total")).map(|t| exact_cost.subtract(&t))).transpose()?;
             let difference=bill_difference.as_ref().is_some_and(|d|d.rational()!=Decimal::zero().rational())||resolved.as_ref().is_some_and(|r|int(r,"unmatched_count")>0)||!gaps.is_empty();
-            let valid=eligible&&!pending_manual&&period["bill_end"]==end&&period["bill_digest"]==rules_digest&&(!difference||flag(&period,"bill_difference_confirmed"));
-            let group=json!({"id":pid,"vendor_id":period["vendor_id"],"name":period["name"],"version":period["version"],"cost_fen":period["cost_fen"],"creditor_id":period["creditor_id"],"start":period["start"],"end":end,"start_confirmed":flag(&period,"start_confirmed"),"member_ids":members.iter().map(|c|c["id"].clone()).collect::<Vec<_>>(),"basis":split["basis"],"bill_import_id":period["bill_import_id"],"pending_bill":!valid,"manual_basis_id":period["manual_basis_id"]});
+            let valid=eligible&&period["bill_end"]==end&&period["bill_digest"]==rules_digest&&(!difference||flag(&period,"bill_difference_confirmed"));
+            let group=json!({"id":pid,"vendor_id":period["vendor_id"],"name":period["name"],"version":period["version"],"cost_fen":period["cost_fen"],"creditor_id":period["creditor_id"],"start":period["start"],"end":end,"bill_end":period["bill_end"],"start_confirmed":flag(&period,"start_confirmed"),"member_ids":members.iter().map(|c|c["id"].clone()).collect::<Vec<_>>(),"basis":split["basis"],"bill_import_id":period["bill_import_id"],"pending_bill":!valid,"manual_basis_id":period["manual_basis_id"]});
             let mut calculations=Vec::new();
             for c in &members {
                 let a=array(&split["accounts"]).iter().find(|a|a["cycle_id"]==c["id"]).ok_or_else(Error::unavailable)?;
@@ -351,18 +350,12 @@ impl Service {
             &[json!(time::now())],
         )
         .await?;
-        if !prepared["result"]["manual_basis"].is_null()
-            || !prepared["period"]["manual_basis_id"].is_null()
-            || Self::has_manual_draft(&mut write, None, Some(pid)).await?
-        {
-            exec(
-                &mut write,
-                "DELETE FROM vendor_bill_previews WHERE vendor_period_id=?",
-                &[json!(pid)],
-            )
-            .await?;
-            Self::mark_manual_draft(&mut write, None, Some(pid)).await?;
-        }
+        exec(
+            &mut write,
+            "DELETE FROM vendor_bill_previews WHERE vendor_period_id=? AND actor_id=?",
+            &[json!(pid), actor["id"].clone()],
+        )
+        .await?;
         exec(
             &mut write,
             "INSERT INTO vendor_bill_previews VALUES(?,?,?,?,?)",
@@ -473,7 +466,6 @@ impl Service {
             .await?
         };
         let basis_id = Self::save_manual_basis(db, actor, None, Some(pid), r).await?;
-        Self::clear_manual_draft(db, None, Some(pid)).await?;
         exec(
             db,
             "UPDATE vendor_periods SET manual_basis_id=? WHERE id=?",

@@ -168,7 +168,6 @@ impl Service {
             None
         };
         let manual = Self::manual_config(db, c).await?;
-        let pending_manual = Self::has_manual_draft(db, Some(int(c, "id")), None).await?;
         let details = if bill.is_some() || manual.is_some() {
             Self::details(db, c, end).await?
         } else {
@@ -197,7 +196,6 @@ impl Service {
                 if manual.is_some() && gap.is_some(){result["can_settle"]=json!(false);result["cost_warning"]=json!("补计不能绕过本地消费覆盖缺口");}
                 result["bill"]=merge(resolved,json!({"file_name":bill["file_name"],"file_hash":bill["file_hash"],"import_id":bill["id"]}));
             }
-            if pending_manual {result["can_settle"]=json!(false);result["cost_warning"]=json!("人工计费依据已修改，请重新确认账单依据");}
             if include_records { result["records"]=serde_json::to_value(rows)?; }
             Ok(result)
         }).await.map_err(|_|Error::unavailable())?
@@ -531,16 +529,13 @@ impl Service {
             &[json!(time::now())],
         )
         .await?;
-        if !c["manual_basis_id"].is_null()
-            || Self::has_manual_draft(&mut db, Some(cid), None).await?
-        {
+        if !c["manual_basis_id"].is_null() {
             exec(
                 &mut db,
-                "DELETE FROM bill_previews WHERE cycle_id=?",
-                &[json!(cid)],
+                "DELETE FROM bill_previews WHERE cycle_id=? AND actor_id=?",
+                &[json!(cid), actor["id"].clone()],
             )
             .await?;
-            Self::mark_manual_draft(&mut db, Some(cid), None).await?;
         }
         exec(
             &mut db,
@@ -719,7 +714,6 @@ impl Service {
             ),
         )
         .await?;
-        Self::clear_manual_draft(db, Some(cid), None).await?;
         exec(
             db,
             "UPDATE cycles SET manual_basis_id=? WHERE id=?",

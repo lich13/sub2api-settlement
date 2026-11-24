@@ -68,11 +68,9 @@ export function App() {
   const [expenses, setExpenses] = useState<ExpenseCalculation[]>([]);
   const [historySource, setHistory] = useState<{
     cycles: Cycle[];
-    audit: any[];
     account_revision?: string;
   }>({
     cycles: [],
-    audit: [],
   });
   const [inbox, setInbox] = useState<{ items: any[]; unread: number }>({
     items: [],
@@ -239,7 +237,7 @@ export function App() {
       setVendors([]);
       setVendorManager(null);
       setCatalog(null);
-      setHistory({ cycles: [], audit: [] });
+      setHistory({ cycles: [] });
       setDeletions([]);
       ++refreshSequence.current;
       setOrders([]);
@@ -257,15 +255,60 @@ export function App() {
     window.addEventListener("settlement:expired", clear);
     return () => window.removeEventListener("settlement:expired", clear);
   }, []);
+  const lastRefreshAt = useRef(0);
   async function refresh() {
     if (!me) return;
+    lastRefreshAt.current = Date.now();
     const sequence = ++refreshSequence.current;
+    const scope = tab === "bills" ? "mine" : "all";
+    const needOrders =
+      tab === "bills" || (tab === "manage" && manageTab === "orders");
+    const needReceivable = tab === "receivable";
+    const needExpenses = tab === "accounts";
+    const needHistory = isAdmin && tab === "manage" && manageTab === "cycles";
+    const needDeletions =
+      isAdmin && tab === "manage" && manageTab === "deletions";
     try {
-      const [data, messages, accounts, supplierData] = await Promise.all([
+      const [
+        data,
+        messages,
+        accounts,
+        supplierData,
+        receivableNet,
+        orderBundle,
+        expenseResult,
+        past,
+        jobs,
+      ] = await Promise.all([
         api<Overview>("/overview"),
-        api("/inbox"),
+        api<{ items: any[]; unread: number }>("/inbox"),
         isAdmin ? api<Catalog>("/catalog") : Promise.resolve(null),
         api<{ vendors: Vendor[]; account_revision?: string }>("/vendors"),
+        needReceivable
+          ? api<{ balances: NetBalance[] }>(
+              "/netting/balances?scope=receivable",
+            )
+          : Promise.resolve(null),
+        needOrders
+          ? Promise.all([
+              api<{ orders: Order[] }>("/orders?scope=" + scope),
+              api<{ balances: NetBalance[] }>(
+                "/netting/balances?scope=" + scope,
+              ),
+              api<{ payments: NetPayment[] }>(
+                "/netting/payments?scope=" + scope,
+              ),
+            ])
+          : Promise.resolve(null),
+        needExpenses
+          ? api<{ expenses: ExpenseCalculation[] }>("/expenses")
+          : Promise.resolve(null),
+        needHistory
+          ? api<{ cycles: Cycle[]; account_revision?: string }>("/history")
+          : Promise.resolve(null),
+        needDeletions
+          ? api<{ items: DeletionJob[] }>("/account-deletions")
+          : Promise.resolve(null),
       ]);
       if (sequence !== refreshSequence.current) return;
       setOverview(data);
@@ -273,62 +316,38 @@ export function App() {
       setCatalog(accounts);
       setVendors(supplierData.vendors || []);
       setVendorRevision(supplierData.account_revision || "");
-      if (tab === "receivable") {
-        setBalances(
-          (await api<{ balances: NetBalance[] }>("/netting/balances?scope=receivable"))
-            .balances,
-        );
-      } else if (
-        tab === "bills" ||
-        (tab === "manage" && manageTab === "orders")
-      ) {
-        const scope = tab === "bills" ? "mine" : "all";
-        const [raw, net, paid] = await Promise.all([
-          api<{ orders: Order[] }>("/orders?scope=" + scope),
-          api<{ balances: NetBalance[] }>("/netting/balances?scope=" + scope),
-          api<{ payments: NetPayment[] }>("/netting/payments?scope=" + scope),
-        ]);
-        if (sequence !== refreshSequence.current) return;
+      if (receivableNet) setBalances(receivableNet.balances);
+      if (orderBundle) {
+        const [raw, net, paid] = orderBundle;
         setOrders(raw.orders);
         setBalances(net.balances);
         setPayments(paid.payments);
       }
-      if (tab === "accounts") {
-        const result = await api<{ expenses: ExpenseCalculation[] }>(
-          "/expenses",
-        );
-        if (sequence !== refreshSequence.current) return;
-        setExpenses(result.expenses);
-      }
-      if (isAdmin && tab === "manage") {
-        const [past, jobs] = await Promise.all([
-          api("/history"),
-          api<{ items: DeletionJob[] }>("/account-deletions"),
-        ]);
-        if (sequence !== refreshSequence.current) return;
-        setHistory(past);
-        setDeletions(jobs.items);
-      }
+      if (expenseResult) setExpenses(expenseResult.expenses);
+      if (past) setHistory(past);
+      if (jobs) setDeletions(jobs.items);
     } catch (e) {
       setError((e as Error).message);
     }
   }
   useEffect(() => {
     if (!me) return;
-    void refresh();
-    const timer = setInterval(() => {
-      if (!document.hidden) void refresh();
-    }, 10_000);
-    const visible = () => {
-      if (!document.hidden) void refresh();
+    if (!(tab === "manage" && manageTab === "audit" && overviewSource)) {
+      void refresh();
+    }
+    const poll = () => {
+      if (!document.hidden && Date.now() - lastRefreshAt.current >= 1000) {
+        void refresh();
+      }
     };
-    document.addEventListener("visibilitychange", visible);
+    const timer = setInterval(poll, 10_000);
+    document.addEventListener("visibilitychange", poll);
     return () => {
       ++refreshSequence.current;
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", visible);
+      document.removeEventListener("visibilitychange", poll);
     };
-  }, [me, tab, manageTab, costView]);
+  }, [me, tab, manageTab]);
   const discoveredAccounts = useRef("");
   useEffect(() => {
     if (!accountState?.accounts || !overviewSource || accountState.error)
