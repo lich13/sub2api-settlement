@@ -12,15 +12,29 @@ async function assertNoHorizontalOverflow(page: Page) {
     viewport: window.innerWidth,
     document: document.documentElement.scrollWidth,
     body: document.body.scrollWidth,
+    shells: [...document.querySelectorAll<HTMLElement>(".table-shell")]
+      .filter((el) => el.clientWidth > 0)
+      .map((el) => ({ client: el.clientWidth, scroll: el.scrollWidth })),
+    dialogs: [...document.querySelectorAll<HTMLElement>("dialog[open]")]
+      .filter((el) => el.clientWidth > 0)
+      .map((el) => ({ client: el.clientWidth, scroll: el.scrollWidth })),
   }));
   expect(dimensions.document, "document should fit the viewport").toBeLessThanOrEqual(dimensions.viewport);
   expect(dimensions.body, "body should fit the viewport").toBeLessThanOrEqual(dimensions.viewport);
+  for (const shell of dimensions.shells) {
+    expect(shell.scroll, "table-shell should not scroll horizontally").toBeLessThanOrEqual(shell.client + 1);
+  }
+  for (const dialog of dimensions.dialogs) {
+    expect(dialog.scroll, "open dialog should not scroll horizontally").toBeLessThanOrEqual(dialog.client + 1);
+  }
 }
 
 test("admin can reach settlement controls at desktop and narrow widths in both themes", async ({ page, demo }) => {
   const variants = [
     { width: 1440, height: 900, theme: "light" as const },
     { width: 1440, height: 900, theme: "dark" as const },
+    { width: 768, height: 900, theme: "light" as const },
+    { width: 768, height: 900, theme: "dark" as const },
     { width: 390, height: 844, theme: "light" as const },
     { width: 390, height: 844, theme: "dark" as const },
     { width: 375, height: 667, theme: "light" as const },
@@ -60,6 +74,23 @@ test("admin can reach settlement controls at desktop and narrow widths in both t
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(variant.width);
+
+    const grokRow = page.locator(".accounts-table tbody tr").filter({ hasText: "Grok Super" });
+    const confirmBox = await grokRow.getByRole("button", { name: "确认起点", exact: true }).boundingBox();
+    const editBox = await grokRow.getByRole("button", { name: "修改成本" }).boundingBox();
+    const renewBox = await grokRow.getByRole("button", { name: "结算并续费", exact: true }).boundingBox();
+    const detailBox = await grokRow.getByRole("button", { name: /周期明细/ }).boundingBox();
+    const rowActionsBox = await grokRow.locator(".action-cell .row-actions").boundingBox();
+    expect(confirmBox).not.toBeNull();
+    expect(editBox).not.toBeNull();
+    expect(renewBox).not.toBeNull();
+    expect(detailBox).not.toBeNull();
+    expect(rowActionsBox).not.toBeNull();
+    expect(Math.abs(confirmBox!.y - editBox!.y)).toBeLessThanOrEqual(4);
+    expect(confirmBox!.x + confirmBox!.width).toBeLessThanOrEqual(editBox!.x + 1);
+    expect(renewBox!.x + renewBox!.width).toBeLessThanOrEqual(variant.width);
+    expect(detailBox!.x + detailBox!.width).toBeLessThanOrEqual(variant.width);
+    expect(rowActionsBox!.height).toBeLessThanOrEqual(80);
     await assertNoHorizontalOverflow(page);
   }
 
@@ -75,7 +106,7 @@ test("admin can reach settlement controls at desktop and narrow widths in both t
     });
   });
 
-  for (const width of [768, 361]) {
+  for (const width of [768, 761, 361]) {
     await page.setViewportSize({ width, height: 900 });
     await loginAsAdmin(page, demo, "light");
     await expect(page.locator(".topbar .identity-name")).toBeVisible();
@@ -187,22 +218,37 @@ test("admin creates and reconfigures an account group without retired first-peri
   await page.getByRole("button", { name: "新建账号组", exact: true }).click();
   let dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "新建账号组" })).toBeVisible();
-  await dialog.getByLabel("账号组名称").fill("E2E 供应商组");
+  const groupName = "E2E_供应商账号组_OpenAI_Claude_共享额度池_超长名称校验";
+  await dialog.getByLabel("账号组名称").fill(groupName);
   await dialog.getByLabel("本期准确总成本（元）").fill("18.00");
   await dialog.getByRole("button", { name: "全选", exact: true }).click();
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 
-  const group = page.locator(".vendor-group").filter({ hasText: "E2E 供应商组" });
+  const group = page.locator(".vendor-group").filter({ hasText: groupName });
   await expect(group).toContainText("进行中");
   await expect(group).toContainText("¥18.00");
   await expect(group).not.toContainText("待配置首期");
   await group.locator("summary").click();
+  const groupBox = await group.boundingBox();
+  const actionsBox = await group.locator(".vendor-actions").boundingBox();
+  expect(groupBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  expect(Math.abs(actionsBox!.width - (groupBox!.width - 2))).toBeLessThanOrEqual(2);
   await group.getByRole("button", { name: "管理账号组", exact: true }).click();
 
   dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "账号组管理" })).toBeVisible();
   await expect(dialog).not.toContainText("配置首期");
+  await page.setViewportSize({ width: 360, height: 640 });
+  const headAmountBox = await dialog.locator(".allocation-head > strong.amount").first().boundingBox();
+  const periodBtnBox = await dialog.locator(".vendor-period-row > button").first().boundingBox();
+  expect(headAmountBox).not.toBeNull();
+  expect(headAmountBox!.height).toBeLessThanOrEqual(28);
+  expect(periodBtnBox).not.toBeNull();
+  expect(periodBtnBox!.height).toBeLessThanOrEqual(34);
+  await assertNoHorizontalOverflow(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
   await dialog.getByRole("button", { name: "整组配置", exact: true }).click();
   await dialog.getByLabel("本期准确总成本（元）").fill("24.00");
   await dialog.getByRole("button", { name: "保存", exact: true }).click();

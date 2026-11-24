@@ -1,7 +1,26 @@
 use super::*;
-use crate::json::{digest, int, text};
+use crate::json::digest;
 use num_bigint::BigUint;
 use std::collections::BTreeMap;
+
+#[derive(serde::Serialize)]
+struct CanonicalSourceRow<'a> {
+    account_id: i64,
+    amount: &'a str,
+    cache_creation_tokens: Option<i64>,
+    cache_read_tokens: Option<i64>,
+    created_at: &'a str,
+    id: i64,
+    input_tokens: Option<i64>,
+    model: Option<&'a str>,
+    output_tokens: Option<i64>,
+    request_id: Option<&'a str>,
+    requested_model: Option<&'a str>,
+    upstream_model: Option<&'a str>,
+    upstream_request_id: Option<&'a str>,
+    upstream_response_model: Option<&'a str>,
+    user_id: i64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fingerprint {
@@ -66,19 +85,33 @@ impl Snapshot {
                 let mask = (BigUint::from(1u8) << 256usize) - BigUint::from(1u8);
                 let mut buckets: BTreeMap<(i64, String), Bucket> = BTreeMap::new();
                 while let Some(rows) = input.receiver.recv().await.transpose()? {
-                    for mut row in rows {
-                        let amount = Decimal::parse(text(&row, "amount"))?;
-                        let at = time::instant(text(&row, "created_at"))?;
-                        row["amount"] = json!(amount.to_string());
-                        row["created_at"] = json!(at);
-                        let key = (int(&row, "account_id"), at[..10].to_owned());
+                    for row in rows {
+                        let amount = Decimal::parse(&row.amount)?;
+                        let key = (row.account_id, row.created_at[..10].to_owned());
+                        let canonical = CanonicalSourceRow {
+                            account_id: row.account_id,
+                            amount: &row.amount,
+                            cache_creation_tokens: row.detail.cache_creation_tokens,
+                            cache_read_tokens: row.detail.cache_read_tokens,
+                            created_at: &row.created_at,
+                            id: row.id,
+                            input_tokens: row.detail.input_tokens,
+                            model: row.detail.model.as_deref(),
+                            output_tokens: row.detail.output_tokens,
+                            request_id: row.detail.request_id.as_deref(),
+                            requested_model: row.detail.requested_model.as_deref(),
+                            upstream_model: row.detail.upstream_model.as_deref(),
+                            upstream_request_id: row.detail.upstream_request_id.as_deref(),
+                            upstream_response_model: row.detail.upstream_response_model.as_deref(),
+                            user_id: row.user_id,
+                        };
                         let bucket = buckets
                             .entry(key)
                             .or_insert_with(|| (Decimal::zero(), 0, BigUint::from(0u8)));
                         bucket.0.add(&amount);
                         bucket.1 += 1;
                         bucket.2 = (&bucket.2
-                            + BigUint::parse_bytes(digest(&row).as_bytes(), 16)
+                            + BigUint::parse_bytes(digest(&canonical).as_bytes(), 16)
                                 .ok_or_else(Error::unavailable)?)
                             & &mask;
                     }

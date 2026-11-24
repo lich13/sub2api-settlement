@@ -1,6 +1,6 @@
 [package]
 name = "settlement"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2024"
 license = "MIT"
 rust-version = "1.94"
@@ -34,7 +34,6 @@ rand = "0.10"
 subtle = "2"
 uuid = { version = "1", features = ["v4"] }
 csv = "1"
-regex = "1"
 futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

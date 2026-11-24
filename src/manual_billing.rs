@@ -3,7 +3,7 @@ use crate::{
     billing::{self, BillRow, RequestDetail, UsageRow},
     error::{Error, Result},
     json::{array, digest, int, text},
-    money::{Decimal, from_ratio, largest_remainder, round_cents},
+    money::{Decimal, from_ratio, largest_remainder, round_cents, valid_decimal_ascii},
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
@@ -36,10 +36,7 @@ pub fn normalize(v: &Value) -> Result<Value> {
             .as_str()
             .ok_or_else(|| Error::invalid("倍率须为十进制字符串"))?
             .trim();
-        static RATE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$").expect("fixed rate pattern")
-        });
-        if !rate.is_empty() && (rate.len() > 10000 || !RATE.is_match(rate)) {
+        if !rate.is_empty() && (rate.len() > 10000 || !valid_decimal_ascii(rate, 10000, 6, false)) {
             return Err(Error::invalid("倍率须为非负数，最多六位小数"));
         }
         if r.as_object().is_none_or(|o| o.len() != 2)

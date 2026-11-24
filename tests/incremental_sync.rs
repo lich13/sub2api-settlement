@@ -153,7 +153,7 @@ fn minutes_before(value: &str, minutes: i64) -> String {
         .unwrap()
         .checked_sub(time::Duration::minutes(minutes))
         .unwrap();
-    time::normalize_datetime(&time::format(shifted), false).unwrap()
+    time::normalize_datetime(&time::format(shifted)).unwrap()
 }
 
 #[tokio::test]
@@ -419,5 +419,453 @@ async fn sync_selection_rechecks_old_rows_in_the_entire_selected_range() {
         vec![1, 2, 4],
         "selected sync must scan all records in-range, including old IDs"
     );
+    close_app(&app).await;
+}
+
+#[tokio::test]
+async fn drift_detection_scopes_recalculation_to_changed_timestamp_windows() {
+    let temporary = TempDir::new().unwrap();
+    let fixture = temporary.path().join("source.json");
+    let accounts = [account(100, None)];
+    let mut rows = vec![
+        usage(1, 100, 101, "1.00", "2023-12-31T00:00:00+00:00"),
+        usage(2, 100, 101, "10.00", "2024-01-15T00:00:00+00:00"),
+        usage(3, 100, 101, "20.00", "2024-02-10T00:00:00+00:00"),
+    ];
+    write_fixture(&fixture, 1, &accounts, &rows);
+    let app = new_app(&temporary, &fixture).await;
+    sync_now(&app, true).await.unwrap();
+
+    let admin = json!({"id": 101, "name": "Fixture user 101", "role": "admin"});
+    let create_and_settle = |key_prefix: &str, name: &str, start: &str, end: &str| {
+        let app = &app;
+        let admin = admin.clone();
+        let create_key = format!("{key_prefix}-create");
+        let settle_key = format!("{key_prefix}-settle");
+        let payload = json!({
+            "account_id": 100,
+            "name": name,
+            "cost": "10.00",
+            "creditor_id": 101,
+            "start": start,
+            "start_mode": "exact",
+            "cost_kind": "exact"
+        });
+        let end = end.to_owned();
+        async move {
+            let cycle = app
+                .service
+                .mutate(
+                    &admin,
+                    &create_key,
+                    "create",
+                    &payload,
+                    settlement::service::Prepared::default(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let cycle_id = cycle["id"].as_i64().unwrap();
+            let preview = app
+                .service
+                .preview(
+                    &admin,
+                    &json!({"ids": [cycle_id], "expense_ids": [], "end": end}),
+                )
+                .await
+                .unwrap();
+            let settle_payload = json!({
+                "preview_id": preview["id"],
+                "renewals": [],
+                "delete_cycle_ids": []
+            });
+            let prepared = app
+                .service
+                .prepare_settlement(&admin, &settle_payload)
+                .await
+                .unwrap();
+            app.service
+                .mutate(
+                    &admin,
+                    &settle_key,
+                    "settle",
+                    &settle_payload,
+                    prepared,
+                    None,
+                )
+                .await
+                .unwrap();
+            cycle_id
+        }
+    };
+
+    let jan_cycle = create_and_settle(
+        "jan",
+        "Jan 2024",
+        "2024-01-01T00:00:00+00:00",
+        "2024-02-01T00:00:00+00:00",
+    )
+    .await;
+    let feb_cycle = create_and_settle(
+        "feb",
+        "Feb 2024",
+        "2024-02-01T00:00:00+00:00",
+        "2024-03-01T00:00:00+00:00",
+    )
+    .await;
+
+    let drift_flags = || async {
+        let mut db = app.service.store.read().await.unwrap();
+        let jan: i64 = sqlx::query_scalar("SELECT drift FROM settlements WHERE cycle_id=?")
+            .bind(jan_cycle)
+            .fetch_one(&mut *db)
+            .await
+            .unwrap();
+        let feb: i64 = sqlx::query_scalar("SELECT drift FROM settlements WHERE cycle_id=?")
+            .bind(feb_cycle)
+            .fetch_one(&mut *db)
+            .await
+            .unwrap();
+        db.commit().await.unwrap();
+        (jan, feb)
+    };
+    assert_eq!(drift_flags().await, (0, 0));
+
+    // 1. Out-of-window append in March leaves both historical settlements untouched.
+    rows.push(usage(4, 100, 102, "30.00", "2024-03-05T00:00:00+00:00"));
+    write_fixture(&fixture, 2, &accounts, &rows);
+    sync_now(&app, false).await.unwrap();
+    assert_eq!(drift_flags().await, (0, 0));
+
+    // 2. Moving an existing February row into March overlaps Feb via its prior timestamp,
+    // marking Feb drifted while leaving Jan untouched.
+    rows[2]["created_at"] = json!("2024-03-06T00:00:00+00:00");
+    write_fixture(&fixture, 3, &accounts, &rows);
+    sync_now(&app, true).await.unwrap();
+    assert_eq!(drift_flags().await, (0, 1));
+
+    // 3. Mutating an in-window January row marks Jan drifted as well.
+    rows[1]["user_id"] = json!(102);
+    write_fixture(&fixture, 4, &accounts, &rows);
+    sync_now(&app, true).await.unwrap();
+    assert_eq!(drift_flags().await, (1, 1));
+
+    close_app(&app).await;
+}
+
+#[tokio::test]
+async fn drift_detection_marks_both_roots_when_child_shadow_reparents() {
+    let temporary = TempDir::new().unwrap();
+    let fixture = temporary.path().join("source.json");
+    let initial_accounts = [
+        account(100, None),
+        account(200, None),
+        account(105, Some(100)),
+    ];
+    let rows = [
+        usage(1, 100, 101, "1.00", "2023-12-31T00:00:00+00:00"),
+        usage(2, 105, 102, "10.00", "2024-01-15T00:00:00+00:00"),
+        usage(3, 200, 101, "10.00", "2024-01-16T00:00:00+00:00"),
+        usage(4, 200, 101, "10.00", "2024-02-10T00:00:00+00:00"),
+    ];
+    write_fixture(&fixture, 1, &initial_accounts, &rows);
+    let app = new_app(&temporary, &fixture).await;
+    sync_now(&app, true).await.unwrap();
+
+    let admin = json!({"id": 101, "name": "Fixture user 101", "role": "admin"});
+    let settle_one = |key: &str, aid: i64, start: &str, end: &str| {
+        let app = &app;
+        let admin = admin.clone();
+        let key = key.to_owned();
+        let start = start.to_owned();
+        let end = end.to_owned();
+        async move {
+            let c = app
+                .service
+                .mutate(
+                    &admin,
+                    &format!("{key}-c"),
+                    "create",
+                    &json!({
+                        "account_id": aid,
+                        "name": format!("Root {aid} {key}"),
+                        "cost": "10.00",
+                        "creditor_id": 101,
+                        "start": start,
+                        "start_mode": "exact",
+                        "cost_kind": "exact"
+                    }),
+                    settlement::service::Prepared::default(),
+                    None,
+                )
+                .await
+                .unwrap();
+            let cid = c["id"].as_i64().unwrap();
+            let preview = app
+                .service
+                .preview(
+                    &admin,
+                    &json!({"ids": [cid], "expense_ids": [], "end": end}),
+                )
+                .await
+                .unwrap();
+            let payload =
+                json!({"preview_id": preview["id"], "renewals": [], "delete_cycle_ids": []});
+            let prepared = app
+                .service
+                .prepare_settlement(&admin, &payload)
+                .await
+                .unwrap();
+            app.service
+                .mutate(
+                    &admin,
+                    &format!("{key}-s"),
+                    "settle",
+                    &payload,
+                    prepared,
+                    None,
+                )
+                .await
+                .unwrap();
+            cid
+        }
+    };
+
+    let c100_jan = settle_one(
+        "r100-jan",
+        100,
+        "2024-01-01T00:00:00+00:00",
+        "2024-02-01T00:00:00+00:00",
+    )
+    .await;
+    let c200_jan = settle_one(
+        "r200-jan",
+        200,
+        "2024-01-01T00:00:00+00:00",
+        "2024-02-01T00:00:00+00:00",
+    )
+    .await;
+    let c200_feb = settle_one(
+        "r200-feb",
+        200,
+        "2024-02-01T00:00:00+00:00",
+        "2024-03-01T00:00:00+00:00",
+    )
+    .await;
+
+    let reparented = [
+        account(100, None),
+        account(200, None),
+        account(105, Some(200)),
+    ];
+    write_fixture(&fixture, 2, &reparented, &rows);
+    sync_now(&app, false).await.unwrap();
+
+    let mut db = app.service.store.read().await.unwrap();
+    let d100: i64 = sqlx::query_scalar("SELECT drift FROM settlements WHERE cycle_id=?")
+        .bind(c100_jan)
+        .fetch_one(&mut *db)
+        .await
+        .unwrap();
+    let d200_jan: i64 = sqlx::query_scalar("SELECT drift FROM settlements WHERE cycle_id=?")
+        .bind(c200_jan)
+        .fetch_one(&mut *db)
+        .await
+        .unwrap();
+    let d200_feb: i64 = sqlx::query_scalar("SELECT drift FROM settlements WHERE cycle_id=?")
+        .bind(c200_feb)
+        .fetch_one(&mut *db)
+        .await
+        .unwrap();
+    db.commit().await.unwrap();
+    assert_eq!(
+        (d100, d200_jan, d200_feb),
+        (1, 1, 0),
+        "reparenting Jan child usage drifts both Jan parents while leaving Feb untouched"
+    );
+
+    close_app(&app).await;
+}
+
+#[tokio::test]
+async fn incremental_sync_with_historical_gap_skips_unchanged_settled_vendor_periods() {
+    let temporary = TempDir::new().unwrap();
+    let fixture = temporary.path().join("source.json");
+    let accounts = [account(100, None)];
+    let mut rows = vec![
+        usage(1, 100, 101, "1.00", "2023-12-31T00:00:00+00:00"),
+        usage(2, 100, 102, "10.00", "2024-01-15T00:00:00+00:00"),
+    ];
+    write_fixture(&fixture, 1, &accounts, &rows);
+    let app = new_app(&temporary, &fixture).await;
+    sync_now(&app, true).await.unwrap();
+
+    // Persist a historical coverage gap overlapping January 2024 on root 100.
+    {
+        let mut db = app.service.store.write().await.unwrap();
+        settlement::store::put(
+            &mut db,
+            "coverage_gaps",
+            &json!([{
+                "id": 9001,
+                "start": "2024-01-10T00:00:00.000000+00:00",
+                "end": "2024-01-12T00:00:00.000000+00:00",
+                "root_id": 100
+            }]),
+        )
+        .await
+        .unwrap();
+        db.commit().await.unwrap();
+    }
+
+    let admin = json!({"id": 101, "name": "Fixture user 101", "role": "admin"});
+    let vendor = app
+        .service
+        .mutate(
+            &admin,
+            "gap-vendor-create",
+            "create-vendor",
+            &json!({
+                "name": "Gap vendor",
+                "cost": "10.00",
+                "creditor_id": 101,
+                "start": "2024-01-01T00:00:00+00:00",
+                "start_mode": "exact",
+                "account_ids": [100]
+            }),
+            settlement::service::Prepared::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    let pid = vendor["period"]["id"].as_i64().unwrap();
+    let pver = vendor["period"]["version"].as_i64().unwrap();
+    let csv = "Time,Billed Cost,Model,Request ID,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens\n\
+               2024-01-15T00:00:00Z,10.00,gpt-4o,fixture-request-2,1,2,0,0\n";
+    let bill_preview = app
+        .service
+        .vendor_bill_preview(
+            &admin,
+            pid,
+            &json!({
+                "version": pver,
+                "end": "2024-02-01T00:00:00+00:00",
+                "csv": csv,
+                "file_name": "jan.csv"
+            }),
+        )
+        .await
+        .unwrap();
+    let confirm_data = json!({"version": pver, "preview_id": bill_preview["id"]});
+    let prepared_bill = app
+        .service
+        .prepare_vendor_bill(&admin, pid, &confirm_data)
+        .await
+        .unwrap();
+    app.service
+        .mutate(
+            &admin,
+            "gap-vendor-bill-confirm",
+            &format!("vendor-bill-confirm:{pid}"),
+            &confirm_data,
+            settlement::service::Prepared {
+                vendor_bill: Some(prepared_bill),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let cid: i64 = {
+        let mut db = app.service.store.read().await.unwrap();
+        let id = sqlx::query_scalar("SELECT id FROM cycles WHERE vendor_period_id=?")
+            .bind(pid)
+            .fetch_one(&mut *db)
+            .await
+            .unwrap();
+        db.commit().await.unwrap();
+        id
+    };
+    let preview = app
+        .service
+        .preview(
+            &admin,
+            &json!({"ids": [cid], "expense_ids": [], "end": "2024-02-01T00:00:00+00:00"}),
+        )
+        .await
+        .unwrap();
+    let settle_payload =
+        json!({"preview_id": preview["id"], "renewals": [], "delete_cycle_ids": []});
+    let prepared = app
+        .service
+        .prepare_settlement(&admin, &settle_payload)
+        .await
+        .unwrap();
+    app.service
+        .mutate(
+            &admin,
+            "gap-vendor-settle",
+            "settle",
+            &settle_payload,
+            prepared,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Poison stored vendor_bill_imports.rows temporarily so any spurious vendor_calculation
+    // during no-op or out-of-window incremental sync fails loudly.
+    let saved_rows: String = {
+        let mut db = app.service.store.write().await.unwrap();
+        let orig: String =
+            sqlx::query_scalar("SELECT rows FROM vendor_bill_imports WHERE vendor_period_id=?")
+                .bind(pid)
+                .fetch_one(&mut *db)
+                .await
+                .unwrap();
+        sqlx::query("UPDATE vendor_bill_imports SET rows='not-json' WHERE vendor_period_id=?")
+            .bind(pid)
+            .execute(&mut *db)
+            .await
+            .unwrap();
+        db.commit().await.unwrap();
+        orig
+    };
+
+    // 1. No-op incremental sync skips drift evaluation despite persisted coverage_gaps.
+    sync_now(&app, false).await.unwrap();
+
+    // 2. Out-of-window March append also skips the settled January vendor period.
+    rows.push(usage(3, 100, 102, "5.00", "2024-03-05T00:00:00+00:00"));
+    write_fixture(&fixture, 2, &accounts, &rows);
+    sync_now(&app, false).await.unwrap();
+
+    // 3. Restore valid rows and mutate January usage -> January vendor settlement drifts.
+    {
+        let mut db = app.service.store.write().await.unwrap();
+        sqlx::query("UPDATE vendor_bill_imports SET rows=? WHERE vendor_period_id=?")
+            .bind(&saved_rows)
+            .bind(pid)
+            .execute(&mut *db)
+            .await
+            .unwrap();
+        db.commit().await.unwrap();
+    }
+    rows[1]["amount"] = json!("12.00");
+    write_fixture(&fixture, 3, &accounts, &rows);
+    sync_now(&app, true).await.unwrap();
+
+    let drifted: i64 = {
+        let mut db = app.service.store.read().await.unwrap();
+        let d = sqlx::query_scalar("SELECT drift FROM settlements WHERE cycle_id=?")
+            .bind(cid)
+            .fetch_one(&mut *db)
+            .await
+            .unwrap();
+        db.commit().await.unwrap();
+        d
+    };
+    assert_eq!(drifted, 1);
+
     close_app(&app).await;
 }

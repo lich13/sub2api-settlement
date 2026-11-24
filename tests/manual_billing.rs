@@ -175,6 +175,7 @@ async fn preview_cycle(
     if let Some(config) = config {
         payload["manual_basis"] = config;
     }
+    let payload = settlement::input::normalize("bill-preview", payload)?;
     harness
         .app
         .service
@@ -225,19 +226,44 @@ async fn inject_historical_cycle_manual_basis(harness: &Harness, cycle_id: i64, 
     .await
     .unwrap();
     let normalized = manual_billing::normalize(&config).unwrap();
-    let resolved = harness
-        .app
-        .service
-        .reconcile_db(
-            &mut db,
-            &c,
-            &bill_end,
-            std::sync::Arc::new(Vec::new()),
-            Some(normalized.clone()),
-            "matched_only",
+    let root = c["account_id"].as_i64().unwrap();
+    let start = c["start"].as_str().unwrap();
+    let usage: Vec<UsageRow> = settlement::store::all(
+        &mut db,
+        "SELECT account_id,amount,created_at,id,root_id,user_id FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id",
+        &[json!(root), json!(start), json!(bill_end)],
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| serde_json::from_value(row).unwrap())
+    .collect();
+    let details: BTreeMap<i64, RequestDetail> = settlement::store::all(
+        &mut db,
+        "SELECT d.usage_id,d.payload FROM usage_details d JOIN usage u ON u.id=d.usage_id WHERE u.root_id=? AND u.created_at>=? AND u.created_at<?",
+        &[json!(root), json!(start), json!(bill_end)],
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row["usage_id"].as_i64().unwrap(),
+            serde_json::from_str(row["payload"].as_str().unwrap()).unwrap(),
         )
-        .await
-        .unwrap();
+    })
+    .collect();
+    let resolved = manual_billing::reconcile(
+        &[],
+        &usage,
+        &details,
+        start,
+        &bill_end,
+        "matched_only",
+        &normalized,
+        &[root],
+    )
+    .unwrap();
     let basis_id = sqlx::query(
         "INSERT INTO manual_bill_bases(cycle_id,vendor_period_id,config,result,created_by,created_at) VALUES(?,NULL,?,?,1,?)",
     )
@@ -281,7 +307,7 @@ async fn independent_cycle_can_return_to_local_proportions_with_the_same_cost() 
                 )
                 .await,
                 422,
-                "独立账号不支持人工补计依据",
+                "不支持的字段：manual_basis",
             );
             inject_historical_cycle_manual_basis(
                 &harness,
@@ -747,7 +773,7 @@ async fn independent_bill_preview_rejects_new_manual_basis_submissions() {
             )
             .await,
             422,
-            "独立账号不支持人工补计依据",
+            "不支持的字段：manual_basis",
         );
     }
     assert!(harness.rows("bill_imports").await.is_empty());

@@ -8,6 +8,8 @@ import {
   flush,
   jsonResponse as response,
   renderWithDialog,
+  setInputValue,
+  setSelectValue,
 } from "./test-utils";
 
 const dom = renderWithDialog();
@@ -26,15 +28,6 @@ function audit(id: number, action: string, marker: string) {
     created_at: "2026-10-01T00:00:00.000Z",
     payload: { marker },
   };
-}
-
-function setDateInput(input: HTMLInputElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    setter?.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
 }
 
 beforeEach(() => {
@@ -156,12 +149,7 @@ describe("AuditLog", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
 
     const select = dom.host!.querySelector<HTMLSelectElement>("select")!;
-    await act(async () => {
-      select.value = "settle";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    setSelectValue(select, "settle");
     await flush();
     expect(dom.host!.textContent).toContain("new result");
 
@@ -188,22 +176,11 @@ describe("AuditLog", () => {
     expect(dom.host!.querySelector(".audit-list")).toBeNull();
     expect(dom.host!.textContent).toContain("暂无操作记录");
 
-    await act(async () => {
-      const select = dom.host!.querySelector<HTMLSelectElement>("select")!;
-      select.value = "settle";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-      await Promise.resolve();
-    });
-    await act(async () => {
-      const input = dom.host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];
-      setDateInput(input, "2026-10-01T00:00");
-      await Promise.resolve();
-    });
-    await act(async () => {
-      const input = dom.host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[1];
-      setDateInput(input, "2026-10-02T00:00");
-      await Promise.resolve();
-    });
+    const select = dom.host!.querySelector<HTMLSelectElement>("select")!;
+    setSelectValue(select, "settle");
+    const inputs = dom.host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]');
+    setInputValue(inputs[0], "2026-10-01T00:00");
+    setInputValue(inputs[1], "2026-10-02T00:00");
     await flush();
 
     const filteredPaths = fetcher.mock.calls
@@ -230,5 +207,41 @@ describe("AuditLog", () => {
     expect(exportPath).toContain("from=2026-09-30T16%3A00%3A00.000Z");
     expect(exportPath).toContain("to=2026-10-01T16%3A00%3A00.000Z");
     expect(dom.host!.querySelector('[role="alert"]')?.textContent).toContain("fixture export rejected");
+  });
+
+  it("hides retired actions from filter options while keeping active maintenance and translating historical audit rows", async () => {
+    const retired = [
+      ["confirm_local_billing", "确认本地计费依据"],
+      ["merge", "合并订单"],
+      ["submit", "付款方结清"],
+      ["confirm", "管理员标记结清"],
+      ["reject", "退回付款"],
+      ["split", "拆分订单"],
+    ] as const;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        response({
+          items: [
+            audit(1, "reset_estimated", "active-maint"),
+            ...retired.map(([key], idx) => audit(idx + 2, key, `hist-${key}`)),
+          ],
+          next_before: null,
+        }),
+      ),
+    );
+
+    await mount(<AuditLog />);
+    const optionValues = Array.from(
+      dom.host!.querySelectorAll<HTMLOptionElement>("select option"),
+    ).map((opt) => opt.value);
+    expect(optionValues).toContain("settle");
+    expect(optionValues).toContain("confirm_vendor_bill");
+    expect(optionValues).toContain("reset_estimated");
+    expect(dom.host!.textContent).toContain("撤销旧待确认成本配置");
+    for (const [key, label] of retired) {
+      expect(optionValues).not.toContain(key);
+      expect(dom.host!.textContent).toContain(label);
+    }
   });
 });

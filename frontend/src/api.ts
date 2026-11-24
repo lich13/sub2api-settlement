@@ -49,12 +49,38 @@ export async function api<T = any>(
   }
   return data;
 }
+const integerFormat = new Intl.NumberFormat("zh-CN");
+const decimal2Format = new Intl.NumberFormat("zh-CN", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+const dateSecondFormat = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+const dateMinuteFormat = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+const MAX_CSV_BYTES = 10 * 1024 * 1024;
+
 export function money(fen: number) {
   const n = Math.abs(fen);
   return (
     (fen < 0 ? "-" : "") +
     "¥" +
-    Math.floor(n / 100).toLocaleString("zh-CN") +
+    integerFormat.format(Math.floor(n / 100)) +
     "." +
     String(n % 100).padStart(2, "0")
   );
@@ -74,36 +100,64 @@ export async function downloadCsv(path: string, filename: string) {
   link.href = url; link.download = filename; document.body.append(link); link.click(); link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+export type CsvFileResult =
+  | { status: "empty" }
+  | { status: "too_large"; error: string }
+  | { status: "stale" }
+  | { status: "ok"; name: string; content: string };
+
+export async function readCsvFile(
+  file: File | undefined,
+  counter: { current: number },
+  onReset?: () => void,
+): Promise<CsvFileResult> {
+  const token = ++counter.current;
+  onReset?.();
+  if (!file) return { status: "empty" };
+  if (file.size > MAX_CSV_BYTES) {
+    return { status: "too_large", error: "CSV 不能超过 10 MB" };
+  }
+  const content = await file.text();
+  if (token !== counter.current) return { status: "stale" };
+  return { status: "ok", name: file.name, content };
+}
+
+export async function exportUnmatchedCsv(
+  path: string,
+  filename: string,
+  versionRef: { current: number },
+  setBusy: (busy: boolean) => void,
+  setError: (error: string) => void,
+) {
+  const token = versionRef.current;
+  setBusy(true);
+  setError("");
+  try {
+    await downloadCsv(path, filename);
+  } catch (e) {
+    if (token === versionRef.current) setError((e as Error).message);
+  } finally {
+    if (token === versionRef.current) setBusy(false);
+  }
+}
+
 export function costInput(fen: number) {
   return (fen / 100).toFixed(2);
 }
 export function consumption(value: string) {
-  return (
-    "$" +
-    new Intl.NumberFormat("zh-CN", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(Number(value))
-  );
+  return "$" + decimal2Format.format(Number(value));
 }
 export function billedMoney(value: string) {
   const number = Number(value);
   if (number > 0 && number < 0.005) return "不足 ¥0.01";
-  return "¥" + new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number);
+  return "¥" + decimal2Format.format(number);
 }
 
 export function date(value?: string | null, precision: "second" | "minute" = "second") {
   if (!value) return "进行中";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    ...(precision === "second" ? { second: "2-digit" as const } : {}),
-    hour12: false,
-  }).format(new Date(value));
+  return (precision === "second" ? dateSecondFormat : dateMinuteFormat).format(
+    new Date(value),
+  );
 }
 export function inputDate(value = new Date().toISOString()) {
   return new Date(new Date(value).getTime() + 8 * 3600_000)
@@ -114,3 +168,5 @@ export function fromInput(value: string) {
   return new Date(value + "+08:00").toISOString();
 }
 export const amountPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$/;
+export const percentPattern = /^(0|[1-9][0-9]{0,2})(\.[0-9]{1,2})?$/;
+export const ratePattern = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/;

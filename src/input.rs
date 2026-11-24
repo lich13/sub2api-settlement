@@ -1,17 +1,11 @@
 use crate::{
     error::{Error, Result},
     json::{array, int, is_sha256_hex, text},
-    money::valid_amount,
+    money::{valid_amount, valid_decimal_ascii},
     time,
 };
-use regex::Regex;
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, sync::LazyLock};
-
-static PERCENT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(0|[1-9][0-9]{0,2})(\.[0-9]{1,2})?$")
-        .expect("fixed percent validation expression")
-});
+use std::collections::BTreeSet;
 
 fn required(v: &Value, k: &str) -> Result<()> {
     if v.get(k).is_none() {
@@ -67,7 +61,7 @@ fn amount(v: &Value, k: &str) -> Result<()> {
 }
 fn percent(v: &Value, k: &str) -> Result<()> {
     string(v, k, 0, usize::MAX)?;
-    if !PERCENT.is_match(text(v, k)) {
+    if !valid_decimal_ascii(text(v, k), 3, 2, false) {
         return Err(Error::invalid("比例须为非负数，最多两位小数"));
     }
     Ok(())
@@ -80,7 +74,7 @@ fn sha256(v: &Value, k: &str) -> Result<()> {
     Ok(())
 }
 fn date_time(s: &str) -> Result<String> {
-    time::normalize_datetime(s, false).ok_or_else(|| Error::invalid("时间格式无效"))
+    time::normalize_datetime(s).ok_or_else(|| Error::invalid("时间格式无效"))
 }
 fn ids(v: &Value, k: &str, min: usize) -> Result<()> {
     let Some(values) = v[k].as_array() else {

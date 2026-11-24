@@ -405,6 +405,7 @@ describe("vendor manager", () => {
     />);
     await click(button("整组配置"));
 
+    expect(dom.host!.querySelectorAll("dialog .form")).toHaveLength(1);
     expect(dom.host!.textContent).toContain("Deleted account · 已删除，保留本期账务");
     await click(button("保存"));
 

@@ -200,7 +200,7 @@ impl Service {
         Ok(json!({"id":id,"version":int(&v,"version")+1}))
     }
 
-    async fn renewable_vendor_members(
+    pub(super) async fn renewable_vendor_members(
         db: &mut Db,
         p: &Value,
         deletes: &Value,
@@ -227,18 +227,6 @@ impl Service {
         Ok(eligible)
     }
 
-    pub async fn check_vendor_renewal(
-        db: &mut Db,
-        p: &Value,
-        data: &Value,
-        deletes: &Value,
-    ) -> Result<Vec<Value>> {
-        if data.get("cycle_ids").is_some() {
-            return Err(Error::invalid("账号组续费不支持指定成员列表"));
-        }
-        Self::renewable_vendor_members(db, p, deletes).await
-    }
-
     pub async fn renew_vendor_period(
         &self,
         db: &mut Db,
@@ -247,7 +235,7 @@ impl Service {
         data: &Value,
         deletes: &Value,
     ) -> Result<Value> {
-        let members = Self::check_vendor_renewal(db, p, data, deletes).await?;
+        let members = Self::renewable_vendor_members(db, p, deletes).await?;
         if optional(
             db,
             "SELECT id FROM vendor_periods WHERE vendor_id=? AND status='open'",

@@ -294,11 +294,9 @@ async fn vendor_group_period_edit_rejects_detached_payload() {
     let first_row = cycle_row(&harness, first).await;
     let second_row = cycle_row(&harness, second).await;
     assert_error(
-        mutate(
-            &harness,
-            "vendor-edit-detached",
-            &format!("edit-vendor-period:{}", period["id"].as_i64().unwrap()),
-            &json!({
+        settlement::input::normalize(
+            "edit-vendor-period",
+            json!({
                 "version":period["version"],
                 "cost":"6.00",
                 "creditor_id":2,
@@ -310,10 +308,9 @@ async fn vendor_group_period_edit_rejects_detached_payload() {
                 ],
                 "detached":[{"cycle_id":second,"version":second_row["version"],"cost":"2.50","creditor_id":3}]
             }),
-        )
-        .await,
+        ),
         422,
-        "不能移出或替换成员",
+        "不支持的字段：detached",
     );
 }
 

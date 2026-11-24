@@ -1,29 +1,11 @@
 use crate::{
     error::{Error, Result},
     json::{billing_digest, int, merge, text},
-    money::{Decimal, allocate, allocate_matched},
+    money::{Decimal, allocate, allocate_matched, valid_decimal_ascii},
     time,
 };
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
-pub const DETAIL_FIELDS: [&str; 10] = [
-    "request_id",
-    "upstream_request_id",
-    "model",
-    "requested_model",
-    "upstream_model",
-    "upstream_response_model",
-    "input_tokens",
-    "output_tokens",
-    "cache_read_tokens",
-    "cache_creation_tokens",
-];
-pub const TOKEN_FIELDS: [&str; 4] = [
-    "input_tokens",
-    "output_tokens",
-    "cache_read_tokens",
-    "cache_creation_tokens",
-];
+use std::collections::{BTreeMap, HashMap};
 const CSV_TOKENS: [&str; 4] = [
     "Input Tokens",
     "Output Tokens",
@@ -65,6 +47,12 @@ pub fn parse_csv_rows(input: &str) -> Result<Vec<BillRow>> {
     if fields.len() != header.len() || required.iter().any(|f| !fields.contains_key(f)) {
         return Err(Error::invalid("CSV 缺少必要字段或列名重复"));
     }
+    let idx_time = fields["Time"];
+    let idx_cost = fields["Billed Cost"];
+    let idx_model = fields["Model"];
+    let idx_req = fields.get("Request ID").copied();
+    let idx_up_req = fields.get("Upstream Request ID").copied();
+    let idx_tokens = CSV_TOKENS.map(|label| fields[label]);
     let mut rows = Vec::new();
     for (index, r) in reader.records().enumerate() {
         let line = index + 2;
@@ -73,54 +61,52 @@ pub fn parse_csv_rows(input: &str) -> Result<Vec<BillRow>> {
             + r.iter()
                 .map(|s| s.bytes().filter(|b| *b == b'\n').count())
                 .sum::<usize>();
-        let parse = || -> Result<Value> {
+        let parse = || -> Result<BillRow> {
             if line > 50001 {
                 return Err(Error::invalid("CSV 最多支持 50000 条请求"));
             }
-            let get = |key: &str| fields.get(key).and_then(|i| r.get(*i)).unwrap_or("").trim();
-            let amount = get("Billed Cost");
-            let mut p = amount.split('.');
-            let a = p.next().unwrap_or("");
-            let b = p.next();
-            if a.is_empty()
-                || a.len() > 10
-                || !a.bytes().all(|x| x.is_ascii_digit())
-                || b.is_some_and(|v| {
-                    v.is_empty() || v.len() > 18 || !v.bytes().all(|x| x.is_ascii_digit())
-                })
-                || p.next().is_some()
-            {
+            let amount = r.get(idx_cost).unwrap_or("").trim();
+            if !valid_decimal_ascii(amount, 10, 18, true) {
                 return Err(Error::invalid("Billed Cost 必须为非负十进制金额"));
             }
-            let model = get("Model");
-            if model.is_empty() || model.chars().count() > 200 {
+            let model = r.get(idx_model).unwrap_or("").trim();
+            if model.is_empty() || (model.len() > 200 && model.chars().count() > 200) {
                 return Err(Error::invalid("Model 无效"));
             }
-            let raw_rid = fields
-                .get("Request ID")
-                .and_then(|i| r.get(*i))
-                .unwrap_or("");
+            let raw_rid = idx_req.and_then(|i| r.get(i)).unwrap_or("");
             let rid = if !raw_rid.is_empty() {
                 raw_rid.trim()
             } else {
-                get("Upstream Request ID")
+                idx_up_req.and_then(|i| r.get(i)).unwrap_or("").trim()
             };
-            let mut record = json!({"row":line,"created_at":time::instant(get("Time"))?,"amount":Decimal::parse(amount)?.to_string(),"model":model,"request_id":rid});
-            for (label, field) in CSV_TOKENS.iter().zip(TOKEN_FIELDS) {
-                let v = get(label);
+            let created_at = time::instant(r.get(idx_time).unwrap_or("").trim())?;
+            let amount = Decimal::parse(amount)?.to_string();
+            let mut tokens = [0_i64; 4];
+            for ((label, col), out) in CSV_TOKENS.iter().zip(idx_tokens).zip(&mut tokens) {
+                let v = r.get(col).unwrap_or("").trim();
                 if v.is_empty() || v.len() > 12 || !v.bytes().all(|b| b.is_ascii_digit()) {
                     return Err(Error::invalid(format!("{label} 必须为非负整数")));
                 }
-                record[field] = json!(
-                    v.parse::<i64>()
-                        .map_err(|_| Error::invalid("Token 数无效"))?
-                );
+                *out = v
+                    .parse::<i64>()
+                    .map_err(|_| Error::invalid("Token 数无效"))?;
             }
-            Ok(record)
+            Ok(BillRow {
+                amount,
+                cache_creation_tokens: tokens[3],
+                cache_read_tokens: tokens[2],
+                created_at,
+                input_tokens: tokens[0],
+                model: model.to_owned(),
+                output_tokens: tokens[1],
+                request_id: rid.to_owned(),
+                row: line as i64,
+            })
         };
-        rows.push(serde_json::from_value(parse().map_err(|e| {
-            Error::invalid(format!("CSV 第 {physical_line} 行：{}", e.message))
-        })?)?);
+        rows.push(
+            parse()
+                .map_err(|e| Error::invalid(format!("CSV 第 {physical_line} 行：{}", e.message)))?,
+        );
     }
     if rows.is_empty() {
         return Err(Error::invalid("CSV 没有请求记录"));
@@ -140,78 +126,84 @@ pub struct BillRow {
     pub request_id: String,
     pub row: i64,
 }
-#[derive(Clone, serde::Deserialize, Default)]
+impl BillRow {
+    pub(crate) fn tokens(&self) -> [i64; 4] {
+        [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_creation_tokens,
+        ]
+    }
+}
+// Field order preserves canonical sorted-key serialization in usage_details.payload.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
 #[serde(default)]
 pub struct RequestDetail {
-    pub request_id: Option<String>,
-    pub upstream_request_id: Option<String>,
+    pub cache_creation_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub input_tokens: Option<i64>,
     pub model: Option<String>,
+    pub output_tokens: Option<i64>,
+    pub request_id: Option<String>,
     pub requested_model: Option<String>,
     pub upstream_model: Option<String>,
+    pub upstream_request_id: Option<String>,
     pub upstream_response_model: Option<String>,
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_tokens: Option<i64>,
-    pub cache_creation_tokens: Option<i64>,
 }
-trait MatchFields {
-    fn field(&self, key: &str) -> &str;
-    fn number(&self, key: &str) -> Option<i64>;
-}
-impl MatchFields for BillRow {
-    fn field(&self, key: &str) -> &str {
-        match key {
-            "amount" => &self.amount,
-            "created_at" => &self.created_at,
-            "model" => &self.model,
-            "request_id" => &self.request_id,
-            _ => "",
-        }
+impl RequestDetail {
+    pub fn is_empty(&self) -> bool {
+        self.cache_creation_tokens.is_none()
+            && self.cache_read_tokens.is_none()
+            && self.input_tokens.is_none()
+            && self.model.is_none()
+            && self.output_tokens.is_none()
+            && self.request_id.is_none()
+            && self.requested_model.is_none()
+            && self.upstream_model.is_none()
+            && self.upstream_request_id.is_none()
+            && self.upstream_response_model.is_none()
     }
-    fn number(&self, key: &str) -> Option<i64> {
-        match key {
-            "row" => Some(self.row),
-            "input_tokens" => Some(self.input_tokens),
-            "output_tokens" => Some(self.output_tokens),
-            "cache_read_tokens" => Some(self.cache_read_tokens),
-            "cache_creation_tokens" => Some(self.cache_creation_tokens),
-            _ => None,
-        }
+    pub(crate) fn tokens(&self) -> Option<[i64; 4]> {
+        Some([
+            self.input_tokens?,
+            self.output_tokens?,
+            self.cache_read_tokens?,
+            self.cache_creation_tokens?,
+        ])
     }
-}
-impl MatchFields for RequestDetail {
-    fn field(&self, key: &str) -> &str {
-        match key {
-            "request_id" => self.request_id.as_deref(),
-            "upstream_request_id" => self.upstream_request_id.as_deref(),
-            "model" => self.model.as_deref(),
-            "requested_model" => self.requested_model.as_deref(),
-            "upstream_model" => self.upstream_model.as_deref(),
-            "upstream_response_model" => self.upstream_response_model.as_deref(),
-            _ => None,
-        }
-        .unwrap_or("")
+    pub(crate) fn unique_request_ids(&self) -> impl Iterator<Item = &str> {
+        let a = self.request_id.as_deref().unwrap_or("");
+        let b = self.upstream_request_id.as_deref().unwrap_or("");
+        [
+            (!a.is_empty()).then_some(a),
+            (!b.is_empty() && b != a).then_some(b),
+        ]
+        .into_iter()
+        .flatten()
     }
-    fn number(&self, key: &str) -> Option<i64> {
-        match key {
-            "input_tokens" => self.input_tokens,
-            "output_tokens" => self.output_tokens,
-            "cache_read_tokens" => self.cache_read_tokens,
-            "cache_creation_tokens" => self.cache_creation_tokens,
-            _ => None,
+    pub(crate) fn unique_models(&self) -> impl Iterator<Item = &str> {
+        let raw = [
+            self.model.as_deref().unwrap_or(""),
+            self.requested_model.as_deref().unwrap_or(""),
+            self.upstream_model.as_deref().unwrap_or(""),
+            self.upstream_response_model.as_deref().unwrap_or(""),
+        ];
+        let mut out = [""; 4];
+        let mut len = 0;
+        for m in raw {
+            if !m.is_empty() && !out[..len].contains(&m) {
+                out[len] = m;
+                len += 1;
+            }
         }
+        out.into_iter().take(len)
     }
 }
-#[derive(Clone, Hash, PartialEq, Eq)]
-struct Signature {
-    model: String,
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct Signature<'a> {
+    model: &'a str,
     tokens: [i64; 4],
-}
-fn signature<T: MatchFields>(r: &T, model: &str) -> Signature {
-    Signature {
-        model: model.to_owned(),
-        tokens: TOKEN_FIELDS.map(|k| r.number(k).unwrap_or(0)),
-    }
 }
 // Field order preserves canonical sorted-key serialization.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -249,102 +241,116 @@ pub(crate) fn reconcile_inner(
     if !["proportional", "matched_only"].contains(&mode) {
         return Err(Error::invalid("账单分摊方式无效"));
     }
-    let (included, outside): (Vec<_>, Vec<_>) = rows
-        .iter()
-        .partition(|r| r.created_at.as_str() >= start && r.created_at.as_str() < end);
-    let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
-    let mut by_tokens: HashMap<Signature, Vec<(i64, usize)>> = HashMap::new();
+    let mut included: Vec<(&BillRow, Decimal)> = Vec::with_capacity(rows.len());
+    let mut outside: Vec<&BillRow> = Vec::new();
+    let mut outside_total = Decimal::zero();
+    for r in rows {
+        let amt = Decimal::parse(&r.amount)?;
+        if r.created_at.as_str() >= start && r.created_at.as_str() < end {
+            included.push((r, amt));
+        } else {
+            outside_total.add(&amt);
+            if !diagnostics {
+                outside_total = outside_total.rounded(60);
+            }
+            outside.push(r);
+        }
+    }
+    let mut by_id: HashMap<&str, Vec<usize>> = HashMap::with_capacity(usage.len());
     for (idx, local) in usage.iter().enumerate() {
-        let Some(detail) = details.get(&local.id) else {
-            continue;
-        };
-        for rid in [
-            detail.field("request_id"),
-            detail.field("upstream_request_id"),
-        ]
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect::<HashSet<_>>()
-        {
-            by_id.entry(rid).or_default().push(idx);
-        }
-        if TOKEN_FIELDS.iter().any(|k| detail.number(k).is_none()) {
-            continue;
-        }
-        let stamp = time::timestamp_micros(time::parse(&local.created_at)?);
-        for model in [
-            "model",
-            "requested_model",
-            "upstream_model",
-            "upstream_response_model",
-        ]
-        .iter()
-        .map(|k| detail.field(k))
-        .filter(|m| !m.is_empty())
-        .collect::<HashSet<_>>()
-        {
-            by_tokens
-                .entry(signature(detail, model))
-                .or_default()
-                .push((stamp, idx));
-        }
-    }
-    for group in by_tokens.values_mut() {
-        group.sort_unstable();
-    }
-    let mut identified: HashMap<i64, Vec<usize>> = HashMap::new();
-    let mut id_uses: HashMap<usize, usize> = HashMap::new();
-    for r in &included {
-        if let Some(g) = by_id.get(r.request_id.as_str()) {
-            identified.insert(r.row, g.clone());
-            for u in g {
-                *id_uses.entry(*u).or_default() += 1;
+        if let Some(detail) = details.get(&local.id) {
+            for rid in detail.unique_request_ids() {
+                by_id.entry(rid).or_default().push(idx);
             }
         }
     }
-    let reserved: HashSet<_> = identified
-        .values()
-        .filter(|g| g.len() == 1 && id_uses[&g[0]] == 1)
-        .map(|g| g[0])
-        .collect();
-    let mut fallback: HashMap<i64, Vec<usize>> = HashMap::new();
-    let mut fallback_uses: HashMap<usize, usize> = HashMap::new();
-    for r in &included {
-        if identified.contains_key(&r.row) {
-            continue;
+    let mut identified: Vec<Option<&[usize]>> = Vec::with_capacity(included.len());
+    let mut id_uses = vec![0_u32; usage.len()];
+    let mut identified_count = 0_usize;
+    for (r, _) in &included {
+        if let Some(g) = by_id.get(r.request_id.as_str()) {
+            identified.push(Some(g.as_slice()));
+            identified_count += 1;
+            for &u in g {
+                id_uses[u] += 1;
+            }
+        } else {
+            identified.push(None);
         }
-        let stamp = time::timestamp_micros(time::parse(&r.created_at)?);
-        let mut found = Vec::new();
-        if let Some(group) = by_tokens.get(&signature(*r, &r.model)) {
-            let lo = group.partition_point(|(t, _)| *t < stamp - 5_000_000);
-            let hi = group.partition_point(|(t, _)| *t <= stamp + 5_000_000);
-            for (_, u) in &group[lo..hi] {
-                if !reserved.contains(u) {
-                    found.push(*u);
-                    *fallback_uses.entry(*u).or_default() += 1;
+    }
+    let mut fallback: Vec<Vec<usize>> = vec![Vec::new(); included.len()];
+    let mut fallback_uses = vec![0_u32; usage.len()];
+    if identified_count < included.len() {
+        let mut reserved = vec![false; usage.len()];
+        for g in identified.iter().flatten() {
+            if g.len() == 1 && id_uses[g[0]] == 1 {
+                reserved[g[0]] = true;
+            }
+        }
+        let mut by_tokens: HashMap<Signature<'_>, Vec<(i64, usize)>> = HashMap::new();
+        for (idx, local) in usage.iter().enumerate() {
+            if reserved[idx] {
+                continue;
+            }
+            let Some(detail) = details.get(&local.id) else {
+                continue;
+            };
+            let Some(tokens) = detail.tokens() else {
+                continue;
+            };
+            let stamp = time::timestamp_micros(time::parse(&local.created_at)?);
+            for model in detail.unique_models() {
+                by_tokens
+                    .entry(Signature { model, tokens })
+                    .or_default()
+                    .push((stamp, idx));
+            }
+        }
+        for group in by_tokens.values_mut() {
+            group.sort_unstable();
+        }
+        for (i, (r, _)) in included.iter().enumerate() {
+            if identified[i].is_some() {
+                continue;
+            }
+            let stamp = time::timestamp_micros(time::parse(&r.created_at)?);
+            if let Some(group) = by_tokens.get(&Signature {
+                model: &r.model,
+                tokens: r.tokens(),
+            }) {
+                let lo = group.partition_point(|(t, _)| *t < stamp - 5_000_000);
+                let hi = group.partition_point(|(t, _)| *t <= stamp + 5_000_000);
+                let found = &mut fallback[i];
+                for &(_, u) in &group[lo..hi] {
+                    found.push(u);
+                    fallback_uses[u] += 1;
                 }
             }
         }
-        fallback.insert(r.row, found);
     }
-    let mut matched = Vec::new();
+    let mut matched = Vec::with_capacity(included.len());
     let mut unmatched = Vec::new();
     let mut ambiguous = std::collections::BTreeSet::new();
     let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
-    for r in &included {
-        let (group, uses) = if let Some(g) = identified.get(&r.row) {
+    let mut total = Decimal::zero();
+    for (i, (r, amt)) in included.iter().enumerate() {
+        total.add(amt);
+        if !diagnostics {
+            total = total.rounded(60);
+        }
+        let (group, uses): (&[usize], &[u32]) = if let Some(g) = identified[i] {
             (g, &id_uses)
         } else {
-            (&fallback[&r.row], &fallback_uses)
+            (&fallback[i], &fallback_uses)
         };
-        if group.len() == 1 && uses[&group[0]] == 1 {
+        if group.len() == 1 && uses[group[0]] == 1 {
             let local = &usage[group[0]];
             matched.push(merge(
                 serde_json::to_value(r)?,
                 json!({"usage_id":local.id,"user_id":local.user_id}),
             ));
             let weight = weights.entry(local.user_id).or_insert_with(Decimal::zero);
-            weight.add(&Decimal::parse(&r.amount)?);
+            weight.add(amt);
             if !diagnostics {
                 *weight = weight.rounded(60);
             }
@@ -358,17 +364,6 @@ pub(crate) fn reconcile_inner(
             ));
         }
     }
-    let sum = |records: &Vec<&BillRow>| -> Result<Decimal> {
-        let mut n = Decimal::zero();
-        for r in records {
-            n.add(&Decimal::parse(&r.amount)?);
-            if !diagnostics {
-                n = n.rounded(60);
-            }
-        }
-        Ok(n)
-    };
-    let total = sum(&included)?;
     let mut matched_amount = Decimal::zero();
     for v in weights.values() {
         matched_amount.add(v);
@@ -385,7 +380,7 @@ pub(crate) fn reconcile_inner(
         .map(|(k, v)| (k.to_string(), json!(v.to_string())))
         .collect();
     let unmatched_amount = total.subtract(&matched_amount).to_string();
-    let mut result = json!({"total":total.to_string(),"cost_fen":cost,"matched_amount":matched_amount.to_string(),"unmatched_amount":unmatched_amount,"matched_count":matched.len(),"unmatched_count":unmatched.len(),"outside_count":outside.len(),"outside_amount":sum(&outside)?.to_string(),"local_unmatched_count":usage.len()-matched.len(),"weights":weight_values,"outside":outside,"record_count":included.len()});
+    let mut result = json!({"total":total.to_string(),"cost_fen":cost,"matched_amount":matched_amount.to_string(),"unmatched_amount":unmatched_amount,"matched_count":matched.len(),"unmatched_count":unmatched.len(),"outside_count":outside.len(),"outside_amount":outside_total.to_string(),"local_unmatched_count":usage.len()-matched.len(),"weights":weight_values,"outside":outside,"record_count":included.len()});
     result["matched"] = Value::Array(matched);
     result["unmatched"] = Value::Array(unmatched);
     if mode == "matched_only" {
@@ -421,5 +416,117 @@ pub fn bill_allocations(result: &Value, creditor: i64) -> Result<Value> {
         allocate_matched(&weights, creditor)
     } else {
         allocate(int(result, "cost_fen"), &weights, creditor, 28)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconcile_inner_preserves_reserved_isolation_and_collision_semantics() {
+        let start = "2026-01-01T00:00:00.000000+00:00";
+        let end = "2026-01-02T00:00:00.000000+00:00";
+        let ts = "2026-01-01T12:00:00.000000+00:00";
+        let usage = vec![
+            UsageRow {
+                id: 1,
+                account_id: 100,
+                root_id: 100,
+                user_id: 10,
+                amount: "1.00".into(),
+                created_at: ts.into(),
+            },
+            UsageRow {
+                id: 2,
+                account_id: 100,
+                root_id: 100,
+                user_id: 20,
+                amount: "2.00".into(),
+                created_at: ts.into(),
+            },
+            UsageRow {
+                id: 3,
+                account_id: 100,
+                root_id: 100,
+                user_id: 20,
+                amount: "2.00".into(),
+                created_at: ts.into(),
+            },
+            UsageRow {
+                id: 4,
+                account_id: 100,
+                root_id: 100,
+                user_id: 30,
+                amount: "3.00".into(),
+                created_at: ts.into(),
+            },
+            UsageRow {
+                id: 5,
+                account_id: 100,
+                root_id: 100,
+                user_id: 40,
+                amount: "4.00".into(),
+                created_at: ts.into(),
+            },
+        ];
+        let detail = |rid: Option<&str>, m: &str, inp: i64| RequestDetail {
+            request_id: rid.map(str::to_owned),
+            model: Some(m.to_owned()),
+            input_tokens: Some(inp),
+            output_tokens: Some(5),
+            cache_read_tokens: Some(0),
+            cache_creation_tokens: Some(0),
+            ..Default::default()
+        };
+        let details = BTreeMap::from([
+            (1, detail(Some("req-unique"), "gpt-4o", 10)),
+            (2, detail(Some("req-dup"), "gpt-4o", 20)),
+            (3, detail(Some("req-dup"), "gpt-4o", 20)),
+            (4, detail(None, "gpt-4o", 30)),
+            (5, detail(None, "gpt-4o", 40)),
+        ]);
+        let bill = |row: i64, rid: &str, inp: i64, amt: &str| BillRow {
+            row,
+            request_id: rid.into(),
+            model: "gpt-4o".into(),
+            input_tokens: inp,
+            output_tokens: 5,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            amount: amt.into(),
+            created_at: ts.into(),
+        };
+        let rows = vec![
+            // 1. Unique request_id match reserves usage #1.
+            bill(2, "req-unique", 10, "1.00"),
+            // 2. Same tokens/model without request_id must NOT steal reserved usage #1 -> missing.
+            bill(3, "", 10, "0.50"),
+            // 3. Duplicate local request_id (usage #2 & #3) is ambiguous and NOT reserved.
+            bill(4, "req-dup", 20, "2.00"),
+            // 4. Unknown non-empty request_id falls back to by_tokens and uniquely matches usage #4.
+            bill(5, "req-unknown-upstream", 30, "3.00"),
+            // 5 & 6. Two request_id-less rows competing for usage #5 -> both ambiguous on fallback_uses.
+            bill(6, "", 40, "4.00"),
+            bill(7, "", 40, "4.00"),
+        ];
+        let res = reconcile_inner(&rows, &usage, &details, start, end, "matched_only", true)
+            .expect("reconcile mixed fallback cases");
+        assert_eq!(res["matched_count"], 2);
+        assert_eq!(res["unmatched_count"], 4);
+        assert_eq!(res["matched_amount"], "4.00");
+        let matched = res["matched"].as_array().unwrap();
+        assert_eq!(matched[0]["usage_id"], 1);
+        assert_eq!(matched[1]["usage_id"], 4);
+        let unmatched = res["unmatched"].as_array().unwrap();
+        assert_eq!(unmatched[0]["row"], 3);
+        assert_eq!(unmatched[0]["reason"], "missing");
+        assert_eq!(unmatched[1]["row"], 4);
+        assert_eq!(unmatched[1]["reason"], "ambiguous");
+        assert_eq!(unmatched[2]["row"], 6);
+        assert_eq!(unmatched[2]["reason"], "ambiguous");
+        assert_eq!(unmatched[3]["row"], 7);
+        assert_eq!(unmatched[3]["reason"], "ambiguous");
+        assert_eq!(res["ambiguous_usage_ids"], json!([2, 3, 5]));
     }
 }

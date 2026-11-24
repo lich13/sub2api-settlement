@@ -66,21 +66,34 @@ impl Service {
             json!({"start":start,"start_lower":start,"start_upper":null,"start_mode":"exact","start_confirmed":1,"start_confirmed_by":data["start_confirmed_by"],"start_confirmed_at":data["start_confirmed_at"],"start_source_usage_id":null}),
         )
     }
-    pub async fn coverage_error(db: &mut Db, cycle: &Value, end: &str) -> Result<Option<String>> {
-        let coverage = store::meta(db, "coverage_from").await?;
+    pub(super) async fn coverage_meta(db: &mut Db) -> Result<(Value, Value)> {
+        Ok((
+            store::meta(db, "coverage_from").await?,
+            store::meta(db, "coverage_gaps").await?,
+        ))
+    }
+    pub(super) fn coverage_error_from(
+        coverage: &Value,
+        gaps: &Value,
+        cycle: &Value,
+        end: &str,
+    ) -> Option<String> {
         if coverage.is_null() || text(cycle, "start") < coverage.as_str().unwrap_or("") {
-            return Ok(Some("周期起点早于已采集记录覆盖范围".into()));
+            return Some("周期起点早于已采集记录覆盖范围".into());
         }
-        let gaps = store::meta(db, "coverage_gaps").await?;
-        for gap in array(&gaps) {
+        for gap in array(gaps) {
             if (gap["root_id"].is_null() || gap["root_id"] == cycle["account_id"])
                 && text(cycle, "start") < text(gap, "end")
                 && end > text(gap, "start")
             {
-                return Ok(Some("该周期存在未采集的历史记录，无法确认完整消费".into()));
+                return Some("该周期存在未采集的历史记录，无法确认完整消费".into());
             }
         }
-        Ok(None)
+        None
+    }
+    pub async fn coverage_error(db: &mut Db, cycle: &Value, end: &str) -> Result<Option<String>> {
+        let (coverage, gaps) = Self::coverage_meta(db).await?;
+        Ok(Self::coverage_error_from(&coverage, &gaps, cycle, end))
     }
     pub async fn validate_cycle(
         &self,
@@ -160,9 +173,8 @@ impl Service {
             return Err(Error::invalid("请填写账号公开名称"));
         }
         exec(db,"INSERT INTO profiles(account_id,name,kind) VALUES(?,?,'paid') ON CONFLICT(account_id) DO UPDATE SET name=excluded.name,kind='paid',version=profiles.version+1",&[json!(account),json!(title)]).await?;
-        let kind = "exact";
         let cid=exec(db,"INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,cost_kind) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'exact')",&[json!(account),json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),data["renewed_from_cycle_id"].clone()]).await?.last_insert_rowid();
-        audit(db,actor,"create_cycle",json!(cid),&merge(start,json!({"cost_fen":cost,"cost_kind":kind,"creditor_id":data["creditor_id"],"renewed_from_cycle_id":data["renewed_from_cycle_id"]}))).await?;
+        audit(db,actor,"create_cycle",json!(cid),&merge(start,json!({"cost_fen":cost,"cost_kind":"exact","creditor_id":data["creditor_id"],"renewed_from_cycle_id":data["renewed_from_cycle_id"]}))).await?;
         Ok(json!({"id":cid}))
     }
     pub async fn upgrade_paid(
@@ -226,9 +238,8 @@ impl Service {
             ],
         )
         .await?;
-        let kind = "exact";
-        let cid=exec(db,"INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,start_locked,cost_kind) VALUES(?,?,?,?,?,'exact',?,NULL,1,?,?,NULL,NULL,1,?)",&[json!(account),json!(title),json!(cost),data["creditor_id"].clone(),json!(since),json!(since),actor["id"].clone(),json!(since),json!(kind)]).await?.last_insert_rowid();
-        audit(db,actor,"upgrade_paid",json!(account),&json!({"cycle_id":cid,"paid_since":since,"cost_fen":cost,"cost_kind":kind,"creditor_id":data["creditor_id"],"profile_version":version})).await?;
+        let cid=exec(db,"INSERT INTO cycles(account_id,name,cost_fen,creditor_id,start,start_mode,start_lower,start_upper,start_confirmed,start_confirmed_by,start_confirmed_at,start_source_usage_id,renewed_from_cycle_id,start_locked,cost_kind) VALUES(?,?,?,?,?,'exact',?,NULL,1,?,?,NULL,NULL,1,'exact')",&[json!(account),json!(title),json!(cost),data["creditor_id"].clone(),json!(since),json!(since),actor["id"].clone(),json!(since)]).await?.last_insert_rowid();
+        audit(db,actor,"upgrade_paid",json!(account),&json!({"cycle_id":cid,"paid_since":since,"cost_fen":cost,"cost_kind":"exact","creditor_id":data["creditor_id"],"profile_version":version})).await?;
         Ok(json!({"account_id":account,"cycle_id":cid,"paid_since":since,"version":version}))
     }
     pub async fn edit_cycle(
@@ -302,7 +313,7 @@ impl Service {
         if title.is_empty() {
             return Err(Error::invalid("请填写账号公开名称"));
         }
-        exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind=?,version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},json!("exact"),json!(cid)]).await?;
+        exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind='exact',version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},json!(cid)]).await?;
         if cost != int(&c, "cost_fen") || local_basis {
             exec(
                 db,

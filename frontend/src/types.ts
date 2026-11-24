@@ -178,6 +178,10 @@ export type VendorPeriod = {
 };
 export type Vendor = { id: number; name: string; cost_fen: number; creditor_id: number; creditor_name?: string; version: number; archived_at: string | null; periods: VendorPeriod[]; current_members?: {account_id:number;name:string;account_deleted:boolean|number;profile_version:number;renewal_excluded?:boolean|number}[] };
 export type VendorBillPreview = BillPreview & {
+  manual_basis?: ManualBasis;
+  manual_summary?: ManualSummary;
+  local_unmatched?: LocalUnmatched[];
+  upstream_total_fen?: number | null;
   difference_amount?: string;
   bill_total_fen: number|null; accounts: {account_id:number;cycle_id:number;name:string;amount_fen:number|null;total_consumption:string;allocations:Share[]}[];
   basis: "matched_upstream" | "local_consumption" | "manual_supplement"; coverage_warnings: {account_id:number;warning:string}[];
@@ -207,10 +211,6 @@ export type ExpenseCalculation = {
   digest?: string;
 };
 export type BillPreview = {
-  manual_basis?: ManualBasis;
-  manual_summary?: ManualSummary;
-  local_unmatched?: LocalUnmatched[];
-  upstream_total_fen?: number|null;
   allocation_mode?: BillMode;
   billable_cost_fen?: number;
   coverage_warning?: string | null;

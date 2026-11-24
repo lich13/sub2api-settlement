@@ -37,7 +37,7 @@ impl Service {
                 return Err(Error::conflict("账号组续费设置已变化"));
             }
             if optional(db,"SELECT id FROM vendor_periods WHERE vendor_id=? AND status='open' AND end IS NULL AND id!=?",&[p["vendor_id"].clone(),p["id"].clone()]).await?.is_some(){return Err(Error::conflict("该账号组已有续费周期，不能重复续费"));}
-            Self::check_vendor_renewal(db, p, r, &data["delete_cycle_ids"]).await?;
+            Self::renewable_vendor_members(db, p, &data["delete_cycle_ids"]).await?;
         }
         Ok(periods.into_values().collect())
     }
@@ -112,22 +112,87 @@ impl Service {
     pub async fn vendors(&self, actor: &Value) -> Result<Value> {
         let state = self.inventory.refresh(false).await;
         let mut db = self.store.read().await?;
-        let mut vendors=all(&mut db,"SELECT v.*,u.name AS creditor_name FROM vendors v LEFT JOIN users u ON u.id=v.creditor_id ORDER BY v.id",&[]).await?;
-        for v in &mut vendors {
-            let mut periods=all(&mut db,"SELECT p.*,u.name AS creditor_name FROM vendor_periods p LEFT JOIN users u ON u.id=p.creditor_id WHERE p.vendor_id=? ORDER BY p.id DESC",&[v["id"].clone()]).await?;
-            for p in &mut periods {
-                // Only public cycle metadata is returned here; raw bill rows stay in admin-only endpoints.
-                p["members"] = json!(Self::vendor_members(&mut db, int(p, "id")).await?);
-                if text(actor, "role") == "admin" && !p["manual_basis_id"].is_null() {
-                    p["manual_basis"] = json!(Self::manual_config(&mut db, p).await?);
-                }
-                if text(actor, "role") != "admin" {
-                    p.as_object_mut().map(|o| o.remove("bill_digest"));
-                }
+        let mut vendors = all(
+            &mut db,
+            "SELECT v.*,u.name AS creditor_name FROM vendors v LEFT JOIN users u ON u.id=v.creditor_id ORDER BY v.id",
+            &[],
+        )
+        .await?;
+        if !vendors.is_empty() {
+            let is_admin = text(actor, "role") == "admin";
+            let all_periods = all(
+                &mut db,
+                "SELECT p.*,u.name AS creditor_name FROM vendor_periods p LEFT JOIN users u ON u.id=p.creditor_id ORDER BY p.id DESC",
+                &[],
+            )
+            .await?;
+            let mut period_members = BTreeMap::<i64, Vec<Value>>::new();
+            for m in all(
+                &mut db,
+                "SELECT c.*,a.name AS current_name,a.deleted AS account_deleted FROM cycles c JOIN accounts a ON a.id=c.account_id WHERE c.vendor_period_id IS NOT NULL ORDER BY c.account_id",
+                &[],
+            )
+            .await?
+            {
+                period_members
+                    .entry(int(&m, "vendor_period_id"))
+                    .or_default()
+                    .push(m);
             }
-            v["current_members"] =
-                json!(Self::current_vendor_members(&mut db, int(v, "id")).await?);
-            v["periods"] = json!(periods);
+            let manual_configs =
+                if is_admin && all_periods.iter().any(|p| !p["manual_basis_id"].is_null()) {
+                    all(
+                    &mut db,
+                    "SELECT id,config FROM manual_bill_bases WHERE vendor_period_id IS NOT NULL",
+                    &[],
+                )
+                .await?
+                .into_iter()
+                .map(|r| {
+                    Ok((
+                        int(&r, "id"),
+                        serde_json::from_str::<Value>(text(&r, "config"))?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?
+                } else {
+                    BTreeMap::new()
+                };
+            let mut periods_by_vendor = BTreeMap::<i64, Vec<Value>>::new();
+            for mut p in all_periods {
+                let pid = int(&p, "id");
+                // Only public cycle metadata is returned here; raw bill rows stay in admin-only endpoints.
+                p["members"] = json!(period_members.remove(&pid).unwrap_or_default());
+                if is_admin && let Some(mid) = p["manual_basis_id"].as_i64() {
+                    p["manual_basis"] = manual_configs.get(&mid).cloned().unwrap_or(Value::Null);
+                }
+                if !is_admin && let Some(o) = p.as_object_mut() {
+                    o.remove("bill_digest");
+                }
+                periods_by_vendor
+                    .entry(int(&p, "vendor_id"))
+                    .or_default()
+                    .push(p);
+            }
+            let mut current_by_vendor = BTreeMap::<i64, Vec<Value>>::new();
+            for mut m in all(
+                &mut db,
+                "SELECT p.vendor_id,a.id AS account_id,a.name,a.deleted AS account_deleted,p.version AS profile_version, EXISTS(SELECT 1 FROM account_deletions d JOIN cycles c ON c.settlement_id=d.settlement_id WHERE d.account_id=p.account_id AND c.vendor_id=p.vendor_id) AS renewal_excluded FROM profiles p JOIN accounts a ON a.id=p.account_id WHERE p.vendor_id IS NOT NULL ORDER BY a.id",
+                &[],
+            )
+            .await?
+            {
+                let vid = int(&m, "vendor_id");
+                if let Some(o) = m.as_object_mut() {
+                    o.remove("vendor_id");
+                }
+                current_by_vendor.entry(vid).or_default().push(m);
+            }
+            for v in &mut vendors {
+                let vid = int(v, "id");
+                v["current_members"] = json!(current_by_vendor.remove(&vid).unwrap_or_default());
+                v["periods"] = json!(periods_by_vendor.remove(&vid).unwrap_or_default());
+            }
         }
         Ok(json!({"vendors":vendors,"account_revision":state["revision"]}))
     }
@@ -218,9 +283,6 @@ impl Service {
         data: &Value,
     ) -> Result<Value> {
         admin(actor)?;
-        if data.get("detached").is_some() {
-            return Err(Error::invalid("当前账期不能移出或替换成员"));
-        }
         let old = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(id)]).await?;
         let vid = int(&old, "vendor_id");
         let vendor = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(vid)]).await?;

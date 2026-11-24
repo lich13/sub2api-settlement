@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use settlement::{
     config::Config,
     http::App,
-    source::{Scope, Source},
+    source::{Scope, Source, SourceRow},
 };
 use sqlx::Row;
 use tempfile::TempDir;
@@ -69,7 +69,7 @@ fn write_fixture(path: &Path, rows: &[Value]) {
     std::fs::write(path, serde_json::to_vec(&fixture).unwrap()).unwrap();
 }
 
-async fn snapshot_rows(source: &Source) -> Vec<Value> {
+async fn snapshot_rows(source: &Source) -> Vec<SourceRow> {
     let mut snapshot = source.snapshot(None).await.unwrap();
     let mut output = Vec::new();
     while let Some(batch) = snapshot.next().await.unwrap() {
@@ -93,8 +93,14 @@ async fn fixture_stream_crosses_256_kib_and_preserves_escaped_unicode_fields() {
         .unwrap();
     let rows = snapshot_rows(&source).await;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["request_id"], long_value);
-    assert_eq!(rows[0]["model"], "quote \" slash \\ unicode 雪🧪");
+    assert_eq!(
+        rows[0].detail.request_id.as_deref(),
+        Some(long_value.as_str())
+    );
+    assert_eq!(
+        rows[0].detail.model.as_deref(),
+        Some("quote \" slash \\ unicode 雪🧪")
+    );
     source.close().await;
 }
 
@@ -128,20 +134,10 @@ async fn fixture_stream_accepts_empty_usage_and_missing_optional_details() {
     // fixture size forces a fresh header read.
     let rows = snapshot_rows(&source).await;
     assert_eq!(rows.len(), 1);
-    for field in [
-        "request_id",
-        "upstream_request_id",
-        "model",
-        "requested_model",
-        "upstream_model",
-        "upstream_response_model",
-        "input_tokens",
-        "output_tokens",
-        "cache_read_tokens",
-        "cache_creation_tokens",
-    ] {
-        assert!(rows[0][field].is_null(), "{field} should default to null");
-    }
+    assert!(
+        rows[0].detail.is_empty(),
+        "all optional detail fields should default to None"
+    );
     source.close().await;
 }
 
@@ -180,10 +176,7 @@ async fn fixture_scope_compares_instants_and_rechecks_known_rows_after_they_move
         }
         selected
     };
-    let first_ids = first
-        .iter()
-        .map(|row| row["id"].as_i64().unwrap())
-        .collect::<Vec<_>>();
+    let first_ids = first.iter().map(|row| row.id).collect::<Vec<_>>();
     assert_eq!(first_ids, vec![2, 3, 4, 5, 8]);
     assert!(
         !first_ids.contains(&1),
@@ -220,14 +213,11 @@ async fn fixture_scope_compares_instants_and_rechecks_known_rows_after_they_move
         }
         selected
     };
-    let moved = second.iter().find(|row| row["id"] == 8).unwrap();
-    assert_eq!(moved["account_id"], 200);
-    assert_eq!(moved["created_at"], "2025-01-16T00:00:00.000000+00:00");
+    let moved = second.iter().find(|row| row.id == 8).unwrap();
+    assert_eq!(moved.account_id, 200);
+    assert_eq!(moved.created_at, "2025-01-16T00:00:00.000000+00:00");
     assert_eq!(
-        second
-            .iter()
-            .map(|row| row["id"].as_i64().unwrap())
-            .collect::<Vec<_>>(),
+        second.iter().map(|row| row.id).collect::<Vec<_>>(),
         vec![2, 3, 4, 5, 8]
     );
 

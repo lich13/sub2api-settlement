@@ -1,4 +1,5 @@
 use crate::{
+    billing::RequestDetail,
     config::Config,
     error::{Error, Result},
     money::Decimal,
@@ -238,6 +239,19 @@ fn account(r: &sqlx::postgres::PgRow) -> Result<Value> {
         json!({"id":r.try_get::<i64,_>("id")?,"name":r.try_get::<String,_>("name")?,"platform":r.try_get::<String,_>("platform")?,"status":r.try_get::<String,_>("status")?,"parent_account_id":r.try_get::<Option<i64>,_>("parent_account_id")?,"created_at":time::format(r.try_get("created_at")?),"deleted":r.try_get::<Option<time::OffsetDateTime>,_>("deleted_at")?.is_some()}),
     )
 }
+pub struct SourceRow {
+    pub id: i64,
+    pub account_id: i64,
+    pub user_id: i64,
+    pub amount: String,
+    pub created_at: String,
+    pub detail: RequestDetail,
+}
+fn opt_token(r: &sqlx::postgres::PgRow, key: &str) -> Result<Option<i64>> {
+    Ok(r.try_get::<Option<i32>, _>(key)
+        .map(|v| v.map(i64::from))
+        .or_else(|_| r.try_get::<Option<i64>, _>(key))?)
+}
 pub struct Snapshot {
     pub header: Header,
     kind: SnapshotKind,
@@ -247,7 +261,7 @@ enum SnapshotKind {
     Pg(sqlx::Transaction<'static, sqlx::Postgres>),
 }
 impl Snapshot {
-    pub async fn next(&mut self) -> Result<Option<Vec<Value>>> {
+    pub async fn next(&mut self) -> Result<Option<Vec<SourceRow>>> {
         match &mut self.kind {
             SnapshotKind::Fixture(stream) => {
                 let result = stream.receiver.recv().await.transpose()?;
@@ -265,18 +279,25 @@ impl Snapshot {
                 }
                 let mut output = Vec::with_capacity(rows.len());
                 for r in rows {
-                    let id: i64 = r.try_get("id")?;
-                    let mut item = json!({"id":id,"account_id":r.try_get::<i64,_>("account_id")?,"user_id":r.try_get::<i64,_>("user_id")?,"amount":Decimal::parse(&r.try_get::<String,_>("amount")?)?.to_string(),"created_at":time::format(r.try_get("created_at")?)});
-                    for key in crate::billing::DETAIL_FIELDS {
-                        item[key] = if crate::billing::TOKEN_FIELDS.contains(&key) {
-                            r.try_get::<Option<i32>, _>(key)
-                                .map(|v| json!(v))
-                                .or_else(|_| r.try_get::<Option<i64>, _>(key).map(|v| json!(v)))?
-                        } else {
-                            json!(r.try_get::<Option<String>, _>(key)?)
-                        };
-                    }
-                    output.push(item);
+                    output.push(SourceRow {
+                        id: r.try_get("id")?,
+                        account_id: r.try_get("account_id")?,
+                        user_id: r.try_get("user_id")?,
+                        amount: Decimal::parse(&r.try_get::<String, _>("amount")?)?.to_string(),
+                        created_at: time::format(r.try_get("created_at")?),
+                        detail: RequestDetail {
+                            cache_creation_tokens: opt_token(&r, "cache_creation_tokens")?,
+                            cache_read_tokens: opt_token(&r, "cache_read_tokens")?,
+                            input_tokens: opt_token(&r, "input_tokens")?,
+                            model: r.try_get("model")?,
+                            output_tokens: opt_token(&r, "output_tokens")?,
+                            request_id: r.try_get("request_id")?,
+                            requested_model: r.try_get("requested_model")?,
+                            upstream_model: r.try_get("upstream_model")?,
+                            upstream_request_id: r.try_get("upstream_request_id")?,
+                            upstream_response_model: r.try_get("upstream_response_model")?,
+                        },
+                    });
                 }
                 Ok(Some(output))
             }
@@ -286,7 +307,7 @@ impl Snapshot {
 struct FixtureStream {
     path: PathBuf,
     stamp: (SystemTime, u64),
-    receiver: mpsc::Receiver<Result<Vec<Value>>>,
+    receiver: mpsc::Receiver<Result<Vec<SourceRow>>>,
 }
 impl FixtureStream {
     fn open(path: PathBuf, filter: Filter) -> Result<Self> {
@@ -339,7 +360,7 @@ impl<'de> Visitor<'de> for HeaderVisitor {
         Ok(h)
     }
 }
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize)]
 struct FixtureUsage {
     id: i64,
     account_id: i64,
@@ -472,7 +493,7 @@ fn peek_nonspace<R: std::io::BufRead>(reader: &mut R) -> Result<Option<u8>> {
 }
 fn read_fixture_usage<R: std::io::BufRead>(
     reader: &mut R,
-    sender: &mpsc::Sender<Result<Vec<Value>>>,
+    sender: &mpsc::Sender<Result<Vec<SourceRow>>>,
     filter: &Filter,
 ) -> Result<()> {
     expect_byte(reader, b'{')?;
@@ -495,6 +516,7 @@ fn read_fixture_usage<R: std::io::BufRead>(
                 loop {
                     json_value(reader, &mut raw)?;
                     let row: FixtureUsage = serde_json::from_slice(&raw)?;
+                    let mut parsed_at: Option<String> = None;
                     let included = if let Filter::Scopes(Some(scopes)) = filter {
                         if scopes
                             .iter()
@@ -503,19 +525,51 @@ fn read_fixture_usage<R: std::io::BufRead>(
                             true
                         } else if scopes.iter().any(|s| s.accounts.contains(&row.account_id)) {
                             let at = time::instant(&row.created_at)?;
-                            scopes.iter().any(|s| {
+                            let matched = scopes.iter().any(|s| {
                                 s.accounts.contains(&row.account_id) && at >= s.start && at < s.end
-                            })
+                            });
+                            parsed_at = Some(at);
+                            matched
                         } else {
                             false
                         }
                     } else if let Filter::Incremental { watermark, since } = filter {
-                        row.id > *watermark || time::instant(&row.created_at)? >= *since
+                        if row.id > *watermark {
+                            true
+                        } else {
+                            let at = time::instant(&row.created_at)?;
+                            let matched = &at >= since;
+                            parsed_at = Some(at);
+                            matched
+                        }
                     } else {
                         true
                     };
                     if included {
-                        batch.push(serde_json::to_value(row)?);
+                        let amount = Decimal::parse(&row.amount)?.to_string();
+                        let created_at = match parsed_at {
+                            Some(at) => at,
+                            None => time::instant(&row.created_at)?,
+                        };
+                        batch.push(SourceRow {
+                            id: row.id,
+                            account_id: row.account_id,
+                            user_id: row.user_id,
+                            amount,
+                            created_at,
+                            detail: RequestDetail {
+                                cache_creation_tokens: row.cache_creation_tokens,
+                                cache_read_tokens: row.cache_read_tokens,
+                                input_tokens: row.input_tokens,
+                                model: row.model,
+                                output_tokens: row.output_tokens,
+                                request_id: row.request_id,
+                                requested_model: row.requested_model,
+                                upstream_model: row.upstream_model,
+                                upstream_request_id: row.upstream_request_id,
+                                upstream_response_model: row.upstream_response_model,
+                            },
+                        });
                         if batch.len() == 2048 {
                             sender
                                 .blocking_send(Ok(std::mem::take(&mut batch)))

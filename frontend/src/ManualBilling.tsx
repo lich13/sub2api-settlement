@@ -2,10 +2,9 @@ import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FormError } from "./Forms";
 import { Select } from "./Select";
-import { billedMoney, consumption, date } from "./api";
+import { billedMoney, consumption, date, ratePattern } from "./api";
 import type { LocalUnmatched, ManualBasis, ManualSummary } from "./types";
 
-const ratePattern = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?$/;
 export function canonicalManualBasis(basis?: ManualBasis) {
   if (!basis || (basis.source !== "local_only" && !basis.rates.length))
     return "";

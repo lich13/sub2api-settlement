@@ -483,38 +483,38 @@ async fn exercise_source_inner(
         old_rows.len() == 2050
             && old_rows
                 .iter()
-                .all(|row| matches!(row["account_id"].as_i64(), Some(101 | 102))),
+                .all(|row| matches!(row.account_id, 101 | 102)),
         "source cursor did not include exactly the root and child account rows",
     )?;
     check(
-        old_rows.iter().any(|row| row["id"] == 10001)
-            && !old_rows.iter().any(|row| row["id"] == 30000)
-            && !old_rows.iter().any(|row| row["id"] == 40000),
+        old_rows.iter().any(|row| row.id == 10001)
+            && !old_rows.iter().any(|row| row.id == 30000)
+            && !old_rows.iter().any(|row| row.id == 40000),
         "source cursor did not enforce account and time bounds",
     )?;
 
     let original = old_rows
         .iter()
-        .find(|row| row["id"] == 10001)
+        .find(|row| row.id == 10001)
         .ok_or_else(|| "original known usage row was absent".to_owned())?;
     check(
-        original["amount"] == "0.000001234567890123456789",
+        original.amount == "0.000001234567890123456789",
         "high-precision usage amount was not preserved",
     )?;
     check(
-        original["request_id"].is_null()
-            && original["upstream_request_id"] == "upstream-fixture-id"
-            && original["model"] == "fixture-model"
-            && original["requested_model"].is_null()
-            && original["upstream_model"] == "upstream-fixture-model"
-            && original["upstream_response_model"].is_null(),
+        original.detail.request_id.is_none()
+            && original.detail.upstream_request_id.as_deref() == Some("upstream-fixture-id")
+            && original.detail.model.as_deref() == Some("fixture-model")
+            && original.detail.requested_model.is_none()
+            && original.detail.upstream_model.as_deref() == Some("upstream-fixture-model")
+            && original.detail.upstream_response_model.is_none(),
         "nullable usage details or model fields were not preserved",
     )?;
     check(
-        original["input_tokens"] == 2_147_483_648_i64
-            && original["output_tokens"] == 42
-            && original["cache_read_tokens"].is_null()
-            && original["cache_creation_tokens"] == 0,
+        original.detail.input_tokens == Some(2_147_483_648_i64)
+            && original.detail.output_tokens == Some(42)
+            && original.detail.cache_read_tokens.is_none()
+            && original.detail.cache_creation_tokens == Some(0),
         "nullable or 64-bit token fields were not preserved",
     )?;
     drop(snapshot);
@@ -552,22 +552,20 @@ async fn exercise_source_inner(
     )?;
     let moved = current_rows
         .iter()
-        .find(|row| row["id"] == 10001)
+        .find(|row| row.id == 10001)
         .ok_or_else(|| {
             "known row moved outside its account/time scope was not re-fetched".to_owned()
         })?;
     check(
-        moved["account_id"] == 103
-            && moved["created_at"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("2026-03-01"))
-            && moved["amount"] == "9.8765"
-            && moved["model"] == "moved-fixture-model",
+        moved.account_id == 103
+            && moved.created_at.starts_with("2026-03-01")
+            && moved.amount == "9.8765"
+            && moved.detail.model.as_deref() == Some("moved-fixture-model"),
         "known ID re-verification did not return the changed out-of-scope source row",
     )?;
     check(
-        !current_rows.iter().any(|row| row["id"] == 30000)
-            && !current_rows.iter().any(|row| row["id"] == 40000),
+        !current_rows.iter().any(|row| row.id == 30000)
+            && !current_rows.iter().any(|row| row.id == 40000),
         "re-verification included unrelated account/time rows",
     )?;
     drop(recheck);
@@ -760,11 +758,7 @@ async fn snapshot_ids(snapshot: &mut Snapshot) -> TestResult<Vec<i64>> {
         .map_err(|error| format!("source stream failed with status {}", error.status))?
     {
         for row in batch {
-            ids.push(
-                row["id"]
-                    .as_i64()
-                    .ok_or_else(|| "source row ID was not an integer".to_owned())?,
-            );
+            ids.push(row.id);
         }
     }
     Ok(ids)

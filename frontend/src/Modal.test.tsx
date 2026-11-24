@@ -1,62 +1,28 @@
 // @vitest-environment jsdom
 
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { Modal } from "./Modal";
+import { renderWithDialog } from "./test-utils";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
-
-async function render(node: ReactNode) {
-  if (!root) {
-    host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-  }
-  await act(async () => {
-    root!.render(node);
-  });
-}
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () {
-    this.open = true;
-  };
-  HTMLDialogElement.prototype.close = function () {
-    this.open = false;
-  };
-});
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.unstubAllGlobals();
-});
+const dom = renderWithDialog();
 
 describe("Modal draft and IME guards", () => {
   it("closes on backdrop click and cancel when clean, but blocks both when dirty", async () => {
     const close = vi.fn();
-    await render(
+    await dom.render(
       <Modal title="编辑窗口" close={close}>
         <input defaultValue="clean" />
       </Modal>,
     );
-    const dialog = host!.querySelector("dialog")!;
+    const dialog = dom.host!.querySelector("dialog")!;
 
     await act(async () => {
       dialog.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(close).toHaveBeenCalledTimes(1);
 
-    await render(
+    await dom.render(
       <Modal title="编辑窗口" dirty close={close}>
         <input defaultValue="dirty" />
       </Modal>,
@@ -74,7 +40,7 @@ describe("Modal draft and IME guards", () => {
     });
     expect(close).toHaveBeenCalledTimes(1);
 
-    const closeBtn = host!.querySelector<HTMLButtonElement>(
+    const closeBtn = dom.host!.querySelector<HTMLButtonElement>(
       'button[aria-label="关闭"]',
     )!;
     await act(async () => {
@@ -85,13 +51,13 @@ describe("Modal draft and IME guards", () => {
 
   it("blocks Escape dismissal while IME composition is active", async () => {
     const close = vi.fn();
-    await render(
+    await dom.render(
       <Modal title="输入窗口" close={close}>
         <input />
       </Modal>,
     );
-    const input = host!.querySelector("input")!;
-    const dialog = host!.querySelector("dialog")!;
+    const input = dom.host!.querySelector("input")!;
+    const dialog = dom.host!.querySelector("dialog")!;
 
     await act(async () => {
       input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));

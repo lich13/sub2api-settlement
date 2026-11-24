@@ -16,6 +16,7 @@ import {
   inputDate,
   fromInput,
   amountPattern,
+  percentPattern,
   billedMoney,
 } from "./api";
 import type {
@@ -480,7 +481,7 @@ export function ExpenseForm({
     Object.prototype.hasOwnProperty.call(members, u.id),
   );
   const validRatios = selected.every((u) =>
-    /^(0|[1-9][0-9]{0,2})(\.[0-9]{1,2})?$/.test(members[u.id]),
+    percentPattern.test(members[u.id]),
   );
   const totalBps = selected.reduce(
     (sum, u) => sum + Math.round(Number(members[u.id] || 0) * 100),

@@ -15,18 +15,33 @@ impl Service {
             .map(|u| (int(&u, "id"), text(&u, "name").to_owned()))
             .collect())
     }
+    pub(super) fn name_from(names: &BTreeMap<i64, String>, uid: i64) -> String {
+        names
+            .get(&uid)
+            .cloned()
+            .unwrap_or_else(|| format!("用户 #{uid}"))
+    }
     pub(super) fn apply_names(shares: &mut Value, names: &BTreeMap<i64, String>) {
         if let Some(a) = shares.as_array_mut() {
             for s in a {
                 let uid = int(s, "user_id");
-                s["user_name"] = json!(
-                    names
-                        .get(&uid)
-                        .cloned()
-                        .unwrap_or_else(|| format!("用户 #{uid}"))
-                );
+                s["user_name"] = json!(Self::name_from(names, uid));
             }
         }
+    }
+    fn finish_consumption_allocations(
+        weights: &BTreeMap<i64, Decimal>,
+        c: &Value,
+        names: &BTreeMap<i64, String>,
+    ) -> Result<(Decimal, Value)> {
+        let mut total = Decimal::zero();
+        for weight in weights.values() {
+            total.add(weight);
+            total = total.rounded(60);
+        }
+        let mut shares = allocate(int(c, "cost_fen"), weights, int(c, "creditor_id"), 60)?;
+        Self::apply_names(&mut shares, names);
+        Ok((total, shares))
     }
     fn consumption_allocations<'a>(
         rows: impl Iterator<Item = (i64, &'a str)>,
@@ -39,16 +54,26 @@ impl Service {
             weight.add(&Decimal::parse(amount)?);
             *weight = weight.rounded(60);
         }
-        let mut total = Decimal::zero();
-        for weight in weights.values() {
-            total.add(weight);
-            total = total.rounded(60);
-        }
-        let mut shares = allocate(int(c, "cost_fen"), &weights, int(c, "creditor_id"), 60)?;
-        Self::apply_names(&mut shares, names);
-        Ok((total, shares))
+        Self::finish_consumption_allocations(&weights, c, names)
     }
     pub async fn overview_calculation(&self, db: &mut Db, c: &Value, end: &str) -> Result<Value> {
+        if !c["manual_basis_id"].is_null()
+            || !c["vendor_period_id"].is_null()
+            || (c["cost_source"] == "upstream_bill" && int(c, "bill_import_id") != 0)
+        {
+            return self.preview_calculation(db, c, end).await;
+        }
+        let names = Self::names(db).await?;
+        self.overview_calculation_with_names(db, c, end, &names)
+            .await
+    }
+    pub(super) async fn overview_calculation_with_names(
+        &self,
+        db: &mut Db,
+        c: &Value,
+        end: &str,
+        names: &BTreeMap<i64, String>,
+    ) -> Result<Value> {
         if !c["manual_basis_id"].is_null()
             || !c["vendor_period_id"].is_null()
             || (c["cost_source"] == "upstream_bill" && int(c, "bill_import_id") != 0)
@@ -61,31 +86,47 @@ impl Service {
             .acquire_owned()
             .await
             .map_err(|_| Error::unavailable())?;
-        // The overview does not expose a usage digest or snapshot. Read only the
-        // two fields needed for the same ordered, full-precision allocation.
+        // Stream (user_id, amount) directly into per-user Decimal weights without
+        // materializing a multi-megabyte Vec<(i64, String)> per open cycle.
         use futures_util::TryStreamExt;
         use sqlx::Row;
-        let mut rows: Vec<(i64, String)> = Vec::new();
+        let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
+        let mut record_count = 0_usize;
         {
-            let mut stream = sqlx::query("SELECT user_id,amount FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id")
-                .bind(int(c,"account_id")).bind(text(c,"start")).bind(end).fetch(&mut *db);
+            let mut stream = sqlx::query(
+                "SELECT user_id,amount FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id",
+            )
+            .bind(int(c, "account_id"))
+            .bind(text(c, "start"))
+            .bind(end)
+            .fetch(&mut *db);
             while let Some(row) = stream.try_next().await? {
-                rows.push((row.try_get(0)?, row.try_get(1)?));
+                let user_id: i64 = row.try_get(0)?;
+                let amount: &str = row.try_get(1)?;
+                let weight = weights.entry(user_id).or_insert_with(Decimal::zero);
+                weight.add(&Decimal::parse(amount)?);
+                *weight = weight.rounded(60);
+                record_count += 1;
             }
         }
-        let names = Self::names(db).await?;
         let c = c.clone();
+        let names = names.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let (total, shares) = Self::consumption_allocations(rows.iter().map(|(id, amount)| (*id, amount.as_str())), &c, &names)?;
-            let confirmed = c.get("start_confirmed").map(|_| flag(&c, "start_confirmed")).unwrap_or(true);
-            let mut result = json!({"total_consumption":total.to_string(),"allocations":shares,"record_count":rows.len(),"can_settle":confirmed});
+            let (total, shares) = Self::finish_consumption_allocations(&weights, &c, &names)?;
+            let confirmed = c
+                .get("start_confirmed")
+                .map(|_| flag(&c, "start_confirmed"))
+                .unwrap_or(true);
+            let mut result = json!({"total_consumption":total.to_string(),"allocations":shares,"record_count":record_count,"can_settle":confirmed});
             if c.get("cost_kind").is_some_and(|kind| kind != "exact") {
                 result["can_settle"] = json!(false);
                 result["cost_warning"] = json!("请先确认准确成本或导入上游账单");
             }
             Ok(result)
-        }).await.map_err(|_| Error::unavailable())?
+        })
+        .await
+        .map_err(|_| Error::unavailable())?
     }
     pub(super) async fn usage(db: &mut Db, c: &Value, end: &str) -> Result<Vec<UsageRow>> {
         use futures_util::TryStreamExt;
@@ -201,6 +242,14 @@ impl Service {
         }).await.map_err(|_|Error::unavailable())?
     }
     pub async fn expense_calculation(&self, db: &mut Db, e: &Value) -> Result<Value> {
+        let names = Self::names(db).await?;
+        self.expense_calculation_with_names(e, &names).await
+    }
+    pub(super) async fn expense_calculation_with_names(
+        &self,
+        e: &Value,
+        names: &BTreeMap<i64, String>,
+    ) -> Result<Value> {
         let permit = self
             .cpu
             .clone()
@@ -211,8 +260,8 @@ impl Service {
         if let Some(s) = e["members"].as_str() {
             e["members"] = serde_json::from_str(s)?;
         }
-        let names = Self::names(db).await?;
-        let creditor_name = name(db, int(&e, "creditor_id")).await?;
+        let creditor_name = Self::name_from(names, int(&e, "creditor_id"));
+        let names = names.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let weights = array(&e["members"])
@@ -439,9 +488,6 @@ impl Service {
         {
             return Err(Error::invalid("账单截止时间无效"));
         }
-        if data.get("manual_basis").is_some() {
-            return Err(Error::invalid("独立账号不支持人工补计依据"));
-        }
         let (rows, file_name, file_hash) = if int(data, "import_id") != 0 {
             let b = one(
                 &mut db,
@@ -480,7 +526,6 @@ impl Service {
                 &c,
                 &end,
                 rows.clone(),
-                None,
                 data["allocation_mode"]
                     .as_str()
                     .unwrap_or(c["bill_allocation_mode"].as_str().unwrap_or("proportional")),
@@ -541,13 +586,12 @@ impl Service {
         db.commit().await?;
         Ok(merge(json!({"id":id}), result))
     }
-    pub async fn reconcile_db(
+    pub(super) async fn reconcile_db(
         &self,
         db: &mut Db,
         c: &Value,
         end: &str,
         rows: Arc<Vec<BillRow>>,
-        manual: Option<Value>,
         mode: &str,
     ) -> Result<Value> {
         let permit = self
@@ -563,23 +607,9 @@ impl Service {
         let end = end.to_owned();
         let mode = mode.to_owned();
         let creditor = int(c, "creditor_id");
-        let root = int(c, "account_id");
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let mut result = if let Some(config) = &manual {
-                crate::manual_billing::reconcile(
-                    &rows,
-                    &usage,
-                    &details,
-                    &start,
-                    &end,
-                    &mode,
-                    config,
-                    &[root],
-                )?
-            } else {
-                billing::reconcile(&rows, &usage, &details, &start, &end, &mode)?
-            };
+            let mut result = billing::reconcile(&rows, &usage, &details, &start, &end, &mode)?;
             let mut shares = bill_allocations(&result, creditor)?;
             Self::apply_names(&mut shares, &names);
             result["allocations"] = shares;
@@ -615,7 +645,6 @@ impl Service {
                 &c,
                 &end,
                 Arc::new(serde_json::from_value(p["rows"].take())?),
-                p["result"].get("manual_basis").cloned(),
                 p["result"]["allocation_mode"]
                     .as_str()
                     .unwrap_or("proportional"),
@@ -659,53 +688,24 @@ impl Service {
         {
             return Err(Error::conflict("请求匹配已更新，请重新预览"));
         }
-        if if fresh["manual_basis"].is_null() {
-            !Decimal::parse(text(&fresh, "matched_amount"))?.positive()
-        } else {
-            !flag(&fresh, "can_confirm")
-        } {
+        if !Decimal::parse(text(&fresh, "matched_amount"))?.positive() {
             return Err(Error::invalid("没有正金额匹配依据，无法分摊"));
         }
         let mode = result["allocation_mode"].as_str().unwrap_or("proportional");
         let gap = Self::coverage_error(db, &c, text(result, "end")).await?;
-        if !fresh["manual_basis"].is_null() && (gap.is_some() || !flag(&c, "start_confirmed")) {
-            return Err(Error::conflict("请先确认起点并解决本地消费覆盖缺口"));
-        }
         let difference_confirmed =
             mode == "proportional" && (int(&fresh, "unmatched_count") != 0 || gap.is_some());
         let outside_confirmed = int(&fresh, "outside_count") != 0;
-        let local_only = fresh["manual_basis"]["source"] == "local_only";
-        let bill = if local_only {
-            json!({"id":null})
-        } else {
-            exec(db,"INSERT INTO bill_imports(cycle_id,file_name,file_hash,rows,created_by,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cycle_id,file_hash) DO NOTHING",&[json!(cid),result["file_name"].clone(),result["file_hash"].clone(),json!(dumps(&payload["rows"])),actor["id"].clone(),json!(time::now())]).await?;
-            one(
-                db,
-                "SELECT id FROM bill_imports WHERE cycle_id=? AND file_hash=?",
-                &[json!(cid), result["file_hash"].clone()],
-            )
-            .await?
-        };
-        let basis_id = Self::save_manual_basis(
+        exec(db,"INSERT INTO bill_imports(cycle_id,file_name,file_hash,rows,created_by,created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(cycle_id,file_hash) DO NOTHING",&[json!(cid),result["file_name"].clone(),result["file_hash"].clone(),json!(dumps(&payload["rows"])),actor["id"].clone(),json!(time::now())]).await?;
+        let bill = one(
             db,
-            actor,
-            Some(cid),
-            None,
-            &merge(
-                fresh.clone(),
-                json!({"start":c["start"],"end":result["end"],"version":result["version"]}),
-            ),
+            "SELECT id FROM bill_imports WHERE cycle_id=? AND file_hash=?",
+            &[json!(cid), result["file_hash"].clone()],
         )
         .await?;
-        exec(
-            db,
-            "UPDATE cycles SET manual_basis_id=? WHERE id=?",
-            &[basis_id, json!(cid)],
-        )
-        .await?;
-        exec(db,"UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source=?,bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,bill_allocation_mode=?,billable_cost_fen=?,version=version+1 WHERE id=? AND version=?",&[result["cost_fen"].clone(),json!(if local_only{"manual_bill"}else{"upstream_bill"}),bill["id"].clone(),result["end"].clone(),result["digest"].clone(),json!(i64::from(difference_confirmed)),json!(mode),fresh["billable_cost_fen"].clone(),json!(cid),c["version"].clone()]).await?;
+        exec(db,"UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source='upstream_bill',manual_basis_id=NULL,bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,bill_allocation_mode=?,billable_cost_fen=?,version=version+1 WHERE id=? AND version=?",&[result["cost_fen"].clone(),bill["id"].clone(),result["end"].clone(),result["digest"].clone(),json!(i64::from(difference_confirmed)),json!(mode),fresh["billable_cost_fen"].clone(),json!(cid),c["version"].clone()]).await?;
         audit(db,actor,"bill_allocation",json!(cid),&json!({"allocation_mode":mode,"billable_cost_fen":fresh["billable_cost_fen"],"excluded_amount":fresh["excluded_amount"],"rules_version":fresh["rules_version"]})).await?;
-        audit(db,actor,if local_only{"confirm_local_billing"}else{"import_bill"},json!(cid),&json!({"before_cost_fen":c["cost_fen"],"cost_fen":result["cost_fen"],"bill_import_id":bill["id"],"file_hash":result["file_hash"],"end":result["end"],"unmatched_amount":result["unmatched_amount"],"accept_difference":difference_confirmed,"accept_outside":outside_confirmed})).await?;
+        audit(db,actor,"import_bill",json!(cid),&json!({"before_cost_fen":c["cost_fen"],"cost_fen":result["cost_fen"],"bill_import_id":bill["id"],"file_hash":result["file_hash"],"end":result["end"],"unmatched_amount":result["unmatched_amount"],"accept_difference":difference_confirmed,"accept_outside":outside_confirmed})).await?;
         Ok(json!({"id":cid,"version":int(&c,"version")+1,"bill_import_id":bill["id"]}))
     }
 }

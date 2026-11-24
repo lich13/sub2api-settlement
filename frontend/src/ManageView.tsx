@@ -33,7 +33,7 @@ export function ManageCyclesTable({
             <th className="numeric">成本</th>
             <th>垫付人</th>
             <th>状态</th>
-            <th>操作</th>
+            <th className="action-cell">操作</th>
           </tr>
         </thead>
         <tbody>

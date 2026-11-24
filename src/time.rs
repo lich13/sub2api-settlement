@@ -65,8 +65,12 @@ fn parse_naive_datetime(s: &str) -> Option<PrimitiveDateTime> {
     Some(PrimitiveDateTime::new(date, time))
 }
 
-pub fn normalize_datetime(s: &str, allow_space_naive: bool) -> Option<String> {
-    let normalized = s.replace(' ', "T");
+pub fn normalize_datetime(s: &str) -> Option<String> {
+    let normalized: std::borrow::Cow<'_, str> = if s.contains(' ') {
+        std::borrow::Cow::Owned(s.replace(' ', "T"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    };
     if let Ok(d) = OffsetDateTime::parse(&normalized, &Rfc3339) {
         let micros = d.microsecond();
         let frac = if micros == 0 {
@@ -97,12 +101,7 @@ pub fn normalize_datetime(s: &str, allow_space_naive: bool) -> Option<String> {
             d.second(),
         ));
     }
-    let naive_input = if allow_space_naive {
-        normalized.as_str()
-    } else {
-        s
-    };
-    let d = parse_naive_datetime(naive_input)?;
+    let d = parse_naive_datetime(s)?;
     let micros = d.microsecond();
     let frac = if micros == 0 {
         String::new()
@@ -121,7 +120,11 @@ pub fn normalize_datetime(s: &str, allow_space_naive: bool) -> Option<String> {
 }
 
 pub fn parse(s: &str) -> Result<OffsetDateTime> {
-    let normalized = s.replace(' ', "T");
+    let normalized: std::borrow::Cow<'_, str> = if s.contains(' ') {
+        std::borrow::Cow::Owned(s.replace(' ', "T"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    };
     if let Ok(d) = OffsetDateTime::parse(&normalized, &Rfc3339) {
         return Ok(d.to_offset(UtcOffset::UTC));
     }
@@ -180,19 +183,23 @@ pub fn format(d: OffsetDateTime) -> String {
     )
 }
 
-pub fn now() -> String {
+fn now_utc() -> OffsetDateTime {
     // Fixed time is accepted only by the isolated fixture runtime.
     if std::env::var("SETTLEMENT_ENV").as_deref() == Ok("test")
         && let Ok(v) = std::env::var("SETTLEMENT_TEST_NOW")
         && let Ok(d) = parse(&v)
     {
-        return format(d);
+        return d;
     }
-    format(OffsetDateTime::now_utc())
+    OffsetDateTime::now_utc()
+}
+
+pub fn now() -> String {
+    format(now_utc())
 }
 
 pub fn after(seconds: i64) -> String {
-    format(parse(&now()).unwrap_or_else(|_| OffsetDateTime::now_utc()) + Duration::seconds(seconds))
+    format(now_utc() + Duration::seconds(seconds))
 }
 
 pub fn timestamp_micros(d: OffsetDateTime) -> i64 {
@@ -223,8 +230,7 @@ pub fn date_bounds(s: &str) -> Result<(String, String)> {
 }
 
 pub fn epoch() -> f64 {
-    let d = parse(&now()).unwrap_or_else(|_| OffsetDateTime::now_utc());
-    timestamp_micros(d) as f64 / 1_000_000.0
+    timestamp_micros(now_utc()) as f64 / 1_000_000.0
 }
 
 pub fn is_expired(expires_at: &serde_json::Value) -> bool {

@@ -1,5 +1,26 @@
 # 更新日志
 
+## v0.13.2 · 2026-11-24
+
+### 架构减法与契约收紧
+
+- 移除同步路径仅写入无读取的 `meta('source_count')` 及全表 `meta('source_ids')` JSON 重写（仅保留 `rust_source_presence` 空表冷启动迁移分支）；下线单账号周期 `manual_basis` / `local_only` / `confirm_local_billing` 死写分支并合并 `confirm_bill` 更新语句，完整保留历史 `cycles.manual_basis_id` 只读展示兼容；移除恒为 `false` 的 `time::normalize_datetime` 宽松参数与白名单后不可达的防卫检查。
+- 以零分配 ASCII 十进制扫描函数 `money::valid_decimal_ascii` 替换全部金额与倍率正则校验并移除 `regex` 依赖；源数据流 `Snapshot::next` 改为强类型 `SourceRow`，上游账单 CSV 解析直接构建 `BillRow` 并消除 `serde_json::Value` 往返与冗余匹配特征；前端收紧单账号 `BillPreview` 与账号组 `VendorBillPreview` 类型边界，统一比例／倍率正则与 CSV 读取／导出辅助函数。
+
+### 核心算法与查询加速
+
+- 重构上游账单匹配引擎 `billing::reconcile_inner`：采用两阶段借用签名 `Signature<'a>`、连续数组索引、仅对首轮未命中子集按需延迟构建 `by_tokens` 二级索引，并在每行 `BillRow` 缓存已解析 `Decimal`；为 `Decimal::parse` 增加 38 位以内 `u128` 快路径、`POW10` 幂表与零分配十进制位数计算，`time` 模块消除无空格时间戳重复分配与 `now` 字符串往返解析。
+- 收敛同步与批量查询开销：消除选区同步重复刷新的 `inventory.refresh`、将暂存清理并入首批事务提交、在无删除记录时跳过 `coverage()` 全量删除并改用标量查询，按实变记录精确起止时间窗过滤历史已结算周期的漂移重算；将概览试算改为流式汇总、延迟加载账号组请求明细，并消除目录、概览、固定费用、对冲收款、历史、账号组与余额接口的循环 N+1 查询。
+
+### 前端交互与视觉细节
+
+- 下沉弹窗瞬态状态至 `StartConfirmDialog` 与 `ConfirmActionDialog`，确保对冲转账提交失败时完整保留备注与凭证草稿；缓存 `Intl` 日期与数字格式化实例，使用 `useMemo` / `useCallback` 稳定派生映射；将无关联订单通知改为非交互 `<div>`；从操作日志筛选下拉框剔除已退役历史动作，同时保留旧记录中文翻译；统一续费与建组金额输入框 `placeholder="0.00"` 与失焦补齐两位小数，仅在已选周期时展示结算截止时间选择器。
+- 补齐 `.audit-filters` 筛选控件、`.vendor-confirm-panel` 内联危险确认及操作记录展开区的基线与盒模型排版，对齐 `.vendor-groups` 左右边缘、收敛 `768px` 平板表格列宽与 `360px` 窄屏操作栏单行排布，补齐 `.muted` / `.candidate-result` 样式并清零业务样式表中的 `!important` 覆盖。
+
+### 兼容性
+
+- 完整保留 schema 1–9 已发布迁移校验和、建表 SQL、最大余数分摊算法、账务摘要字段顺序与全部固定向量（`tests/golden/`）、源库只读隔离、Fernet 会话轮换、CSRF／幂等键与删除范围 `scope_digest` 服务端二次复核。
+
 ## v0.13.1 · 2026-11-24
 
 ### 界面与版本号展示

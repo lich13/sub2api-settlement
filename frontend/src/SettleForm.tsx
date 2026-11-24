@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   api,
-  downloadCsv,
+  exportUnmatchedCsv,
+  readCsvFile,
   ApiError,
   money,
   costInput,
@@ -17,7 +18,6 @@ import type {
   Preview,
   Calculation,
   BillPreview,
-  CostKind,
   BillMode,
   DeletionJob,
   VendorPeriod,
@@ -310,22 +310,20 @@ function BillImportPanel({
           accept=".csv,text/csv"
           disabled={busy}
           onChange={async (e) => {
-            const file = e.target.files?.[0];
-            const token = ++fileRead.current;
-            invalidate();
-            if (!file) {
+            const result = await readCsvFile(
+              e.target.files?.[0],
+              fileRead,
+              invalidate,
+            );
+            if (result.status === "empty") {
               setFileName("");
               setCsv("");
-              return;
+            } else if (result.status === "too_large") {
+              setError(result.error);
+            } else if (result.status === "ok") {
+              setFileName(result.name);
+              setCsv(result.content);
             }
-            if (file.size > 10 * 1024 * 1024) {
-              setError("CSV 不能超过 10 MB");
-              return;
-            }
-            const content = await file.text();
-            if (token !== fileRead.current) return;
-            setFileName(file.name);
-            setCsv(content);
           }}
         />
       </label>
@@ -359,18 +357,8 @@ function BillImportPanel({
           )}
           <div>
             <span>上游总扣费</span>
-            <b>
-              {preview.manual_basis?.source === "local_only"
-                ? "未提供"
-                : money(preview.upstream_total_fen ?? preview.cost_fen)}
-            </b>
+            <b>{money(preview.cost_fen)}</b>
           </div>
-          {preview.manual_summary && (
-            <div>
-              <span>手动补计</span>
-              <b>{billedMoney(preview.manual_summary.amount)}</b>
-            </div>
-          )}
           <div>
             <span>本次计费</span>
             <b>{money(preview.billable_cost_fen ?? preview.cost_fen)}</b>
@@ -410,29 +398,20 @@ function BillImportPanel({
               </b>
             </div>
           )}
-          {(preview.unmatched_count > 0 ||
-            preview.outside_count > 0 ||
-            (preview.local_unmatched?.length || 0) > 0) && (
+          {(preview.unmatched_count > 0 || preview.outside_count > 0) && (
             <button
               type="button"
               className="text-button"
               disabled={busy}
-              onClick={async () => {
-                const token = requestVersion.current;
-                setBusy(true);
-                setError("");
-                try {
-                  await downloadCsv(
-                    `/cycles/${effectiveCycle.id}/bill-previews/${preview.id}/unmatched.csv`,
-                    "未匹配账单.csv",
-                  );
-                } catch (e) {
-                  if (token === requestVersion.current)
-                    setError((e as Error).message);
-                } finally {
-                  if (token === requestVersion.current) setBusy(false);
-                }
-              }}
+              onClick={() =>
+                void exportUnmatchedCsv(
+                  `/cycles/${effectiveCycle.id}/bill-previews/${preview.id}/unmatched.csv`,
+                  "未匹配账单.csv",
+                  requestVersion,
+                  setBusy,
+                  setError,
+                )
+              }
             >
               导出未匹配明细
             </button>
@@ -449,11 +428,9 @@ function BillImportPanel({
           >
             {busy
               ? "确认中…"
-              : preview.manual_basis
-                ? "确认计费依据"
-                : preview.allocation_mode === "matched_only"
-                  ? "确认仅按匹配金额计费"
-                  : "确认替换成本"}
+              : preview.allocation_mode === "matched_only"
+                ? "确认仅按匹配金额计费"
+                : "确认替换成本"}
           </button>
         </div>
       )}
@@ -501,7 +478,7 @@ export function SettleForm({
   const [touched, setTouched] = useState(false);
   const [displayPreview, setDisplayPreview] = useState<Preview | null>(null);
   const [renew, setRenew] = useState<
-    Record<number, { cost: string; creditor_id: number; cost_kind: CostKind }>
+    Record<number, { cost: string; creditor_id: number }>
   >({});
   const [vendorRenew, setVendorRenew] = useState<
     Record<number, { cost: string; creditor_id: number }>
@@ -543,7 +520,6 @@ export function SettleForm({
                 {
                   cost: costInput(c.cycle.cost_fen),
                   creditor_id: c.cycle.creditor_id,
-                  cost_kind: "exact",
                 },
               ]),
           ),
@@ -571,7 +547,6 @@ export function SettleForm({
       cycle_id: number;
       cost: string;
       creditor_id: number;
-      cost_kind: CostKind;
     }[];
     delete_cycle_ids?: number[];
     delete_scopes?: Record<string, string>;
@@ -758,8 +733,8 @@ export function SettleForm({
             正在核算分摊…
           </p>
         )}
-        <div className="end-picker">
-          {!!ids.length && (
+        {ids.length > 0 && (
+          <div className="end-picker">
             <label>
               结束时间（北京时间）
               <input
@@ -773,8 +748,8 @@ export function SettleForm({
                 }}
               />
             </label>
-          )}
-        </div>
+          </div>
+        )}
         <fieldset
           className="settlement-fields"
           disabled={busy || !!pendingSubmission.current}
@@ -833,6 +808,7 @@ export function SettleForm({
                     下期组成本（元）
                     <input
                       inputMode="decimal"
+                      placeholder="0.00"
                       value={vendorRenew[g.id]?.cost ?? costInput(g.cost_fen)}
                       onChange={(e) => {
                         setTouched(true);
@@ -844,6 +820,20 @@ export function SettleForm({
                             cost: e.target.value,
                           },
                         }));
+                      }}
+                      onBlur={() => {
+                        const raw =
+                          vendorRenew[g.id]?.cost ?? costInput(g.cost_fen);
+                        if (amountPattern.test(raw)) {
+                          setVendorRenew((prev) => ({
+                            ...prev,
+                            [g.id]: {
+                              creditor_id:
+                                prev[g.id]?.creditor_id ?? g.creditor_id,
+                              cost: Number(raw).toFixed(2),
+                            },
+                          }));
+                        }
                       }}
                     />
                   </label>
@@ -923,7 +913,6 @@ export function SettleForm({
                           next[c.cycle.id] = {
                             cost: costInput(c.cycle.cost_fen),
                             creditor_id: c.cycle.creditor_id,
-                            cost_kind: "exact",
                           };
                         else delete next[c.cycle.id];
                         return next;
@@ -966,6 +955,7 @@ export function SettleForm({
                     新周期成本（元）
                     <input
                       inputMode="decimal"
+                      placeholder="0.00"
                       value={renew[c.cycle.id].cost}
                       onChange={(e) => {
                         const val = e.target.value;
@@ -977,6 +967,18 @@ export function SettleForm({
                             cost: val,
                           },
                         }));
+                      }}
+                      onBlur={() => {
+                        const raw = renew[c.cycle.id]?.cost;
+                        if (raw && amountPattern.test(raw)) {
+                          setRenew((prev) => ({
+                            ...prev,
+                            [c.cycle.id]: {
+                              ...prev[c.cycle.id],
+                              cost: Number(raw).toFixed(2),
+                            },
+                          }));
+                        }
                       }}
                     />
                   </label>

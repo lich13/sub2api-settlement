@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowDownLeft,
@@ -100,13 +100,7 @@ export function App() {
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [showInbox, setShowInbox] = useState(false);
   const [startCycle, setStartCycle] = useState<Cycle | null>(null);
-  const [startModalState, setStartModalState] = useState({
-    busy: false,
-    dirty: false,
-  });
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
-  const [paymentNote, setPaymentNote] = useState("");
-  const [paymentReference, setPaymentReference] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
@@ -115,73 +109,96 @@ export function App() {
   const { state: accountState, refresh: refreshAccountState } = useAccountState(
     me?.id,
   );
-  const active = accountState?.revision
-    ? new Set(accountState.active_ids)
-    : null;
-  const latestNames = new Map(
-    (accountState?.accounts || []).map((a) => [a.id, a.name]),
+  const active = useMemo(
+    () => (accountState?.revision ? new Set(accountState.active_ids) : null),
+    [accountState?.revision, accountState?.active_ids],
   );
-  const currentName = (id: number, fallback: string, revision = "") =>
-    accountState && accountState.revision >= revision
-      ? (latestNames.get(id) ?? fallback)
-      : fallback;
-  const currentCycle = (c: Cycle, revision = "") =>
-    c.status === "open"
-      ? { ...c, name: currentName(c.account_id, c.name, revision) }
-      : c;
-  const overview = overviewSource && {
-    ...overviewSource,
-    accounts: overviewSource.accounts
-      .filter((a) => !active || active.has(a.id))
-      .map((a) => ({
-        ...a,
-        name: currentName(a.id, a.name, overviewSource.account_revision),
-        cycle: a.cycle
-          ? currentCycle(a.cycle, overviewSource.account_revision)
-          : null,
+  const latestNames = useMemo(
+    () => new Map((accountState?.accounts || []).map((a) => [a.id, a.name])),
+    [accountState?.accounts],
+  );
+  const currentName = useCallback(
+    (id: number, fallback: string, revision = "") =>
+      accountState && accountState.revision >= revision
+        ? (latestNames.get(id) ?? fallback)
+        : fallback,
+    [accountState, latestNames],
+  );
+  const currentCycle = useCallback(
+    (c: Cycle, revision = "") =>
+      c.status === "open"
+        ? { ...c, name: currentName(c.account_id, c.name, revision) }
+        : c,
+    [currentName],
+  );
+  const overview = useMemo(
+    () =>
+      overviewSource && {
+        ...overviewSource,
+        accounts: overviewSource.accounts
+          .filter((a) => !active || active.has(a.id))
+          .map((a) => ({
+            ...a,
+            name: currentName(a.id, a.name, overviewSource.account_revision),
+            cycle: a.cycle
+              ? currentCycle(a.cycle, overviewSource.account_revision)
+              : null,
+          })),
+      },
+    [overviewSource, active, currentName, currentCycle],
+  );
+  const catalog = useMemo(
+    () =>
+      catalogSource && {
+        ...catalogSource,
+        accounts: catalogSource.accounts
+          .filter((a) => !active || active.has(a.id))
+          .map((a) => ({
+            ...a,
+            name: currentName(a.id, a.name, catalogSource.account_revision),
+          })),
+      },
+    [catalogSource, active, currentName],
+  );
+  const history = useMemo(
+    () => ({
+      ...historySource,
+      cycles: historySource.cycles
+        .filter((c) => !active || active.has(c.account_id))
+        .map((c) => currentCycle(c, historySource.account_revision)),
+    }),
+    [historySource, active, currentCycle],
+  );
+  const vendors = useMemo(
+    () =>
+      vendorsSource.map((v) => ({
+        ...v,
+        current_members: v.current_members?.map((a) => ({
+          ...a,
+          name: currentName(a.account_id, a.name, vendorRevision),
+          account_deleted:
+            active && accountState && accountState.revision >= vendorRevision
+              ? !active.has(a.account_id)
+              : a.account_deleted,
+        })),
+        periods: v.periods.map((p) => ({
+          ...p,
+          members: p.members?.map((c) => ({
+            ...currentCycle(c, vendorRevision),
+            current_name: currentName(
+              c.account_id,
+              c.current_name || c.name,
+              vendorRevision,
+            ),
+            account_deleted:
+              active && accountState && accountState.revision >= vendorRevision
+                ? !active.has(c.account_id)
+                : c.account_deleted,
+          })),
+        })),
       })),
-  };
-  const catalog = catalogSource && {
-    ...catalogSource,
-    accounts: catalogSource.accounts
-      .filter((a) => !active || active.has(a.id))
-      .map((a) => ({
-        ...a,
-        name: currentName(a.id, a.name, catalogSource.account_revision),
-      })),
-  };
-  const history = {
-    ...historySource,
-    cycles: historySource.cycles
-      .filter((c) => !active || active.has(c.account_id))
-      .map((c) => currentCycle(c, historySource.account_revision)),
-  };
-  const vendors = vendorsSource.map((v) => ({
-    ...v,
-    current_members: v.current_members?.map((a) => ({
-      ...a,
-      name: currentName(a.account_id, a.name, vendorRevision),
-      account_deleted:
-        active && accountState && accountState.revision >= vendorRevision
-          ? !active.has(a.account_id)
-          : a.account_deleted,
-    })),
-    periods: v.periods.map((p) => ({
-      ...p,
-      members: p.members?.map((c) => ({
-        ...currentCycle(c, vendorRevision),
-        current_name: currentName(
-          c.account_id,
-          c.current_name || c.name,
-          vendorRevision,
-        ),
-        account_deleted:
-          active && accountState && accountState.revision >= vendorRevision
-            ? !active.has(c.account_id)
-            : c.account_deleted,
-      })),
-    })),
-  }));
+    [vendorsSource, vendorRevision, active, accountState, currentName, currentCycle],
+  );
   const refreshSequence = useRef(0);
   const detailSequence = useRef(0);
   function closeDetail() {
@@ -478,11 +495,15 @@ export function App() {
       if (ticket === detailSequence.current) setError((e as Error).message);
     }
   }
+  function openConfirm(next: ConfirmState) {
+    setError("");
+    setConfirm(next);
+  }
   function orderAction(o: Order) {
     const group = orders.filter((row) =>
       o.batch_id ? row.batch_id === o.batch_id : row.id === o.id,
     );
-    setConfirm({
+    openConfirm({
       text: `标记 ${group.length} 张历史待处理订单已结清 ${money(group.reduce((sum, row) => sum + row.amount_fen, 0))}`,
       action: () =>
         api(`/orders/${o.id}/actions`, "POST", {
@@ -517,9 +538,7 @@ export function App() {
       user_b: value.user_b,
       digest: value.digest,
     };
-    setPaymentNote("");
-    setPaymentReference("");
-    setConfirm({
+    openConfirm({
       text,
       payment: true,
       action: (memo) => api("/netting/payments", "POST", { ...payload, ...memo }),
@@ -547,57 +566,75 @@ export function App() {
       setBusy(false);
     }
   }
-  const filteredAccounts = (overview?.accounts || []).filter(
-    (a) =>
-      !a.deleted &&
-      !a.vendor_id &&
-      (isAdmin || a.kind === "paid") &&
-      (!query ||
-        `${a.name} ${a.id}`.toLowerCase().includes(query.toLowerCase())) &&
-      (filter === "all" || filter === "open"
-        ? filter === "all" || (a.kind === "paid" && a.cycle?.status === "open")
-        : a.kind === filter),
-  );
-  const visibleVendorCycleIds = visibleVendorGroups(
-    vendors,
-    overview?.accounts || [],
-    query,
-    filter,
-  ).flatMap(({ period }) => period?.members?.map((c) => c.id) || []);
-  const selectableCycleIds = [
-    ...new Set([
-      ...visibleVendorCycleIds,
-      ...filteredAccounts.flatMap((a) =>
-        a.kind === "paid" && a.cycle?.status === "open" ? [a.cycle.id] : [],
+  const filteredAccounts = useMemo(
+    () =>
+      (overview?.accounts || []).filter(
+        (a) =>
+          !a.deleted &&
+          !a.vendor_id &&
+          (isAdmin || a.kind === "paid") &&
+          (!query ||
+            `${a.name} ${a.id}`.toLowerCase().includes(query.toLowerCase())) &&
+          (filter === "all" || filter === "open"
+            ? filter === "all" ||
+              (a.kind === "paid" && a.cycle?.status === "open")
+            : a.kind === filter),
       ),
-    ]),
-  ];
+    [overview, isAdmin, query, filter],
+  );
+  const visibleVendors = useMemo(
+    () =>
+      visibleVendorGroups(vendors, overview?.accounts || [], query, filter),
+    [vendors, overview, query, filter],
+  );
+  const visibleVendorCycleIds = useMemo(
+    () =>
+      visibleVendors.flatMap(({ period }) =>
+        period?.members?.map((c) => c.id) || [],
+      ),
+    [visibleVendors],
+  );
+  const selectableCycleIds = useMemo(
+    () => [
+      ...new Set([
+        ...visibleVendorCycleIds,
+        ...filteredAccounts.flatMap((a) =>
+          a.kind === "paid" && a.cycle?.status === "open" ? [a.cycle.id] : [],
+        ),
+      ]),
+    ],
+    [visibleVendorCycleIds, filteredAccounts],
+  );
   const allVisibleSelected =
     selectableCycleIds.length > 0 &&
     selectableCycleIds.every((id) => selected.includes(id));
-  const filteredExpenses = expenses.filter(
-    (item) =>
-      !query ||
-      `${item.expense.name} ${item.expense.id} ${item.creditor_name || ""}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
+  const filteredExpenses = useMemo(
+    () =>
+      expenses.filter(
+        (item) =>
+          !query ||
+          `${item.expense.name} ${item.expense.id} ${item.creditor_name || ""}`
+            .toLowerCase()
+            .includes(query.toLowerCase()),
+      ),
+    [expenses, query],
   );
   const billPage =
     tab === "bills" || (tab === "manage" && manageTab === "orders");
   const receivablePage = tab === "receivable";
-  const availableCycles = new Map<number, Cycle>();
-  for (const account of overview?.accounts || []) {
-    if (account.cycle) availableCycles.set(account.cycle.id, account.cycle);
-  }
-  for (const cycle of history.cycles) availableCycles.set(cycle.id, cycle);
-  for (const v of vendors)
-    for (const p of v.periods)
-      for (const c of p.members || [])
-        if (
-          !availableCycles.has(c.id) ||
-          availableCycles.get(c.id)!.version < c.version
-        )
-          availableCycles.set(c.id, currentCycle(c));
+  const availableCycles = useMemo(() => {
+    const map = new Map<number, Cycle>();
+    for (const account of overview?.accounts || []) {
+      if (account.cycle) map.set(account.cycle.id, account.cycle);
+    }
+    for (const cycle of history.cycles) map.set(cycle.id, cycle);
+    for (const v of vendors)
+      for (const p of v.periods)
+        for (const c of p.members || [])
+          if (!map.has(c.id) || map.get(c.id)!.version < c.version)
+            map.set(c.id, currentCycle(c));
+    return map;
+  }, [overview, history.cycles, vendors, currentCycle]);
   const settleSelection = expandVendorSelection(
     settlement?.ids || [],
     vendors.flatMap((v) => v.periods).filter((p) => p.status === "open"),
@@ -658,7 +695,7 @@ export function App() {
         ))}
       </nav>
       <main>
-        <FormError error={error} />
+        {!confirm && <FormError error={error} />}
         {tab !== "manage" && overview?.sync_error && (
           <FormError error={overview.sync_error} />
         )}
@@ -900,6 +937,7 @@ export function App() {
                 <VendorGroups
                   vendors={vendors}
                   accounts={overview?.accounts || []}
+                  groups={visibleVendors}
                   admin={!!isAdmin}
                   totals={overview?.vendor_totals}
                   selected={selected}
@@ -952,7 +990,7 @@ export function App() {
                   setDetail({ snapshot: item });
                 }}
                 onVoid={(item) =>
-                  setConfirm({
+                  openConfirm({
                     text: `作废「${item.expense.name}」本次结算？已报已付或结清的账目无法作废。`,
                     action: () =>
                       api(
@@ -1003,7 +1041,7 @@ export function App() {
                 onEditCycle={(cycle) => setForm({ cycle })}
                 onSettle={(ids) => beginSettlement(ids)}
                 onVoid={(c) =>
-                  setConfirm({
+                  openConfirm({
                     text: `作废「${c.name}」本次结算，并恢复为待重算周期`,
                     action: () =>
                       api(`/settlements/${c.settlement_id}/void`, "POST"),
@@ -1103,9 +1141,8 @@ export function App() {
       )}
       {startCycle && (
         <StartConfirmDialog
+          key={startCycle.id}
           cycle={startCycle}
-          modalState={startModalState}
-          onStateChange={setStartModalState}
           onClose={() => setStartCycle(null)}
           onConfirmed={async () => {
             setStartCycle(null);
@@ -1130,28 +1167,15 @@ export function App() {
       )}
       {confirm && (
         <ConfirmActionDialog
+          key={confirm.text}
           confirm={confirm}
           busy={busy}
           error={error}
-          paymentNote={paymentNote}
-          paymentReference={paymentReference}
-          onNoteChange={setPaymentNote}
-          onReferenceChange={setPaymentReference}
-          onClose={() => setConfirm(null)}
-          onSubmit={() =>
-            void run(() =>
-              confirm.action(
-                confirm.payment
-                  ? {
-                      ...(paymentNote ? { note: paymentNote } : {}),
-                      ...(paymentReference
-                        ? { reference: paymentReference }
-                        : {}),
-                    }
-                  : undefined,
-              ),
-            )
-          }
+          onClose={() => {
+            setConfirm(null);
+            setError("");
+          }}
+          onSubmit={(memo) => void run(() => confirm.action(memo))}
         />
       )}
     </div>

@@ -68,9 +68,6 @@ impl Service {
         if cycle["status"] != "open" || cycle["version"] != result["version"] {
             return Err(Error::conflict("周期已修改或已出单，请重新匹配"));
         }
-        if !result["manual_basis"].is_null() {
-            return manual_basis_csv(result);
-        }
         csv_bytes(
             &[
                 "CSV 行号",

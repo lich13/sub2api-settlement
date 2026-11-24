@@ -66,7 +66,7 @@ async fn fingerprints(rows: &[Value]) -> Vec<Fingerprint> {
 async fn ids(snapshot: &mut Snapshot) -> Vec<i64> {
     let mut result = Vec::new();
     while let Some(batch) = snapshot.next().await.unwrap() {
-        result.extend(batch.into_iter().map(|row| row["id"].as_i64().unwrap()));
+        result.extend(batch.into_iter().map(|row| row.id));
     }
     result
 }

@@ -134,21 +134,6 @@ impl Service {
         } else {
             manual_override
         };
-        let members = Self::vendor_members(db, pid).await?;
-        let mut usage = Vec::new();
-        let mut details = BTreeMap::<i64, RequestDetail>::new();
-        let mut versions = Vec::new();
-        let mut gaps = Vec::new();
-        for c in &members {
-            usage.extend(Self::usage(db, c, end).await?);
-            details.extend(Self::details(db, c, end).await?);
-            versions.push(json!({"cycle_id":c["id"],"version":c["version"],"account_id":c["account_id"],"usage_version":store::revision(db,int(c,"account_id")).await?}));
-            if let Some(gap) = Self::coverage_error(db, c, end).await? {
-                gaps.push(json!({"account_id":c["account_id"],"warning":gap}));
-            }
-        }
-        usage.sort_by_key(|u| u.id);
-        let names = Self::names(db).await?;
         let stored = if rows.is_none() && !period["bill_import_id"].is_null() {
             Some(
                 one(
@@ -168,6 +153,43 @@ impl Service {
                 .map(|b| serde_json::from_str::<Vec<BillRow>>(text(b, "rows")))
                 .transpose()?,
         };
+        let need_details = rows.is_some() || manual.is_some();
+        let members = Self::vendor_members(db, pid).await?;
+        let (coverage_from, coverage_gaps) = Self::coverage_meta(db).await?;
+        let root_ids = members
+            .iter()
+            .map(|c| int(c, "account_id"))
+            .collect::<Vec<_>>();
+        let root_revisions = if root_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            store::all(
+                db,
+                "SELECT root_id,version FROM rust_root_versions WHERE root_id IN (SELECT value FROM json_each(?))",
+                &[Value::String(dumps(&root_ids))],
+            )
+            .await?
+            .into_iter()
+            .map(|r| (int(&r, "root_id"), int(&r, "version")))
+            .collect::<BTreeMap<_, _>>()
+        };
+        let mut usage = Vec::new();
+        let mut details = BTreeMap::<i64, RequestDetail>::new();
+        let mut versions = Vec::with_capacity(members.len());
+        let mut gaps = Vec::new();
+        for c in &members {
+            let aid = int(c, "account_id");
+            usage.extend(Self::usage(db, c, end).await?);
+            if need_details {
+                details.extend(Self::details(db, c, end).await?);
+            }
+            versions.push(json!({"cycle_id":c["id"],"version":c["version"],"account_id":c["account_id"],"usage_version":root_revisions.get(&aid).copied().unwrap_or(0)}));
+            if let Some(gap) = Self::coverage_error_from(&coverage_from, &coverage_gaps, c, end) {
+                gaps.push(json!({"account_id":c["account_id"],"warning":gap}));
+            }
+        }
+        usage.sort_by_key(|u| u.id);
+        let names = Self::names(db).await?;
         let end = end.to_owned();
         let permit = self
             .cpu
@@ -199,20 +221,36 @@ impl Service {
             let difference=bill_difference.as_ref().is_some_and(|d|d.rational()!=Decimal::zero().rational())||resolved.as_ref().is_some_and(|r|int(r,"unmatched_count")>0)||!gaps.is_empty();
             let valid=eligible&&period["bill_end"]==end&&period["bill_digest"]==rules_digest&&(!difference||flag(&period,"bill_difference_confirmed"));
             let group=json!({"id":pid,"vendor_id":period["vendor_id"],"name":period["name"],"version":period["version"],"cost_fen":period["cost_fen"],"creditor_id":period["creditor_id"],"start":period["start"],"end":end,"bill_end":period["bill_end"],"start_confirmed":flag(&period,"start_confirmed"),"member_ids":members.iter().map(|c|c["id"].clone()).collect::<Vec<_>>(),"basis":split["basis"],"bill_import_id":period["bill_import_id"],"pending_bill":!valid,"manual_basis_id":period["manual_basis_id"]});
-            let mut calculations=Vec::new();
+            let mut own_counts = BTreeMap::<i64, usize>::new();
+            let mut own_records = BTreeMap::<i64, Vec<&UsageRow>>::new();
+            if include_records {
+                for u in &usage {
+                    own_records.entry(u.root_id).or_default().push(u);
+                }
+            } else {
+                for u in &usage {
+                    *own_counts.entry(u.root_id).or_default() += 1;
+                }
+            }
+            let mut calculations=Vec::with_capacity(members.len());
             for c in &members {
+                let aid = int(c, "account_id");
                 let a=array(&split["accounts"]).iter().find(|a|a["cycle_id"]==c["id"]).ok_or_else(Error::unavailable)?;
-                let own_usage=usage.iter().filter(|u|u.root_id==int(c,"account_id")).collect::<Vec<_>>();
+                let record_count = if include_records {
+                    own_records.get(&aid).map_or(0, Vec::len)
+                } else {
+                    own_counts.get(&aid).copied().unwrap_or(0)
+                };
                 let mut cycle=c.clone();cycle["cost_fen"]=if valid{a["amount_fen"].clone()}else{Value::Null};
                 let mut allocations=if valid{a["allocations"].clone()}else{json!([])};
                 Self::apply_names(&mut allocations,&names);
-                let mut calc=merge(json!({"cycle":cycle,"end":end,"vendor_period":group,"total_consumption":a["total_consumption"],"allocations":allocations,"record_count":own_usage.len(),"digest":rules_digest,"can_settle":valid&&flag(&period,"start_confirmed"),"allocation_pending":!valid,"data_quality":if gaps.is_empty(){"complete"}else{"upstream_difference"},"coverage_warnings":gaps}),super::cycles::start_meta(c));
+                let mut calc=merge(json!({"cycle":cycle,"end":end,"vendor_period":group,"total_consumption":a["total_consumption"],"allocations":allocations,"record_count":record_count,"digest":rules_digest,"can_settle":valid&&flag(&period,"start_confirmed"),"allocation_pending":!valid,"data_quality":if gaps.is_empty(){"complete"}else{"upstream_difference"},"coverage_warnings":gaps}),super::cycles::start_meta(c));
                 if !valid{calc["cost_warning"]=json!("请导入或重新确认本窗口的账号组账单");}
                 if let Some(r)=&resolved {
                     // Members share one import; snapshots retain its identity and the member split.
                     calc["bill"]=merge(without(r.clone(),&["matched","unmatched","outside","weights","local_unmatched","manual_weights","manual_basis"]),json!({"rules_version":rules,"billable_cost_fen":if valid{a["amount_fen"].clone()}else{Value::Null},"import_id":period["bill_import_id"],"file_hash":stored.as_ref().map(|b|&b["file_hash"]),"basis":split["basis"],"group_cost_fen":period["cost_fen"]}));
                 }
-                if include_records{calc["records"]=serde_json::to_value(own_usage)?;
+                if include_records{calc["records"]=serde_json::to_value(own_records.get(&aid).map_or(&[][..], Vec::as_slice))?;
                     if members.first().is_some_and(|m|m["id"]==c["id"]){calc["vendor_basis"]=json!({"bill":resolved,"split":split,"versions":versions});}
                 }
                 calculations.push(calc);
@@ -455,7 +493,7 @@ impl Service {
             )
             .await?
         };
-        let basis_id = Self::save_manual_basis(db, actor, None, Some(pid), r).await?;
+        let basis_id = Self::save_manual_basis(db, actor, pid, r).await?;
         exec(
             db,
             "UPDATE vendor_periods SET manual_basis_id=? WHERE id=?",

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { date, money } from "./api";
 import { DeletionTargets, type DeletionScopeValue } from "./DeletionScope";
@@ -36,17 +37,14 @@ export type ConfirmState = {
 
 export function StartConfirmDialog({
   cycle,
-  modalState,
-  onStateChange,
   onClose,
   onConfirmed,
 }: {
   cycle: Cycle;
-  modalState: { busy: boolean; dirty: boolean };
-  onStateChange: (state: { busy: boolean; dirty: boolean }) => void;
   onClose: () => void;
   onConfirmed: () => Promise<void>;
 }) {
+  const [modalState, setModalState] = useState({ busy: false, dirty: false });
   return (
     <Modal
       title="确认起点"
@@ -65,7 +63,7 @@ export function StartConfirmDialog({
             allocations: [],
             start_lower: cycle.start_lower,
           }}
-          onStateChange={onStateChange}
+          onStateChange={setModalState}
           onConfirmed={onConfirmed}
         />
       </div>
@@ -158,23 +156,32 @@ export function InboxDialog({
   return (
     <Modal title="通知" close={onClose}>
       <div className="inbox">
-        {items.map((n) => (
-          <button
-            key={n.id}
-            onClick={() => {
-              if (n.order_id) {
+        {items.map((n) =>
+          n.order_id !== null ? (
+            <button
+              key={n.id}
+              type="button"
+              className="inbox-item inbox-link"
+              onClick={() => {
                 onClose();
-                onOpenOrder(n.order_id);
-              }
-            }}
-          >
-            <div>
-              <strong>{n.title}</strong>
-              <time>{date(n.created_at)}</time>
+                onOpenOrder(n.order_id!);
+              }}
+            >
+              <div>
+                <strong>{n.title}</strong>
+                <time>{date(n.created_at)}</time>
+              </div>
+              <ChevronRight size={16} />
+            </button>
+          ) : (
+            <div key={n.id} className="inbox-item">
+              <div>
+                <strong>{n.title}</strong>
+                <time>{date(n.created_at)}</time>
+              </div>
             </div>
-            {n.order_id && <ChevronRight size={16} />}
-          </button>
-        ))}
+          ),
+        )}
         {!items.length && <Empty text="暂无通知" />}
       </div>
     </Modal>
@@ -185,23 +192,17 @@ export function ConfirmActionDialog({
   confirm,
   busy,
   error,
-  paymentNote,
-  paymentReference,
-  onNoteChange,
-  onReferenceChange,
   onClose,
   onSubmit,
 }: {
   confirm: ConfirmState;
   busy: boolean;
   error: string;
-  paymentNote: string;
-  paymentReference: string;
-  onNoteChange: (value: string) => void;
-  onReferenceChange: (value: string) => void;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: (memo?: { note?: string; reference?: string }) => void;
 }) {
+  const [paymentNote, setPaymentNote] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
   return (
     <Modal
       title="确认操作"
@@ -222,7 +223,7 @@ export function ConfirmActionDialog({
                 maxLength={500}
                 value={paymentNote}
                 disabled={busy}
-                onChange={(e) => onNoteChange(e.target.value)}
+                onChange={(e) => setPaymentNote(e.target.value)}
               />
             </label>
             <label>
@@ -231,7 +232,7 @@ export function ConfirmActionDialog({
                 maxLength={128}
                 value={paymentReference}
                 disabled={busy}
-                onChange={(e) => onReferenceChange(e.target.value)}
+                onChange={(e) => setPaymentReference(e.target.value)}
               />
             </label>
           </>
@@ -241,7 +242,22 @@ export function ConfirmActionDialog({
           <button className="button" disabled={busy} onClick={onClose}>
             取消
           </button>
-          <button className="button primary" disabled={busy} onClick={onSubmit}>
+          <button
+            className="button primary"
+            disabled={busy}
+            onClick={() =>
+              onSubmit(
+                confirm.payment
+                  ? {
+                      ...(paymentNote ? { note: paymentNote } : {}),
+                      ...(paymentReference
+                        ? { reference: paymentReference }
+                        : {}),
+                    }
+                  : undefined,
+              )
+            }
+          >
             {busy ? "处理中…" : "确认"}
           </button>
         </footer>

@@ -581,27 +581,18 @@ async fn settlement_keeps_vendor_membership_and_renews_as_one_group() {
         "delete_cycle_ids":[],
         "vendor_renewals":[{"period_id":period["id"],"version":current["version"],"cost":"6.00","creditor_id":2,"cycle_ids":[first]}]
     });
-    let partial_prepared = harness
-        .app
-        .service
-        .prepare_settlement(&admin(), &partial)
-        .await
-        .expect("prepare partial selection for settle rejection");
     assert_error(
-        harness
-            .app
-            .service
-            .mutate(
-                &admin(),
-                "group-partial-renewal",
-                "settle",
-                &partial,
-                partial_prepared,
-                None,
-            )
-            .await,
+        input_contract::normalize("settle", partial),
         422,
-        "不支持指定成员列表",
+        "不支持的字段：cycle_ids",
+    );
+    assert_error(
+        input_contract::normalize(
+            "renew-vendor",
+            json!({"version":vendor["version"],"period_version":current["version"],"cost":"6.00","creditor_id":2,"cycle_ids":[first]}),
+        ),
+        422,
+        "不支持的字段：cycle_ids",
     );
     settle_group(
         &harness,

@@ -1,7 +1,6 @@
 use super::*;
 use crate::{
     json::{array, flag},
-    money::Decimal,
     source::{Scope, Snapshot},
     store::{all, exec, optional},
 };
@@ -87,7 +86,9 @@ impl Service {
         mut scopes: Option<Vec<Scope>>,
         incremental: bool,
     ) -> Result<()> {
-        self.inventory.refresh(true).await;
+        if scopes.is_none() {
+            self.inventory.refresh(true).await;
+        }
         let mut checkpoint = Checkpoint::load(&self.store, scopes.is_none(), incremental).await?;
         let mut snapshot = if checkpoint.incremental() {
             self.source
@@ -145,22 +146,21 @@ impl Service {
             // An incremental cursor is not evidence that older records vanished.
             scopes = Some(vec![]);
         }
-        {
-            let mut db = self.store.write().await?;
-            exec(&mut db, "DELETE FROM rust_sync_stage", &[]).await?;
-            exec(&mut db, "DELETE FROM rust_sync_changed", &[]).await?;
-            db.commit().await?;
-        }
-        self.stage(&mut snapshot, &roots, &known).await?;
+        let cleared = self.stage(&mut snapshot, &roots, &known).await?;
         if checkpoint.reconcile() && checkpoint.fingerprints.is_none() {
             checkpoint.fingerprints = Some(snapshot.fingerprints().await?);
         }
         let mut db = self.store.write().await?;
+        if !cleared {
+            exec(&mut db, "DELETE FROM rust_sync_stage", &[]).await?;
+            exec(&mut db, "DELETE FROM rust_sync_changed", &[]).await?;
+        }
         self.inventory.persist(&mut db).await?;
         for u in &snapshot.header.users {
             exec(&mut db,"INSERT INTO users VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,role=excluded.role,status=excluded.status,deleted=excluded.deleted",&[u["id"].clone(),u["name"].clone(),u["role"].clone(),u["status"].clone(),json!(i64::from(flag(u,"deleted")))]).await?;
         }
-        if store::meta(&mut db, "coverage_from").await?.is_null() {
+        let (old_coverage_from, old_gaps) = Self::coverage_meta(&mut db).await?;
+        if old_coverage_from.is_null() {
             let minimum = one(
                 &mut db,
                 "SELECT min(created_at) AS first FROM rust_sync_stage",
@@ -184,75 +184,130 @@ impl Service {
         .await?;
         // This predicate is a code-owned constant, never source or request data.
         let differs = "u.id IS NULL OR u.account_id!=s.account_id OR u.root_id!=s.root_id OR u.user_id!=s.user_id OR u.amount!=s.amount OR u.created_at!=s.created_at OR (s.detail IS NOT NULL AND (d.payload IS NULL OR d.payload!=s.detail))";
-        exec(&mut db,&format!("INSERT OR IGNORE INTO rust_sync_changed SELECT s.root_id FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs}"),&[]).await?;
-        exec(&mut db,&format!("INSERT OR IGNORE INTO rust_sync_changed SELECT u.root_id FROM rust_sync_stage s JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs}"),&[]).await?;
-        exec(&mut db,"INSERT INTO usage SELECT s.id,s.account_id,s.root_id,s.user_id,s.amount,s.created_at FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id WHERE u.id IS NULL OR u.account_id!=s.account_id OR u.root_id!=s.root_id OR u.user_id!=s.user_id OR u.amount!=s.amount OR u.created_at!=s.created_at ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,root_id=excluded.root_id,user_id=excluded.user_id,amount=excluded.amount,created_at=excluded.created_at",&[]).await?;
-        exec(&mut db,"INSERT INTO usage_details SELECT s.id,s.detail FROM rust_sync_stage s LEFT JOIN usage_details d ON d.usage_id=s.id WHERE s.detail IS NOT NULL AND (d.payload IS NULL OR d.payload!=s.detail) ON CONFLICT(usage_id) DO UPDATE SET payload=excluded.payload",&[]).await?;
-        exec(&mut db,"INSERT INTO rust_root_versions(root_id,version) SELECT root_id,1 FROM rust_sync_changed WHERE 1 ON CONFLICT(root_id) DO UPDATE SET version=version+1",&[]).await?;
-        store::put(&mut db, "last_sync", &json!(time::now())).await?;
-        store::put(&mut db, "sync_error", &Value::Null).await?;
-        let count = one(
+        let changed_windows = all(
             &mut db,
-            "SELECT count(*) AS count FROM rust_source_presence",
+            &format!(
+                "SELECT root_id, MIN(created_at) AS min_at, MAX(created_at) AS max_at FROM (SELECT s.root_id AS root_id, s.created_at AS created_at FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs} UNION ALL SELECT u.root_id AS root_id, u.created_at AS created_at FROM rust_sync_stage s JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs}) GROUP BY root_id"
+            ),
             &[],
         )
-        .await?;
-        store::put(&mut db, "source_count", &count["count"]).await?;
-        let changed = all(&mut db, "SELECT root_id FROM rust_sync_changed", &[])
-            .await?
-            .iter()
-            .map(|r| int(r, "root_id"))
-            .collect::<BTreeSet<_>>();
-        let gaps = store::meta(&mut db, "coverage_gaps").await?;
+        .await?
+        .into_iter()
+        .map(|r| {
+            (
+                int(&r, "root_id"),
+                (text(&r, "min_at").to_owned(), text(&r, "max_at").to_owned()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+        if !changed_windows.is_empty() {
+            let root_ids: Vec<i64> = changed_windows.keys().copied().collect();
+            for chunk in root_ids.chunks(1024) {
+                let mut q = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                    "INSERT OR IGNORE INTO rust_sync_changed(root_id) ",
+                );
+                q.push_values(chunk, |mut b, id| {
+                    b.push_bind(*id);
+                });
+                q.build().execute(&mut *db).await?;
+            }
+            exec(&mut db,"INSERT INTO usage SELECT s.id,s.account_id,s.root_id,s.user_id,s.amount,s.created_at FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id WHERE u.id IS NULL OR u.account_id!=s.account_id OR u.root_id!=s.root_id OR u.user_id!=s.user_id OR u.amount!=s.amount OR u.created_at!=s.created_at ON CONFLICT(id) DO UPDATE SET account_id=excluded.account_id,root_id=excluded.root_id,user_id=excluded.user_id,amount=excluded.amount,created_at=excluded.created_at",&[]).await?;
+            exec(&mut db,"INSERT INTO usage_details SELECT s.id,s.detail FROM rust_sync_stage s LEFT JOIN usage_details d ON d.usage_id=s.id WHERE s.detail IS NOT NULL AND (d.payload IS NULL OR d.payload!=s.detail) ON CONFLICT(usage_id) DO UPDATE SET payload=excluded.payload",&[]).await?;
+            exec(&mut db,"INSERT INTO rust_root_versions(root_id,version) SELECT root_id,1 FROM rust_sync_changed WHERE 1 ON CONFLICT(root_id) DO UPDATE SET version=version+1",&[]).await?;
+        }
+        store::put(&mut db, "last_sync", &json!(time::now())).await?;
+        store::put(&mut db, "sync_error", &Value::Null).await?;
+        let (coverage_from, gaps) = Self::coverage_meta(&mut db).await?;
+        let coverage_changed = coverage_from != old_coverage_from || gaps != old_gaps;
+        let check_coverage =
+            coverage_changed || (checkpoint.reconcile() && !array(&gaps).is_empty());
         checkpoint.publish(&mut db, &roots).await?;
         db.commit().await?;
+        if changed_windows.is_empty() && !check_coverage {
+            return Ok(());
+        }
         let mut db = self.store.read().await?;
-        let settlements = all(
+        let candidates = all(
             &mut db,
-            "SELECT * FROM settlements WHERE status='active' AND cycle_id IS NOT NULL AND drift=0",
+            "SELECT s.id,s.digest,c.id AS cycle_id,c.account_id,c.vendor_period_id,c.start,c.end,c.cost_source FROM settlements s JOIN cycles c ON c.id=s.cycle_id WHERE s.status='active' AND s.drift=0",
             &[],
         )
         .await?;
         let mut drift = Vec::new();
+        let mut member_cache = BTreeMap::<i64, Vec<Value>>::new();
         let mut vendor_cache = BTreeMap::<i64, Value>::new();
-        for s in settlements {
-            let snap: Value = serde_json::from_str(text(&s, "snapshot"))?;
-            let pid = int(&snap["cycle"], "vendor_period_id");
+        let overlaps = |aid: i64, start: &str, end: &str| -> bool {
+            changed_windows
+                .get(&aid)
+                .is_some_and(|(min_at, max_at)| max_at.as_str() >= start && min_at.as_str() < end)
+        };
+        for m in candidates {
+            let pid = int(&m, "vendor_period_id");
+            let end = text(&m, "end");
             let affected = if pid != 0 {
-                Self::vendor_members(&mut db, pid)
-                    .await?
-                    .iter()
-                    .any(|c| changed.contains(&int(c, "account_id")))
+                if let std::collections::btree_map::Entry::Vacant(entry) = member_cache.entry(pid) {
+                    entry.insert(Self::vendor_members(&mut db, pid).await?);
+                }
+                member_cache[&pid].iter().any(|c| {
+                    let aid = int(c, "account_id");
+                    overlaps(aid, text(c, "start"), end)
+                        || (check_coverage
+                            && Self::coverage_error_from(&coverage_from, &gaps, c, end).is_some())
+                })
             } else {
-                changed.contains(&int(&snap["cycle"], "account_id"))
+                let aid = int(&m, "account_id");
+                let start = text(&m, "start");
+                overlaps(aid, start, end)
+                    || (check_coverage
+                        && m["cost_source"] != "upstream_bill"
+                        && Self::coverage_error_from(
+                            &coverage_from,
+                            &gaps,
+                            &json!({"account_id":aid,"start":start}),
+                            end,
+                        )
+                        .is_some())
             };
-            if affected || !array(&gaps).is_empty() {
-                let calc = if pid != 0 {
-                    if let std::collections::btree_map::Entry::Vacant(entry) =
-                        vendor_cache.entry(pid)
-                    {
-                        entry.insert(
-                            self.vendor_calculation(&mut db, pid, text(&snap, "end"), None, false)
-                                .await?,
-                        );
-                    }
-                    array(&vendor_cache[&pid]["calculations"])
-                        .iter()
-                        .find(|c| c["cycle"]["id"] == snap["cycle"]["id"])
-                        .cloned()
-                        .ok_or_else(Error::unavailable)?
-                } else {
-                    self.preview_calculation(&mut db, &snap["cycle"], text(&snap, "end"))
-                        .await?
-                };
-                if calc["digest"] != s["digest"]
+            if !affected {
+                continue;
+            }
+            if pid != 0 {
+                if let std::collections::btree_map::Entry::Vacant(entry) = vendor_cache.entry(pid) {
+                    entry.insert(
+                        self.vendor_calculation(&mut db, pid, end, None, false)
+                            .await?,
+                    );
+                }
+                let calc = array(&vendor_cache[&pid]["calculations"])
+                    .iter()
+                    .find(|c| c["cycle"]["id"] == m["cycle_id"])
+                    .ok_or_else(Error::unavailable)?;
+                if calc["digest"] != m["digest"] {
+                    drift.push(m["id"].clone());
+                }
+            } else {
+                let s = one(
+                    &mut db,
+                    "SELECT snapshot FROM settlements WHERE id=?",
+                    std::slice::from_ref(&m["id"]),
+                )
+                .await?;
+                let snap: Value = serde_json::from_str(text(&s, "snapshot"))?;
+                let snap_end = text(&snap, "end");
+                let calc = self
+                    .preview_calculation(&mut db, &snap["cycle"], snap_end)
+                    .await?;
+                if calc["digest"] != m["digest"]
                     || (snap["cycle"]["cost_source"] != "upstream_bill"
-                        && pid == 0
-                        && Self::coverage_error(&mut db, &snap["cycle"], text(&snap, "end"))
-                            .await?
-                            .is_some())
+                        && Self::coverage_error_from(
+                            &coverage_from,
+                            &gaps,
+                            &snap["cycle"],
+                            snap_end,
+                        )
+                        .is_some())
                 {
-                    drift.push(s["id"].clone());
+                    drift.push(m["id"].clone());
                 }
             }
         }
@@ -271,33 +326,33 @@ impl Service {
         snapshot: &mut Snapshot,
         roots: &BTreeMap<i64, i64>,
         known: &BTreeMap<i64, i64>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut cleared = false;
         while let Some(batch) = snapshot.next().await? {
             let mut normalized = Vec::with_capacity(batch.len());
             for r in batch {
-                let aid = int(&r, "account_id");
-                let root = *roots.get(&aid).or(known.get(&aid)).unwrap_or(&aid);
-                let mut detail = serde_json::Map::new();
-                for k in crate::billing::DETAIL_FIELDS {
-                    detail.insert(k.to_owned(), r[k].clone());
-                }
-                let detail = if detail.values().any(|v| !v.is_null()) {
-                    Some(dumps(&Value::Object(detail)))
-                } else {
-                    None
-                };
+                let root = *roots
+                    .get(&r.account_id)
+                    .or(known.get(&r.account_id))
+                    .unwrap_or(&r.account_id);
+                let detail = (!r.detail.is_empty()).then(|| dumps(&r.detail));
                 normalized.push((
-                    int(&r, "id"),
-                    aid,
+                    r.id,
+                    r.account_id,
                     root,
-                    int(&r, "user_id"),
-                    Decimal::parse(text(&r, "amount"))?.to_string(),
-                    time::instant(text(&r, "created_at"))?,
+                    r.user_id,
+                    r.amount,
+                    r.created_at,
                     detail,
                 ));
             }
             let mut db = self.store.write().await?;
-            for chunk in normalized.chunks(256) {
+            if !cleared {
+                exec(&mut db, "DELETE FROM rust_sync_stage", &[]).await?;
+                exec(&mut db, "DELETE FROM rust_sync_changed", &[]).await?;
+                cleared = true;
+            }
+            for chunk in normalized.chunks(1024) {
                 let mut q = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
                     "INSERT INTO rust_sync_stage(id,account_id,root_id,user_id,amount,created_at,detail) ",
                 );
@@ -314,7 +369,7 @@ impl Service {
             }
             db.commit().await?;
         }
-        Ok(())
+        Ok(cleared)
     }
     async fn coverage(
         &self,
@@ -324,7 +379,6 @@ impl Service {
         known: &BTreeMap<i64, i64>,
         scopes: Option<&[Scope]>,
     ) -> Result<()> {
-        let mut presence_changed = false;
         if optional(
             db,
             "SELECT 1 AS found FROM rust_source_presence LIMIT 1",
@@ -341,7 +395,7 @@ impl Service {
                 q.push_values(chunk, |mut b, id| {
                     b.push_bind(id.as_i64().unwrap_or(0));
                 });
-                presence_changed |= q.build().execute(&mut *db).await?.rows_affected() != 0;
+                q.build().execute(&mut *db).await?;
             }
         }
         let mut pending: BTreeSet<i64> = array(&store::meta(db, "archived_deletions").await?)
@@ -350,35 +404,50 @@ impl Service {
             .collect();
         if let Some(scopes) = scopes {
             for scope in scopes {
-                for chunk in scope.known_ids.chunks(512) {
-                    let ids = json!(chunk);
-                    let gone=all(db,"SELECT p.id FROM rust_source_presence p JOIN json_each(?) j ON j.value=p.id LEFT JOIN rust_sync_stage s ON s.id=p.id WHERE s.id IS NULL",&[json!(dumps(&ids))]).await?;
-                    pending.extend(gone.iter().map(|r| int(r, "id")));
-                    presence_changed |= exec(db,"DELETE FROM rust_source_presence WHERE id IN (SELECT value FROM json_each(?)) AND id NOT IN (SELECT id FROM rust_sync_stage)",&[json!(dumps(&ids))]).await?.rows_affected() != 0;
+                for chunk in scope.known_ids.chunks(2048) {
+                    let ids = dumps(&chunk);
+                    let gone = sqlx::query_scalar::<_, i64>(
+                        "SELECT p.id FROM rust_source_presence p JOIN json_each(?) j ON j.value=p.id LEFT JOIN rust_sync_stage s ON s.id=p.id WHERE s.id IS NULL",
+                    )
+                    .bind(&ids)
+                    .fetch_all(&mut *db)
+                    .await?;
+                    if !gone.is_empty() {
+                        pending.extend(gone.iter().copied());
+                        exec(
+                            db,
+                            "DELETE FROM rust_source_presence WHERE id IN (SELECT value FROM json_each(?))",
+                            &[Value::String(dumps(&gone))],
+                        )
+                        .await?;
+                    }
                 }
             }
         } else {
             pending.extend(all(db,"SELECT p.id FROM rust_source_presence p LEFT JOIN rust_sync_stage s ON s.id=p.id WHERE s.id IS NULL",&[]).await?.iter().map(|r|int(r,"id")));
-            presence_changed |= exec(
+            exec(
                 db,
                 "DELETE FROM rust_source_presence WHERE id NOT IN (SELECT id FROM rust_sync_stage)",
                 &[],
             )
-            .await?
-            .rows_affected()
-                != 0;
+            .await?;
         }
-        presence_changed |= exec(
+        exec(
             db,
             "INSERT OR IGNORE INTO rust_source_presence SELECT id FROM rust_sync_stage",
             &[],
         )
-        .await?
-        .rows_affected()
-            != 0;
-        let present=all(db,"SELECT value AS id FROM json_each(?) WHERE value IN (SELECT id FROM rust_source_presence)",&[json!(dumps(&json!(pending)))]).await?;
-        for p in present {
-            pending.remove(&int(&p, "id"));
+        .await?;
+        if !pending.is_empty() {
+            let present = sqlx::query_scalar::<_, i64>(
+                "SELECT value AS id FROM json_each(?) WHERE value IN (SELECT id FROM rust_source_presence)",
+            )
+            .bind(dumps(&pending))
+            .fetch_all(&mut *db)
+            .await?;
+            for id in present {
+                pending.remove(&id);
+            }
         }
         let mut counts = store::meta(db, "cleanup_counts").await?;
         if counts.is_null() {
@@ -446,18 +515,6 @@ impl Service {
                 pending.remove(&int(m, "id"));
             }
             counts[&key] = json!(count);
-        }
-        if presence_changed
-            || optional(
-                db,
-                "SELECT 1 AS found FROM meta WHERE key='source_ids'",
-                &[],
-            )
-            .await?
-            .is_none()
-        {
-            let source_ids=one(db,"SELECT json_group_array(id) AS ids FROM (SELECT id FROM rust_source_presence ORDER BY id)",&[]).await?;
-            exec(db,"INSERT INTO meta(key,value) VALUES('source_ids',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",&[source_ids["ids"].clone()]).await?;
         }
         store::put(db, "archived_deletions", &json!(pending)).await?;
         store::put(db, "cleanup_counts", &counts).await?;

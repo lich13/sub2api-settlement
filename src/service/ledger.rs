@@ -70,7 +70,7 @@ impl Service {
         )
         .await
     }
-    pub async fn balance(db: &mut Db, rows: &[Value]) -> Result<Value> {
+    fn balance_with_names(rows: &[Value], live_names: &BTreeMap<i64, String>) -> Result<Value> {
         let first = rows
             .first()
             .ok_or_else(|| Error::conflict("待付款账目已更新，请刷新"))?;
@@ -94,25 +94,39 @@ impl Service {
             names.insert(int(r, "payer_id"), r["payer_name"].clone());
             names.insert(int(r, "creditor_id"), r["creditor_name"].clone());
         }
-        for u in all(
-            db,
-            "SELECT id,name FROM users WHERE id IN (?,?)",
-            &[json!(a), json!(b)],
-        )
-        .await?
-        {
-            names.insert(int(&u, "id"), u["name"].clone());
+        for uid in [a, b] {
+            if let Some(live) = live_names.get(&uid) {
+                names.insert(uid, json!(live));
+            }
         }
         Ok(
             json!({"user_a":a,"user_b":b,"name_a":names[&a],"name_b":names[&b],"a_to_b_fen":ab,"b_to_a_fen":ba,"offset_fen":ab.min(ba),"amount_fen":(ab-ba).abs(),"payer_id":if ab>ba{Some(a)}else if ba>ab{Some(b)}else{None},"creditor_id":if ab>ba{Some(b)}else if ba>ab{Some(a)}else{None},"order_count":rows.len(),"digest":digest(&json!(rows))}),
         )
     }
+    pub async fn balance(db: &mut Db, rows: &[Value]) -> Result<Value> {
+        let first = rows
+            .first()
+            .ok_or_else(|| Error::conflict("待付款账目已更新，请刷新"))?;
+        let (a, b) = (
+            int(first, "payer_id").min(int(first, "creditor_id")),
+            int(first, "payer_id").max(int(first, "creditor_id")),
+        );
+        let live_names = all(
+            db,
+            "SELECT id,name FROM users WHERE id IN (?,?)",
+            &[json!(a), json!(b)],
+        )
+        .await?
+        .into_iter()
+        .map(|u| (int(&u, "id"), text(&u, "name").to_owned()))
+        .collect::<BTreeMap<_, _>>();
+        Self::balance_with_names(rows, &live_names)
+    }
     pub async fn balances(db: &mut Db, actor: &Value, scope: &str) -> Result<Vec<Value>> {
         if scope == "all" && text(actor, "role") != "admin" {
             return Err(Error::new(403, "仅管理员可查看全部对冲账目"));
         }
-        let mut pairs: BTreeMap<(i64, i64), Vec<Value>> = BTreeMap::new();
-        for r in Self::pending(
+        let pending = Self::pending(
             db,
             None,
             if scope == "all" {
@@ -121,14 +135,51 @@ impl Service {
                 Some(int(actor, "id"))
             },
         )
-        .await?
-        {
+        .await?;
+        if pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let live_names = Self::names(db).await?;
+        Self::group_balances(pending, actor, scope, &live_names)
+    }
+    pub(super) async fn balances_with_names(
+        db: &mut Db,
+        actor: &Value,
+        scope: &str,
+        live_names: &BTreeMap<i64, String>,
+    ) -> Result<Vec<Value>> {
+        if scope == "all" && text(actor, "role") != "admin" {
+            return Err(Error::new(403, "仅管理员可查看全部对冲账目"));
+        }
+        let pending = Self::pending(
+            db,
+            None,
+            if scope == "all" {
+                None
+            } else {
+                Some(int(actor, "id"))
+            },
+        )
+        .await?;
+        if pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        Self::group_balances(pending, actor, scope, live_names)
+    }
+    fn group_balances(
+        pending: Vec<Value>,
+        actor: &Value,
+        scope: &str,
+        live_names: &BTreeMap<i64, String>,
+    ) -> Result<Vec<Value>> {
+        let mut pairs: BTreeMap<(i64, i64), Vec<Value>> = BTreeMap::new();
+        for r in pending {
             let (a, b) = (int(&r, "payer_id"), int(&r, "creditor_id"));
             pairs.entry((a.min(b), a.max(b))).or_default().push(r);
         }
-        let mut balances = Vec::new();
+        let mut balances = Vec::with_capacity(pairs.len());
         for rows in pairs.values() {
-            let b = Self::balance(db, rows).await?;
+            let b = Self::balance_with_names(rows, live_names)?;
             if scope != "receivable"
                 || (b["creditor_id"] == actor["id"] && int(&b, "amount_fen") > 0)
             {
@@ -518,8 +569,7 @@ impl Service {
             if let Some(r) = renewals.get(&cid) {
                 Self::independent_cycle(&c)?;
                 super::cycles::accurate_cost(r)?;
-                let kind = "exact";
-                let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":renewal_name,"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":kind,"start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;
+                let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":renewal_name,"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":"exact","start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;
                 result["next_cycle"] = next["id"].clone();
             }
             results.push(result);
