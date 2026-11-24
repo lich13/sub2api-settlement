@@ -98,10 +98,6 @@ fn ids(v: &Value, k: &str, min: usize) -> Result<()> {
     }
     Ok(())
 }
-pub fn normalize(kind: &str, v: Value) -> Result<Value> {
-    normalize_inner(kind, v)
-}
-
 fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
     let fields: &[&str] = match kind {
         "create-vendor" => &[
@@ -200,7 +196,7 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
     }
     Ok(v)
 }
-fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
+pub fn normalize(kind: &str, mut v: Value) -> Result<Value> {
     if kind == "vendor-bill-confirm" {
         return normalize("bill-confirm", v);
     }
@@ -541,9 +537,6 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         _ => {}
     }
     Ok(v)
-}
-pub fn timestamp(s: &str) -> Result<String> {
-    time::instant(s)
 }
 
 pub fn query_choices(

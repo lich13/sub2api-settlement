@@ -1,6 +1,13 @@
 let csrf = "";
 let currentUser: number | undefined;
 const pending = new Map<string, string>();
+export const APP_VERSION =
+  typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "";
+export function formatVersion(value = APP_VERSION) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
+}
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }

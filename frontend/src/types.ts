@@ -11,6 +11,7 @@ export type Actor = {
   name: string;
   role: "admin" | "user";
   csrf: string;
+  version?: string;
 };
 export type Share = {
   user_id: number;

@@ -30,6 +30,17 @@ const CSV_TOKENS: [&str; 4] = [
     "Cache Read Tokens",
     "Cache Creation Tokens",
 ];
+pub fn sanitize_file_name(raw: &str) -> String {
+    let name = if raw.is_empty() { "usage.csv" } else { raw };
+    name.replace('\\', "/")
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("usage.csv")
+        .chars()
+        .take(200)
+        .collect()
+}
 pub fn parse_csv_rows(input: &str) -> Result<Vec<BillRow>> {
     if input.len() > 10 * 1024 * 1024 {
         return Err(Error::invalid("CSV 不能超过 10 MB"));

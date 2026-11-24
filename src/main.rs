@@ -75,22 +75,20 @@ async fn run() -> Result<()> {
         }
         return Ok(());
     }
-    if std::env::args().nth(1).as_deref() == Some("rotate-session-key") {
-        let arguments = std::env::args().collect::<Vec<_>>();
+    if arguments.get(1).map(String::as_str) == Some("rotate-session-key") {
         if arguments.len() != 4 || arguments[2] != "--id" {
             return Err(settlement::error::Error::invalid(
                 "用法：settlement rotate-session-key --id KEY_ID",
             ));
         }
         let _lock = settlement::keys::LedgerLock::acquire(&config.data_dir)?;
-        let store =
-            settlement::store::Store::open(&config.data_dir.join("settlement.sqlite3")).await?;
+        let store = settlement::store::Store::open(&ledger).await?;
         settlement::keys::rotate(&config.data_dir, &store, &arguments[3]).await?;
         store.close().await;
         println!("{{\"status\":\"rotated\"}}");
         return Ok(());
     }
-    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+    if arguments.get(1).map(String::as_str) == Some("healthcheck") {
         let address = if config.bind.ip().is_unspecified() {
             format!("127.0.0.1:{}", config.bind.port())
         } else {

@@ -143,13 +143,7 @@ impl Service {
         {
             return Err(Error::conflict("免费账号请使用升级付费入口"));
         }
-        store::one(
-            db,
-            "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-            &[data["creditor_id"].clone()],
-            "垫付人不可用",
-        )
-        .await?;
+        require_active_user(db, data["creditor_id"].clone(), "垫付人不可用").await?;
         let start = self.resolve_start(db, data).await?;
         self.validate_cycle(
             db,
@@ -211,13 +205,7 @@ impl Service {
         {
             return Err(Error::conflict("请先结束当前付费周期"));
         }
-        store::one(
-            db,
-            "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-            &[data["creditor_id"].clone()],
-            "垫付人不可用",
-        )
-        .await?;
+        require_active_user(db, data["creditor_id"].clone(), "垫付人不可用").await?;
         let title = text(data, "name").trim();
         if title.is_empty() {
             return Err(Error::invalid("请填写账号公开名称"));
@@ -254,7 +242,7 @@ impl Service {
         accurate_cost(data)?;
         let local_basis = data["cost_source"] == "manual";
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
-        Self::independent_cycle(&c).await?;
+        Self::independent_cycle(&c)?;
         if c["status"] != "open" {
             return Err(Error::conflict("已出单成本已锁定"));
         }
@@ -276,13 +264,7 @@ impl Service {
             return Err(Error::conflict("升级付费起点已锁定，不能修改"));
         }
         if data["creditor_id"] != c["creditor_id"] {
-            store::one(
-                db,
-                "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-                &[data["creditor_id"].clone()],
-                "垫付人不可用",
-            )
-            .await?;
+            require_active_user(db, data["creditor_id"].clone(), "垫付人不可用").await?;
         }
         let mut start = self
             .resolve_start(
@@ -322,15 +304,12 @@ impl Service {
         }
         exec(db,"UPDATE cycles SET name=?,cost_fen=?,creditor_id=?,start=?,start_mode=?,start_lower=?,start_upper=?,start_confirmed=?,start_confirmed_by=?,start_confirmed_at=?,start_source_usage_id=?,start_anchor=?,cost_kind=?,version=version+1 WHERE id=?",&[json!(title),json!(cost),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_lower"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),start["start_confirmed_by"].clone(),start["start_confirmed_at"].clone(),start["start_source_usage_id"].clone(),if same{c["start_anchor"].clone()}else{Value::Null},json!("exact"),json!(cid)]).await?;
         if cost != int(&c, "cost_fen") || local_basis {
-            exec(db,"UPDATE cycles SET cost_source='manual',bill_import_id=NULL,manual_basis_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0 WHERE id=?",&[json!(cid)]).await?;
-            if local_basis {
-                exec(
-                    db,
-                    "UPDATE cycles SET bill_allocation_mode='proportional',billable_cost_fen=NULL WHERE id=?",
-                    &[json!(cid)],
-                )
-                .await?;
-            }
+            exec(
+                db,
+                "UPDATE cycles SET cost_source='manual',bill_import_id=NULL,manual_basis_id=NULL,bill_end=NULL,bill_digest=NULL,bill_difference_confirmed=0,bill_allocation_mode='proportional',billable_cost_fen=NULL WHERE id=?",
+                &[json!(cid)],
+            )
+            .await?;
         }
         exec(
             db,
@@ -357,7 +336,7 @@ impl Service {
     ) -> Result<Value> {
         admin(actor)?;
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
-        Self::independent_cycle(&c).await?;
+        Self::independent_cycle(&c)?;
         if c["status"] != "open" {
             return Err(Error::conflict("已结算周期不能确认起点"));
         }
@@ -489,25 +468,13 @@ impl Service {
             HashSet::new()
         };
         for uid in ids.difference(&existing) {
-            store::one(
-                db,
-                "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-                &[json!(uid)],
-                "参与用户或垫付人不可用",
-            )
-            .await?;
+            require_active_user(db, json!(uid), "参与用户或垫付人不可用").await?;
         }
         if old
             .as_ref()
             .is_none_or(|o| o["creditor_id"] != data["creditor_id"])
         {
-            store::one(
-                db,
-                "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-                &[data["creditor_id"].clone()],
-                "垫付人不可用",
-            )
-            .await?;
+            require_active_user(db, data["creditor_id"].clone(), "垫付人不可用").await?;
         }
         let mode = text(data, "allocation_mode");
         let mut stored = Vec::new();

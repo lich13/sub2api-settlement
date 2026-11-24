@@ -273,7 +273,10 @@ impl App {
         crate::input::query_choices(query, query_fields)?;
         if method == "GET" {
             return match route {
-                Route::Me => Ok(actor.clone()),
+                Route::Me => Ok(crate::json::merge(
+                    actor.clone(),
+                    json!({"version": crate::VERSION}),
+                )),
                 Route::Vendors => s.vendors(actor).await,
                 Route::Audit => s.audit_log(actor, query, false).await,
                 Route::OperationsStatus => s.operation_status(actor).await,
@@ -386,7 +389,7 @@ impl App {
                         &time::now(),
                         payload["start"]
                             .as_str()
-                            .map(crate::input::timestamp)
+                            .map(crate::time::instant)
                             .transpose()?
                             .as_deref(),
                     )

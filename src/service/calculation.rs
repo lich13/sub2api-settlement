@@ -429,7 +429,7 @@ impl Service {
         let mut db = self.store.read().await?;
         Self::fresh(&mut db).await?;
         let c = one(&mut db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
-        Self::independent_cycle(&c).await?;
+        Self::independent_cycle(&c)?;
         if c["status"] != "open" || c["version"] != data["version"] {
             return Err(Error::conflict("周期已修改或已出单，请重新预览"));
         }
@@ -457,18 +457,7 @@ impl Service {
         } else {
             let csv = text(data, "csv").to_owned();
             let hash = crate::json::hash(csv.as_bytes());
-            let file_name = if text(data, "file_name").is_empty() {
-                "usage.csv"
-            } else {
-                text(data, "file_name")
-            }
-            .replace('\\', "/")
-            .rsplit('/')
-            .next()
-            .unwrap_or("usage.csv")
-            .chars()
-            .take(200)
-            .collect();
+            let file_name = billing::sanitize_file_name(text(data, "file_name"));
             let permit = self
                 .cpu
                 .clone()
@@ -657,7 +646,7 @@ impl Service {
         let payload: Value = serde_json::from_str(text(&p, "payload"))?;
         let result = &payload["result"];
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
-        Self::independent_cycle(&c).await?;
+        Self::independent_cycle(&c)?;
         if c["status"] != "open"
             || c["version"] != data["version"]
             || c["version"] != result["version"]

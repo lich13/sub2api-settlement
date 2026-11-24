@@ -412,6 +412,18 @@ export function UpgradeForm({
   );
 }
 
+function equalPercents(users: { id: number }[]): Record<number, string> {
+  return Object.fromEntries(
+    users.map((u, i) => [
+      u.id,
+      (
+        (Math.floor(10000 / users.length) + (i < 10000 % users.length ? 1 : 0)) /
+        100
+      ).toFixed(2),
+    ]),
+  );
+}
+
 export function ExpenseForm({
   expense,
   catalog,
@@ -591,18 +603,11 @@ export function ExpenseForm({
                   disabled={busy || selected.length === availableUsers.length}
                   onClick={() =>
                     setMembers(
-                      Object.fromEntries(
-                        availableUsers.map((u, i) => [
-                          u.id,
-                          mode === "custom"
-                            ? (
-                                (Math.floor(10000 / availableUsers.length) +
-                                  (i < 10000 % availableUsers.length ? 1 : 0)) /
-                                100
-                              ).toFixed(2)
-                            : "",
-                        ]),
-                      ),
+                      mode === "custom"
+                        ? equalPercents(availableUsers)
+                        : Object.fromEntries(
+                            availableUsers.map((u) => [u.id, ""]),
+                          ),
                     )
                   }
                 >
@@ -680,18 +685,7 @@ export function ExpenseForm({
             className={mode === "custom" ? "active" : ""}
             onClick={() => {
               if (mode === "equal" && selected.length)
-                setMembers(
-                  Object.fromEntries(
-                    selected.map((u, i) => [
-                      u.id,
-                      (
-                        (Math.floor(10000 / selected.length) +
-                          (i < 10000 % selected.length ? 1 : 0)) /
-                        100
-                      ).toFixed(2),
-                    ]),
-                  ),
-                );
+                setMembers(equalPercents(selected));
               setMode("custom");
             }}
           >

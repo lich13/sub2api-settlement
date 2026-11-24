@@ -232,12 +232,11 @@ impl Service {
         p: &Value,
         data: &Value,
         deletes: &Value,
-    ) -> Result<()> {
+    ) -> Result<Vec<Value>> {
         if data.get("cycle_ids").is_some() {
             return Err(Error::invalid("账号组续费不支持指定成员列表"));
         }
-        Self::renewable_vendor_members(db, p, deletes).await?;
-        Ok(())
+        Self::renewable_vendor_members(db, p, deletes).await
     }
 
     pub async fn renew_vendor_period(
@@ -248,7 +247,7 @@ impl Service {
         data: &Value,
         deletes: &Value,
     ) -> Result<Value> {
-        Self::check_vendor_renewal(db, p, data, deletes).await?;
+        let members = Self::check_vendor_renewal(db, p, data, deletes).await?;
         if optional(
             db,
             "SELECT id FROM vendor_periods WHERE vendor_id=? AND status='open'",
@@ -259,14 +258,8 @@ impl Service {
         {
             return Err(Error::conflict("账号组已有开放账期，请先处理"));
         }
-        one(
-            db,
-            "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-            &[data["creditor_id"].clone()],
-        )
-        .await?;
+        require_active_user(db, data["creditor_id"].clone(), "记录不存在").await?;
         let cost = cents(text(data, "cost"))?;
-        let members = Self::renewable_vendor_members(db, p, deletes).await?;
         let vid = int(p, "vendor_id");
         let v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(vid)]).await?;
         if !v["archived_at"].is_null() {

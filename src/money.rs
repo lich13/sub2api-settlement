@@ -136,11 +136,7 @@ impl Decimal {
         }
     }
     pub fn fen_half_up(&self) -> Result<i64> {
-        let r = self.rational() * BigInt::from(100);
-        let x = (r + BigRational::new(BigInt::one(), BigInt::from(2)))
-            .floor()
-            .to_integer();
-        x.to_i64().ok_or_else(|| Error::invalid("金额超出范围"))
+        round_cents(&self.rational())
     }
 }
 impl std::fmt::Display for Decimal {
@@ -223,6 +219,36 @@ pub fn from_ratio(r: &BigRational, precision: u32) -> Decimal {
         negative_zero: false,
     }
 }
+pub fn round_cents(total: &BigRational) -> Result<i64> {
+    (total * BigInt::from(100) + BigRational::new(BigInt::one(), BigInt::from(2)))
+        .floor()
+        .to_integer()
+        .to_i64()
+        .ok_or_else(|| Error::invalid("金额超出范围"))
+}
+pub fn largest_remainder(
+    portions: &BTreeMap<i64, BigRational>,
+    target: i64,
+) -> Result<BTreeMap<i64, i64>> {
+    let mut amounts = BTreeMap::new();
+    let mut ranked = Vec::new();
+    for (uid, v) in portions {
+        let floor = v.floor().to_integer();
+        let amount = floor
+            .to_i64()
+            .ok_or_else(|| Error::invalid("金额超出范围"))?;
+        ranked.push((*uid, v - floor));
+        amounts.insert(*uid, amount);
+    }
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let remainder = target - amounts.values().sum::<i64>();
+    for (uid, _) in ranked.iter().take(remainder as usize) {
+        *amounts
+            .get_mut(uid)
+            .expect("ranked users come from the same allocation map") += 1;
+    }
+    Ok(amounts)
+}
 pub fn allocate(
     cost: i64,
     weights: &BTreeMap<i64, Decimal>,
@@ -244,29 +270,7 @@ pub fn allocate(
         .iter()
         .map(|(u, v)| (*u, v * BigInt::from(cost) / &total))
         .collect();
-    let mut amounts: BTreeMap<_, _> = portions
-        .iter()
-        .map(|(u, v)| {
-            Ok((
-                *u,
-                v.floor()
-                    .to_integer()
-                    .to_i64()
-                    .ok_or_else(|| Error::invalid("金额超出范围"))?,
-            ))
-        })
-        .collect::<Result<_>>()?;
-    let mut ranked: Vec<_> = portions
-        .iter()
-        .map(|(u, v)| (*u, v - BigInt::from(amounts[u])))
-        .collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let remainder = cost - amounts.values().sum::<i64>();
-    for (u, _) in ranked.iter().take(remainder as usize) {
-        *amounts
-            .get_mut(u)
-            .expect("ranked users come from the same allocation map") += 1;
-    }
+    let amounts = largest_remainder(&portions, cost)?;
     let total_decimal = from_ratio(&total, precision);
     Ok(Value::Array(exact.iter().map(|(uid,v)|{
         let first=from_ratio(v,precision);let share=from_ratio(&(first.rational()/total_decimal.rational()),precision);
@@ -283,28 +287,10 @@ pub fn allocate_matched(weights: &BTreeMap<i64, Decimal>, creditor: i64) -> Resu
     if total.is_zero() {
         return Ok(json!([]));
     }
-    let mut amounts = BTreeMap::new();
-    let mut ranks = Vec::new();
-    for (uid, v) in &exact {
-        let p = v * BigInt::from(100);
-        let floor = p.floor().to_integer();
-        let amount = floor
-            .to_i64()
-            .ok_or_else(|| Error::invalid("金额超出范围"))?;
-        ranks.push((*uid, &p - floor));
-        amounts.insert(*uid, amount);
-    }
-    let target = (&total * BigInt::from(100) + BigRational::new(BigInt::one(), BigInt::from(2)))
-        .floor()
-        .to_integer()
-        .to_i64()
-        .ok_or_else(|| Error::invalid("金额超出范围"))?;
-    ranks.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let remainder = target - amounts.values().sum::<i64>();
-    for (uid, _) in ranks.iter().take(remainder as usize) {
-        *amounts
-            .get_mut(uid)
-            .expect("matched ranks and amounts are inserted together") += 1;
-    }
+    let portions: BTreeMap<_, _> = exact
+        .iter()
+        .map(|(uid, v)| (*uid, v * BigInt::from(100)))
+        .collect();
+    let amounts = largest_remainder(&portions, round_cents(&total)?)?;
     Ok(Value::Array(exact.iter().map(|(uid,v)|json!({"user_id":uid,"consumption":weights[uid].to_string(),"amount_fen":amounts[uid],"share":from_ratio(&(v/&total),28).to_string(),"self_covered":*uid==creditor})).collect()))
 }

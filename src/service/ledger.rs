@@ -516,7 +516,7 @@ impl Service {
                 .await?;
             }
             if let Some(r) = renewals.get(&cid) {
-                Self::independent_cycle(&c).await?;
+                Self::independent_cycle(&c)?;
                 super::cycles::accurate_cost(r)?;
                 let kind = "exact";
                 let next=self.create_cycle(db,actor,&json!({"account_id":c["account_id"],"name":renewal_name,"creditor_id":r["creditor_id"],"cost":r["cost"],"cost_kind":kind,"start":snap["end"],"start_mode":"exact","renewed_from_cycle_id":cid})).await?;

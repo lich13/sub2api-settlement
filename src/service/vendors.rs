@@ -103,7 +103,7 @@ impl Service {
     pub async fn vendor_members(db: &mut Db, period: i64) -> Result<Vec<Value>> {
         all(db,"SELECT c.*,a.name AS current_name,a.deleted AS account_deleted FROM cycles c JOIN accounts a ON a.id=c.account_id WHERE c.vendor_period_id=? ORDER BY c.account_id", &[json!(period)]).await
     }
-    pub async fn independent_cycle(c: &Value) -> Result<()> {
+    pub fn independent_cycle(c: &Value) -> Result<()> {
         if !c["vendor_period_id"].is_null() {
             return Err(Error::conflict("该账号属于账号组周期，请整组操作"));
         }
@@ -133,12 +133,7 @@ impl Service {
     }
     pub async fn save_vendor(&self, db: &mut Db, actor: &Value, data: &Value) -> Result<Value> {
         admin(actor)?;
-        one(
-            db,
-            "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-            &[data["creditor_id"].clone()],
-        )
-        .await?;
+        require_active_user(db, data["creditor_id"].clone(), "记录不存在").await?;
         let cost = cents(text(data, "cost"))?;
         let title = text(data, "name").trim();
         if title.is_empty() {
@@ -235,12 +230,7 @@ impl Service {
         if old["status"] != "open" || old["version"] != data["version"] {
             return Err(Error::conflict("账号组周期已变化，请刷新"));
         }
-        one(
-            db,
-            "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-            &[data["creditor_id"].clone()],
-        )
-        .await?;
+        require_active_user(db, data["creditor_id"].clone(), "记录不存在").await?;
         let cost = cents(text(data, "cost"))?;
         let start = self.resolve_start(db, data).await?;
         let members = Self::vendor_members(db, id).await?;

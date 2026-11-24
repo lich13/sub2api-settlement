@@ -286,11 +286,21 @@ mod tests {
     #[test]
     fn every_historical_release_has_nonempty_chinese_notes() {
         let text = include_str!("../../CHANGELOG.md");
-        for tag in [
-            "v0.1.0", "v0.2.0", "v0.2.1", "v0.3.0", "v0.4.0", "v0.5.0", "v0.5.1", "v0.6.0",
-            "v0.6.1", "v0.7.0", "v0.8.0", "v0.9.0", "v0.12.4", "v0.13.0",
-        ] {
-            assert!(section(text, tag).unwrap().contains("###"));
+        let tags = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("## v")?.split_whitespace().next())
+            .map(|v| format!("v{v}"))
+            .collect::<Vec<_>>();
+        assert!(!tags.is_empty());
+        for tag in &tags {
+            let notes = section(text, tag).unwrap();
+            assert!(notes.contains("###"), "{tag}");
+            assert!(
+                notes
+                    .chars()
+                    .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "{tag}"
+            );
         }
         assert!(section(text, "v99.0.0").is_err());
         assert_eq!(
@@ -298,6 +308,24 @@ mod tests {
             "正文\n"
         );
         assert!(section("## v1.0.0\n", "v1.0.0").is_err());
+    }
+    #[test]
+    fn manifest_and_dockerfile_versions_match_current_changelog() {
+        let current = version().unwrap();
+        assert_eq!(current, settlement::VERSION);
+        let xtask: toml::Table = include_str!("../Cargo.toml").parse().unwrap();
+        assert_eq!(xtask["package"]["version"].as_str(), Some(current.as_str()));
+        let frontend: Value =
+            serde_json::from_str(include_str!("../../frontend/package.json")).unwrap();
+        assert_eq!(frontend["version"].as_str(), Some(current.as_str()));
+        let dockerfile = include_str!("../../Dockerfile");
+        let expected_label = format!("org.opencontainers.image.version=\"{current}\"");
+        assert!(
+            dockerfile.contains(&expected_label),
+            "Dockerfile missing {expected_label}"
+        );
+        let changelog = include_str!("../../CHANGELOG.md");
+        assert!(section(changelog, &format!("v{current}")).is_ok());
     }
     #[test]
     fn package_rejects_runtime_credentials_and_path_escape() {

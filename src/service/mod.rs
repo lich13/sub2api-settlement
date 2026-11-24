@@ -254,6 +254,16 @@ pub async fn name(db: &mut Db, uid: i64) -> Result<String> {
             .unwrap_or_else(|| format!("用户 #{uid}")),
     )
 }
+pub async fn require_active_user(db: &mut Db, uid: Value, missing: &str) -> Result<()> {
+    store::one(
+        db,
+        "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
+        &[uid],
+        missing,
+    )
+    .await?;
+    Ok(())
+}
 pub async fn one(db: &mut Db, sql: &str, args: &[Value]) -> Result<Value> {
     store::one(db, sql, args, "记录不存在").await
 }

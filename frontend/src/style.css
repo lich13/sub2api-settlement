@@ -104,6 +104,7 @@ small {
 .topbar {
   height: 79px;
   padding: 0 32px;
+  gap: 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -122,6 +123,7 @@ small {
 }
 .brand {
   gap: 12px;
+  flex-shrink: 0;
 }
 .brand-icon {
   width: 38px;
@@ -140,6 +142,14 @@ small {
   font-weight: 600;
   letter-spacing: -0.5px;
   margin: 0;
+  white-space: nowrap;
+}
+.app-version {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .header-right {
   gap: 20px;
@@ -1143,6 +1153,7 @@ td small {
   .topbar {
     height: 64px;
     padding: 0 17px;
+    gap: 8px;
   }
   .brand {
     gap: 9px;
@@ -1155,13 +1166,20 @@ td small {
   .brand h1 {
     font-size: 18px;
   }
+  .app-version {
+    font-size: 11px;
+  }
   .header-right {
     gap: 10px;
+    min-width: 0;
   }
   .identity {
+    display: block;
     font-size: 11px;
-    max-width: 130px;
-    overflow-wrap: anywhere;
+    max-width: 96px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .identity small {
     display: none;

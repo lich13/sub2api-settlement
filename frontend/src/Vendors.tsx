@@ -14,13 +14,19 @@ export function expandVendorSelection(ids:number[], periods:VendorPeriod[]) {
 export type GroupAction = "create" | "edit" | "add" | "renew";
 export function currentPeriod(v: Vendor) { return v.periods.find(p=>p.status==="open" && !p.end) || v.periods.find(p=>p.status==="open"); }
 function groupCandidates(accounts: Account[]) { return accounts.filter(a=>a.kind==="unconfigured" && !a.deleted && !a.vendor_id && a.cycle?.status!=="open"); }
+export function visibleVendorGroups(vendors: Vendor[], accounts: Account[], query: string, filter: string) {
+  return vendors
+    .filter(v => !v.archived_at && (filter === "all" || filter === "paid" || (filter === "open" && currentPeriod(v))))
+    .flatMap(vendor => {
+      const period = currentPeriod(vendor), last = period || vendor.periods[0];
+      const members = (vendor.current_members || last?.members?.map(c => ({ account_id: c.account_id, name: c.current_name || c.name, account_deleted: c.account_deleted, renewal_excluded: false })) || []).filter(m => !m.account_deleted);
+      if (query && !`${vendor.name} ${members.map(m => accounts.find(a => a.id === m.account_id)?.name || m.name).join(" ")}`.toLowerCase().includes(query.toLowerCase())) return [];
+      return [{ vendor, period, last, members }];
+    });
+}
 
 export function VendorGroups({vendors,accounts,admin,query,filter,onSettle,onManage,onDetail,totals,selected=[],onToggle}:{vendors:Vendor[];accounts:Account[];admin:boolean;query:string;filter:string;onSettle:(ids:number[],renew:boolean)=>void;onManage:(id:number,action?:Exclude<GroupAction,"create">)=>void;onDetail:(id:number)=>void;totals?:Overview["vendor_totals"];selected?:number[];onToggle?:(ids:number[])=>void}) {
-  const groups=vendors.filter(v=>!v.archived_at && (filter==="all" || filter==="paid" || (filter==="open" && currentPeriod(v))));
-  return <div className="vendor-groups">{groups.map(v=>{
-    const p=currentPeriod(v), last=p||v.periods[0];
-    const members=(v.current_members || last?.members?.map(c=>({account_id:c.account_id,name:c.current_name||c.name,account_deleted:c.account_deleted,renewal_excluded:false})) || []).filter(m=>!m.account_deleted);
-    if(query && !`${v.name} ${members.map(m=>accounts.find(a=>a.id===m.account_id)?.name||m.name).join(" ")}`.toLowerCase().includes(query.toLowerCase())) return null;
+  return <div className="vendor-groups">{visibleVendorGroups(vendors, accounts, query, filter).map(({ vendor: v, period: p, last, members })=>{
     return <details className="vendor-group" key={v.id}>
       <summary>{admin&&onToggle&&p&&<input type="checkbox" aria-label={`选择账号组 ${v.name}`} checked={!!p.members?.length&&p.members.every(c=>selected.includes(c.id))} onClick={e=>e.stopPropagation()} onChange={()=>onToggle(p.members?.map(c=>c.id)||[])}/>}
         <div className="vendor-heading"><strong>{v.name}</strong><small>{members.length} 个账号 · {p?`${date(p.start)} 起 · ${p.start_confirmed?"进行中":"起点待确认"}`:"已结算／待续费"}</small></div>
@@ -102,7 +108,6 @@ export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{p
   useEffect(()=>{draftCallback.current?.(hasDraft);},[hasDraft]);
   useEffect(()=>()=>{draftCallback.current?.(false);},[]);
   function invalidate(){++seq.current;setPreview(null);setBusy(false);}
-  function changed(){invalidate();}
   const prevEnd=useRef(end);
   useEffect(()=>{invalidate();setAmbiguous([]);},[end,period.id,period.version]);
   useEffect(()=>{if(prevEnd.current!==end){prevEnd.current=end;manual.resetSelection();}},[end]);
@@ -126,8 +131,8 @@ export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{p
   async function confirmStart(){setBusy(true);setError("");try{await api(`/vendor-periods/${period.id}/start-confirm`,"POST",{version:period.version,start:start===inputDate(period.start)?period.start:fromInput(start),members:cycles.map(c=>({cycle_id:c.id,version:c.version}))});await onConfirmed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
   return <section className="bill-import vendor-bill"><div className="bill-import-head"><strong>{period.name} · 整组上游账单</strong><b className="amount">{money(period.cost_fen)}</b></div><p className="field-hint">{cycles.map(c=>c.name).join("、")} · 统一按本期总成本分摊</p>
     {!period.start_confirmed&&<div className="start-confirm"><label>确认共同起点<input type="datetime-local" step="1" value={start} onChange={e=>setStart(e.target.value)}/></label><button className="button primary" disabled={busy} onClick={confirmStart}>确认起点</button><p className="field-hint warning-text">请先确认共同起点后再匹配账单</p></div>}
-    <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={cycles} summary={preview?.manual_summary} ambiguous={ambiguous} onResetAmbiguous={()=>setAmbiguous([])} changed={changed}/>
-    {manual.source!=="local_only"&&<label>CSV 文件<input ref={csvInput} type="file" accept=".csv,text/csv" onChange={async e=>{const f=e.target.files?.[0];const token=++reads.current;changed();setAmbiguous([]);if(!f){setCsv("");setFileName("");return;}if(f.size>10*1024*1024){setError("CSV 不能超过 10 MB");return;}const text=await f.text();if(token===reads.current){setCsv(text);setFileName(f.name);}}}/></label>}
+    <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={cycles} summary={preview?.manual_summary} ambiguous={ambiguous} onResetAmbiguous={()=>setAmbiguous([])} changed={invalidate}/>
+    {manual.source!=="local_only"&&<label>CSV 文件<input ref={csvInput} type="file" accept=".csv,text/csv" onChange={async e=>{const f=e.target.files?.[0];const token=++reads.current;invalidate();setAmbiguous([]);if(!f){setCsv("");setFileName("");return;}if(f.size>10*1024*1024){setError("CSV 不能超过 10 MB");return;}const text=await f.text();if(token===reads.current){setCsv(text);setFileName(f.name);}}}/></label>}
     <div className="start-actions"><button className="button" disabled={busy||!period.start_confirmed||!manual.valid||(manual.source!=="local_only"&&!csv.trim())||!end} onClick={()=>inspect()}>{busy?"处理中…":"账单预览"}</button>{manual.source!=="local_only"&&!!period.bill_import_id&&<button className="button" disabled={busy||!period.start_confirmed||!manual.valid||!end} onClick={()=>inspect(true)}>沿用已导入账单</button>}</div>
     {preview&&<div className="bill-stats">
       <div><span>组准确成本</span><b>{money(preview.cost_fen)}</b></div><div><span>账单总额</span><b>{preview.bill_total_fen==null?"未提供":money(preview.bill_total_fen)}</b></div>

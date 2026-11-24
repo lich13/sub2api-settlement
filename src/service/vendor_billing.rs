@@ -311,13 +311,7 @@ impl Service {
         } else {
             let csv = text(data, "csv").to_owned();
             let hash = json!(crate::json::hash(csv.as_bytes()));
-            let filename = json!(
-                text(data, "file_name")
-                    .replace('\\', "/")
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("usage.csv")
-            );
+            let filename = json!(billing::sanitize_file_name(text(data, "file_name")));
             let permit = self
                 .cpu
                 .clone()

@@ -3,11 +3,11 @@ use crate::{
     billing::{self, BillRow, RequestDetail, UsageRow},
     error::{Error, Result},
     json::{array, digest, int, text},
-    money::{Decimal, from_ratio},
+    money::{Decimal, from_ratio, largest_remainder, round_cents},
 };
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::Zero;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -244,28 +244,10 @@ pub fn allocations(result: &Value, creditor: i64) -> Result<Value> {
     if total.is_zero() {
         return Ok(json!([]));
     }
-    let mut amounts = BTreeMap::new();
-    let mut ranked = Vec::new();
-    for (id, v) in &portions {
-        let cents = v * BigInt::from(100);
-        let floor = cents.floor().to_integer();
-        amounts.insert(
-            *id,
-            floor
-                .to_i64()
-                .ok_or_else(|| Error::invalid("金额超出范围"))?,
-        );
-        ranked.push((*id, cents - floor));
-    }
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let target = (&total * BigInt::from(100) + BigRational::new(BigInt::from(1), BigInt::from(2)))
-        .floor()
-        .to_integer()
-        .to_i64()
-        .ok_or_else(|| Error::invalid("金额超出范围"))?;
-    let remainder = target - amounts.values().sum::<i64>();
-    for (id, _) in ranked.iter().take(remainder as usize) {
-        *amounts.get_mut(id).expect("same portion keys") += 1;
-    }
+    let scaled: BTreeMap<_, _> = portions
+        .iter()
+        .map(|(id, v)| (*id, v * BigInt::from(100)))
+        .collect();
+    let amounts = largest_remainder(&scaled, round_cents(&total)?)?;
     Ok(json!(portions.iter().map(|(id,v)|json!({"user_id":id,"amount_fen":amounts[id],"consumption":from_ratio(v,60).to_string(),"share":from_ratio(&(v/&total),28).to_string(),"self_covered":*id==creditor})).collect::<Vec<_>>()))
 }
