@@ -103,9 +103,8 @@ test("failed account deletion can be retried successfully from the management vi
   let dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: /结算预览/ })).toBeVisible();
   await dialog.getByLabel("出单后删除账号").check();
-  const deletionScope = dialog.getByLabel(/确认删除以上/);
-  await expect(deletionScope).toBeVisible();
-  await deletionScope.check();
+  await expect(dialog.locator(".deletion-targets")).toContainText("OpenAI Plus");
+  await expect(dialog.getByLabel(/确认删除以上/)).toHaveCount(0);
   await dialog.getByRole("button", { name: "确认结算", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 

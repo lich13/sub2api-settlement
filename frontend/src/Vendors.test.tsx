@@ -46,17 +46,21 @@ function inputForLabel(labelText: string) {
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (!setter) throw new Error("input value setter is unavailable");
-  setter.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("input value setter is unavailable");
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function setSelectValue(select: HTMLSelectElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-  if (!setter) throw new Error("select value setter is unavailable");
-  setter.call(select, value);
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+    if (!setter) throw new Error("select value setter is unavailable");
+    setter.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 function selectForLabel(labelText: string) {
@@ -281,10 +285,12 @@ describe("vendor group manager v0.11.1 flows", () => {
     setInputValue(inputForLabel("本期准确总成本（元）"), "12.34");
     setInputValue(inputForLabel("共同起点（北京时间）"), "2026-09-01T08:00:00");
     setSelectValue(selectForLabel("起点方式"), "exact");
-    await act(async () => {
-      candidateCheckbox("Unconfigured Alpha").click();
-      candidateCheckbox("Cancelled draft Beta").click();
-    });
+    await click(button("全选"));
+    expect(candidateCheckbox("Unconfigured Alpha").checked).toBe(true);
+    expect(candidateCheckbox("Cancelled draft Beta").checked).toBe(true);
+    await click(button("清空"));
+    expect(candidateCheckbox("Unconfigured Alpha").checked).toBe(false);
+    await click(button("全选"));
     await click(button("保存"));
 
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -478,7 +484,7 @@ describe("vendor manager", () => {
 });
 
 describe("vendor bill panel", () => {
-  it("requires explicit confirmation for a bill difference", async () => {
+  it("displays difference and outside stats and confirms in one click without dual checkboxes", async () => {
     const fetcher = vi.fn<typeof fetch>(async input => {
       if (String(input).endsWith("/bill-previews")) {
         return response(billPreview({
@@ -487,6 +493,8 @@ describe("vendor bill panel", () => {
           matched_amount: "99.00",
           unmatched_amount: "1.00",
           unmatched_count: 1,
+          outside_count: 1,
+          outside_amount: "5.00",
           difference_required: true,
         }));
       }
@@ -499,7 +507,6 @@ describe("vendor bill panel", () => {
       period={period({ version: 4, start_confirmed: true })}
       cycles={[cycle()]}
       end="2026-10-01T00:00:00Z"
-      previewKey="initial"
       onConfirmed={onConfirmed}
     />);
 
@@ -513,21 +520,18 @@ describe("vendor bill panel", () => {
     });
     await click(button("账单预览"));
 
+    expect(host!.textContent).toContain("差额");
+    expect(host!.textContent).toContain("范围外（已自动排除）");
+    expect(host!.textContent).not.toContain("确认组成本与账单");
+    expect(host!.textContent).not.toContain("确认排除范围外记录");
     const confirmButton = button("确认分摊依据");
-    expect(confirmButton.disabled).toBe(true);
-    const difference = Array.from(host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
-      .find(input => input.closest("label")?.textContent?.includes("确认组成本与账单"));
-    if (!difference) throw new Error("difference confirmation checkbox not found");
-    await act(async () => { difference.click(); await Promise.resolve(); });
     expect(confirmButton.disabled).toBe(false);
 
     await click(confirmButton);
     const confirmCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-confirm"));
-    expect(JSON.parse(String(confirmCall?.[1]?.body))).toMatchObject({
+    expect(JSON.parse(String(confirmCall?.[1]?.body))).toEqual({
       version: 4,
       preview_id: "difference-preview",
-      accept_difference: true,
-      accept_outside: false,
     });
     expect(onConfirmed).toHaveBeenCalledTimes(1);
   });
@@ -564,7 +568,6 @@ describe("vendor bill panel", () => {
       period={period({ start_confirmed: true })}
       cycles={[cycle()]}
       end="2026-10-01T00:00:00Z"
-      previewKey="local"
       onConfirmed={vi.fn(async () => {})}
     />);
     const fileInput = host!.querySelector<HTMLInputElement>("input[type=file]");
@@ -584,7 +587,7 @@ describe("vendor bill panel", () => {
     expect(button("确认分摊依据").disabled).toBe(true);
   });
 
-  it("keeps the CSV draft while version, cutoff, and preview key invalidate the old preview", async () => {
+  it("keeps the CSV draft while version and cutoff invalidate the old preview", async () => {
     const fetcher = vi.fn<typeof fetch>(async input => {
       if (String(input).endsWith("/bill-previews")) {
         const body = JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body));
@@ -612,7 +615,6 @@ describe("vendor bill panel", () => {
       period={initialPeriod}
       cycles={[cycle()]}
       end={end}
-      previewKey="initial"
       onConfirmed={vi.fn(async () => {})}
     />);
     const fileInput = host!.querySelector<HTMLInputElement>("input[type=file]");
@@ -630,7 +632,6 @@ describe("vendor bill panel", () => {
       period={updatedPeriod}
       cycles={[cycle()]}
       end="2026-10-02T00:00:00Z"
-      previewKey="updated"
       onConfirmed={vi.fn(async () => {})}
     />);
     expect(host!.textContent).not.toContain("preview-v4");

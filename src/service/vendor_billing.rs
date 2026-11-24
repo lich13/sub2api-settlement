@@ -447,12 +447,8 @@ impl Service {
         if !flag(&fresh["period"], "start_confirmed") {
             return Err(Error::conflict("请先确认账号组起点"));
         }
-        if flag(r, "difference_required") && !flag(data, "accept_difference") {
-            return Err(Error::invalid("请确认账单总额、未匹配费用与历史覆盖差异"));
-        }
-        if int(r, "outside_count") > 0 && !flag(data, "accept_outside") {
-            return Err(Error::invalid("请确认排除周期范围外记录"));
-        }
+        let difference_confirmed = flag(r, "difference_required");
+        let outside_confirmed = int(r, "outside_count") > 0;
         let local_only = r["manual_basis"]["source"] == "local_only";
         let b = if local_only {
             json!({"id":null})
@@ -472,7 +468,7 @@ impl Service {
             &[basis_id, json!(pid)],
         )
         .await?;
-        exec(db,"UPDATE vendor_periods SET bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,version=version+1 WHERE id=?",&[b["id"].clone(),r["end"].clone(),r["digest"].clone(),json!(flag(data,"accept_difference") as i64),json!(pid)]).await?;
+        exec(db,"UPDATE vendor_periods SET bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,version=version+1 WHERE id=?",&[b["id"].clone(),r["end"].clone(),r["digest"].clone(),json!(i64::from(difference_confirmed)),json!(pid)]).await?;
         for a in array(&r["accounts"]) {
             exec(db,"UPDATE cycles SET cost_fen=?,bill_end=?,cost_source='vendor_bill',version=version+1 WHERE id=? AND vendor_period_id=?",&[a["amount_fen"].clone(),r["end"].clone(),a["cycle_id"].clone(),json!(pid)]).await?;
         }
@@ -482,7 +478,7 @@ impl Service {
             &[json!(pid)],
         )
         .await?;
-        audit(db,actor,"confirm_vendor_bill",json!(pid),&json!({"import_id":b["id"],"file_hash":p["result"]["file_hash"],"digest":r["digest"],"cost_fen":r["cost_fen"],"bill_total_fen":r["bill_total_fen"],"basis":r["basis"],"accept_difference":data["accept_difference"],"accept_outside":data["accept_outside"]})).await?;
+        audit(db,actor,"confirm_vendor_bill",json!(pid),&json!({"import_id":b["id"],"file_hash":p["result"]["file_hash"],"digest":r["digest"],"cost_fen":r["cost_fen"],"bill_total_fen":r["bill_total_fen"],"basis":r["basis"],"accept_difference":difference_confirmed,"accept_outside":outside_confirmed})).await?;
         Ok(json!({"id":pid,"version":int(&fresh["period"],"version")+1,"import_id":b["id"]}))
     }
     pub async fn vendor_unmatched_csv(

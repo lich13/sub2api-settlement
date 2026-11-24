@@ -35,11 +35,13 @@ async function click(label: string) {
 }
 
 function setInputValue(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
-  if (!setter) throw new Error("input value setter is unavailable");
-  setter.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  act(() => {
+    const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (!setter) throw new Error("input value setter is unavailable");
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function response(data: unknown, status = 200): Response {

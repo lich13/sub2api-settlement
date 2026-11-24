@@ -31,6 +31,7 @@ import { useAccountState } from "./useAccountState";
 import {
   VendorGroups,
   VendorManager,
+  currentPeriod,
   expandVendorSelection,
   type GroupAction,
 } from "./Vendors";
@@ -98,6 +99,10 @@ export function App() {
   const [detail, setDetail] = useState<any>(null);
   const [showInbox, setShowInbox] = useState(false);
   const [startCycle, setStartCycle] = useState<Cycle | null>(null);
+  const [startModalState, setStartModalState] = useState({
+    busy: false,
+    dirty: false,
+  });
   const [confirm, setConfirm] = useState<{
     text: string;
     action: (memo?: { note?: string; reference?: string }) => Promise<unknown>;
@@ -255,10 +260,10 @@ export function App() {
     window.addEventListener("settlement:expired", clear);
     return () => window.removeEventListener("settlement:expired", clear);
   }, []);
-  const lastRefreshAt = useRef(0);
+  const refreshing = useRef(false);
   async function refresh() {
     if (!me) return;
-    lastRefreshAt.current = Date.now();
+    refreshing.current = true;
     const sequence = ++refreshSequence.current;
     const scope = tab === "bills" ? "mine" : "all";
     const needOrders =
@@ -328,6 +333,8 @@ export function App() {
       if (jobs) setDeletions(jobs.items);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      if (sequence === refreshSequence.current) refreshing.current = false;
     }
   }
   useEffect(() => {
@@ -336,13 +343,14 @@ export function App() {
       void refresh();
     }
     const poll = () => {
-      if (!document.hidden && Date.now() - lastRefreshAt.current >= 1000) {
+      if (!document.hidden && !refreshing.current) {
         void refresh();
       }
     };
     const timer = setInterval(poll, 10_000);
     document.addEventListener("visibilitychange", poll);
     return () => {
+      refreshing.current = false;
       ++refreshSequence.current;
       clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
@@ -508,6 +516,46 @@ export function App() {
         ? filter === "all" || (a.kind === "paid" && a.cycle?.status === "open")
         : a.kind === filter),
   );
+  const visibleVendorCycleIds = vendors
+    .filter(
+      (v) =>
+        !v.archived_at &&
+        (filter === "all" ||
+          filter === "paid" ||
+          (filter === "open" && currentPeriod(v))),
+    )
+    .flatMap((v) => {
+      const p = currentPeriod(v);
+      if (!p) return [];
+      const members = (
+        v.current_members ||
+        p.members?.map((c) => ({
+          account_id: c.account_id,
+          name: c.current_name || c.name,
+          account_deleted: c.account_deleted,
+        })) ||
+        []
+      ).filter((m) => !m.account_deleted);
+      if (
+        query &&
+        !`${v.name} ${members.map((m) => overview?.accounts.find((a) => a.id === m.account_id)?.name || m.name).join(" ")}`
+          .toLowerCase()
+          .includes(query.toLowerCase())
+      )
+        return [];
+      return p.members?.map((c) => c.id) || [];
+    });
+  const selectableCycleIds = [
+    ...new Set([
+      ...visibleVendorCycleIds,
+      ...filteredAccounts.flatMap((a) =>
+        a.kind === "paid" && a.cycle?.status === "open" ? [a.cycle.id] : [],
+      ),
+    ]),
+  ];
+  const allVisibleSelected =
+    selectableCycleIds.length > 0 &&
+    selectableCycleIds.every((id) => selected.includes(id));
   const filteredExpenses = expenses.filter(
     (item) =>
       !query ||
@@ -706,7 +754,22 @@ export function App() {
                     value={filter}
                     onChange={(e) => {
                       setFilter(e.target.value);
-                      setSelected([]);
+                      if (tab === "accounts") {
+                        const openIds = new Set([
+                          ...(overview?.accounts.flatMap((a) =>
+                            a.cycle?.status === "open" ? [a.cycle.id] : [],
+                          ) || []),
+                          ...vendors.flatMap(
+                            (v) =>
+                              currentPeriod(v)?.members?.map((c) => c.id) || [],
+                          ),
+                        ]);
+                        setSelected((prev) =>
+                          prev.filter((id) => openIds.has(id)),
+                        );
+                      } else {
+                        setSelected([]);
+                      }
                     }}
                   >
                     {(tab === "accounts"
@@ -737,6 +800,23 @@ export function App() {
                 <div className="toolbar-actions">
                   {tab === "accounts" &&
                     costView === "accounts" &&
+                    isAdmin &&
+                    selectableCycleIds.length > 0 &&
+                    !allVisibleSelected && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={() =>
+                          setSelected((prev) => [
+                            ...new Set([...prev, ...selectableCycleIds]),
+                          ])
+                        }
+                      >
+                        全选
+                      </button>
+                    )}
+                  {tab === "accounts" &&
+                    costView === "accounts" &&
                     isAdmin && (
                       <button
                         className="button"
@@ -750,15 +830,33 @@ export function App() {
                     costView === "accounts" &&
                     isAdmin &&
                     selected.length > 0 && (
-                      <button
-                        className="button primary"
-                        disabled={!catalog}
-                        onClick={() => {
-                          beginSettlement(selected);
-                        }}
-                      >
-                        批量结算 ({selected.length})
-                      </button>
+                      <>
+                        <button
+                          className="button"
+                          disabled={!catalog}
+                          onClick={() => {
+                            beginSettlement(selected, false);
+                          }}
+                        >
+                          批量结算 ({selected.length})
+                        </button>
+                        <button
+                          className="button primary"
+                          disabled={!catalog}
+                          onClick={() => {
+                            beginSettlement(selected, true);
+                          }}
+                        >
+                          批量结算并续费 ({selected.length})
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => setSelected([])}
+                        >
+                          清空
+                        </button>
+                      </>
                     )}
                   {tab === "accounts" &&
                     costView === "expenses" &&
@@ -803,7 +901,26 @@ export function App() {
                     <tr>
                       {isAdmin && (
                         <th className="check-cell">
-                          <span className="sr-only">选择</span>
+                          <input
+                            type="checkbox"
+                            aria-label="全选当前可结算项"
+                            disabled={!selectableCycleIds.length}
+                            checked={allVisibleSelected}
+                            onChange={() =>
+                              setSelected((prev) =>
+                                allVisibleSelected
+                                  ? prev.filter(
+                                      (id) => !selectableCycleIds.includes(id),
+                                    )
+                                  : [
+                                      ...new Set([
+                                        ...prev,
+                                        ...selectableCycleIds,
+                                      ]),
+                                    ],
+                              )
+                            }
+                          />
                         </th>
                       )}
                       <th>账号 / 周期</th>
@@ -1380,7 +1497,12 @@ export function App() {
         />
       )}
       {startCycle && (
-        <Modal title="确认起点" close={() => setStartCycle(null)}>
+        <Modal
+          title="确认起点"
+          busy={startModalState.busy}
+          dirty={startModalState.dirty}
+          close={() => !startModalState.busy && setStartCycle(null)}
+        >
           <div className="form">
             <p className="candidate-result">
               当前估算：{date(startCycle.start)}
@@ -1394,6 +1516,7 @@ export function App() {
                 allocations: [],
                 start_lower: startCycle.start_lower,
               }}
+              onStateChange={setStartModalState}
               onConfirmed={async () => {
                 setStartCycle(null);
                 await refresh();

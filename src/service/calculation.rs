@@ -682,15 +682,9 @@ impl Service {
         if !fresh["manual_basis"].is_null() && (gap.is_some() || !flag(&c, "start_confirmed")) {
             return Err(Error::conflict("请先确认起点并解决本地消费覆盖缺口"));
         }
-        if mode == "proportional"
-            && (int(&fresh, "unmatched_count") != 0 || gap.is_some())
-            && !flag(data, "accept_difference")
-        {
-            return Err(Error::invalid("请确认未匹配费用按已匹配扣费比例分摊"));
-        }
-        if int(&fresh, "outside_count") != 0 && !flag(data, "accept_outside") {
-            return Err(Error::invalid("请确认不计入周期范围外的账单记录"));
-        }
+        let difference_confirmed =
+            mode == "proportional" && (int(&fresh, "unmatched_count") != 0 || gap.is_some());
+        let outside_confirmed = int(&fresh, "outside_count") != 0;
         let local_only = fresh["manual_basis"]["source"] == "local_only";
         let bill = if local_only {
             json!({"id":null})
@@ -720,9 +714,9 @@ impl Service {
             &[basis_id, json!(cid)],
         )
         .await?;
-        exec(db,"UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source=?,bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,bill_allocation_mode=?,billable_cost_fen=?,version=version+1 WHERE id=? AND version=?",&[result["cost_fen"].clone(),json!(if local_only{"manual_bill"}else{"upstream_bill"}),bill["id"].clone(),result["end"].clone(),result["digest"].clone(),json!(i64::from(flag(data,"accept_difference"))),json!(mode),fresh["billable_cost_fen"].clone(),json!(cid),c["version"].clone()]).await?;
+        exec(db,"UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source=?,bill_import_id=?,bill_end=?,bill_digest=?,bill_difference_confirmed=?,bill_allocation_mode=?,billable_cost_fen=?,version=version+1 WHERE id=? AND version=?",&[result["cost_fen"].clone(),json!(if local_only{"manual_bill"}else{"upstream_bill"}),bill["id"].clone(),result["end"].clone(),result["digest"].clone(),json!(i64::from(difference_confirmed)),json!(mode),fresh["billable_cost_fen"].clone(),json!(cid),c["version"].clone()]).await?;
         audit(db,actor,"bill_allocation",json!(cid),&json!({"allocation_mode":mode,"billable_cost_fen":fresh["billable_cost_fen"],"excluded_amount":fresh["excluded_amount"],"rules_version":fresh["rules_version"]})).await?;
-        audit(db,actor,if local_only{"confirm_local_billing"}else{"import_bill"},json!(cid),&json!({"before_cost_fen":c["cost_fen"],"cost_fen":result["cost_fen"],"bill_import_id":bill["id"],"file_hash":result["file_hash"],"end":result["end"],"unmatched_amount":result["unmatched_amount"],"accept_difference":flag(data,"accept_difference"),"accept_outside":flag(data,"accept_outside")})).await?;
+        audit(db,actor,if local_only{"confirm_local_billing"}else{"import_bill"},json!(cid),&json!({"before_cost_fen":c["cost_fen"],"cost_fen":result["cost_fen"],"bill_import_id":bill["id"],"file_hash":result["file_hash"],"end":result["end"],"unmatched_amount":result["unmatched_amount"],"accept_difference":difference_confirmed,"accept_outside":outside_confirmed})).await?;
         Ok(json!({"id":cid,"version":int(&c,"version")+1,"bill_import_id":bill["id"]}))
     }
 }

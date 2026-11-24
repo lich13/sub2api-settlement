@@ -161,17 +161,21 @@ function formProps(overrides: Partial<ComponentProps<typeof SettleForm>> = {}): 
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (!setter) throw new Error("input value setter is unavailable");
-  setter.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("input value setter is unavailable");
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function setSelectValue(select: HTMLSelectElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-  if (!setter) throw new Error("select value setter is unavailable");
-  setter.call(select, value);
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+    if (!setter) throw new Error("select value setter is unavailable");
+    setter.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 function checkbox(labelText: string) {
@@ -582,8 +586,8 @@ describe("SettleForm preview integration", () => {
     await click(button("沿用已导入账单"));
     const proportionalCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
     expect(JSON.parse(String(proportionalCall?.[1]?.body))).toMatchObject({ allocation_mode: "proportional" });
-    expect(host!.textContent).toContain("确认本地差异，按已匹配扣费比例分摊");
-    expect(host!.textContent).toContain("确认替换成本");
+    expect(host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
+    expect(button("确认替换成本").disabled).toBe(false);
 
     const mode = selectForLabel("分摊方式");
     await act(async () => {
@@ -593,7 +597,6 @@ describe("SettleForm preview integration", () => {
     await advance(0);
 
     expect(billCalls).toBe(2);
-    expect(host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
     expect(host!.textContent).not.toContain("确认替换成本");
     expect(host!.textContent).toContain("匹配中…");
     const matchedOnlyCall = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"))[1];
@@ -630,25 +633,25 @@ describe("SettleForm preview integration", () => {
     expect(host!.textContent).toContain("本次计费");
     expect(host!.textContent).toContain("未匹配不计费");
     expect(host!.textContent).toContain("确认仅按匹配金额计费");
-    expect(host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
 
     await click(button("确认仅按匹配金额计费"));
     await advance(0);
     const billConfirmCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-confirm"));
-    expect(JSON.parse(String(billConfirmCall?.[1]?.body))).toMatchObject({
+    expect(JSON.parse(String(billConfirmCall?.[1]?.body))).toEqual({
+      version: 1,
       preview_id: "bill-preview-matched",
-      accept_difference: false,
     });
     expect(settlementPreviewCalls).toBe(2);
   });
 
-  it("keeps renewal and deletion mutually exclusive and includes optional delete cycle ids in settlement payload", async () => {
+  it("keeps renewal and deletion mutually exclusive and binds deletion scope inline without a second checkbox", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const scopeDeferred = deferred<Response>();
     const fetcher = vi.fn<typeof fetch>(async input => {
       const path = String(input);
       if (path.endsWith("/previews")) return response(preview(cycle(), "settlement-preview-delete"));
-      if (path.endsWith("/deletion-scope")) return response({ account_id: 1, digest: "a".repeat(64), targets: [{ id: 1, name: "Shared account", shadow: false }] });
+      if (path.endsWith("/deletion-scope")) return scopeDeferred.promise;
       if (path.endsWith("/settlements")) return response({ deletions: [{ id: 12, account_id: 1, account_name: "Shared account", settlement_id: 88, status: "failed", version: 1, error: "upstream unavailable", updated_at: "2026-10-01T00:00:00Z" }] });
       return response({});
     });
@@ -667,17 +670,16 @@ describe("SettleForm preview integration", () => {
     expect(deletion.checked).toBe(true);
     expect(renewal.checked).toBe(false);
     expect(renewal.disabled).toBe(true);
-
-    await advance(0);
-    const scopeConfirmation = checkbox("确认删除以上");
-    expect(scopeConfirmation.checked).toBe(false);
-    await click(button("确认结算"));
-    expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
+    expect(button("确认结算").disabled).toBe(true);
 
     await act(async () => {
-      scopeConfirmation.click();
+      scopeDeferred.resolve(response({ account_id: 1, digest: "a".repeat(64), targets: [{ id: 1, name: "Shared account", shadow: false }] }));
+      await Promise.resolve();
       await Promise.resolve();
     });
+    expect(host!.querySelector(".deletion-scope input[type=checkbox]")).toBeNull();
+    expect(button("确认结算").disabled).toBe(false);
+
     await click(button("确认结算"));
     const settlementCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/settlements"));
     expect(JSON.parse(String(settlementCall?.[1]?.body))).toMatchObject({
@@ -688,15 +690,21 @@ describe("SettleForm preview integration", () => {
     expect(done).toHaveBeenCalledWith("已出单，删除未完成。请在管理视图中查看。");
   });
 
-  it("refreshes the settlement preview after confirming an estimated cycle start", async () => {
+  it("renders start confirmation above bill import, defaults end to unique bill_end, collapses optional single-account bill panel, and does not lock drafts on mode switch without CSV", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    vi.setSystemTime(new Date("2026-10-15T00:00:00.000Z"));
     let previewCalls = 0;
+    const confirmedEnd = "2026-10-01T00:00:05Z";
     const fetcher = vi.fn<typeof fetch>(async input => {
       const path = String(input);
       if (path.endsWith("/previews")) {
         previewCalls += 1;
-        const value = cycle({ start_mode: "minute_estimate", version: previewCalls, start_confirmed: previewCalls > 1 });
+        const value = cycle({
+          start_mode: "minute_estimate",
+          bill_end: confirmedEnd,
+          version: previewCalls,
+          start_confirmed: previewCalls > 1,
+        });
         return response({
           id: `preview-${previewCalls}`,
           expires_at: new Date(Date.now() + 120_000).toISOString(),
@@ -707,16 +715,163 @@ describe("SettleForm preview integration", () => {
     });
     vi.stubGlobal("fetch", fetcher);
 
-    await render(<SettleForm {...formProps({ cycles: [cycle({ start_mode: "minute_estimate" })] })} />);
+    await render(<SettleForm {...formProps({ cycles: [cycle({ start_mode: "minute_estimate", bill_end: confirmedEnd, start_confirmed: false })] })} />);
     await advance(0);
     expect(previewCalls).toBe(1);
-    expect(host!.textContent).toContain("确认起点");
+    expect(inputForLabel("结束时间（北京时间）").value).toBe("2026-10-01T08:00:05");
+    const details = host!.querySelector<HTMLDetailsElement>("details.bill-import")!;
+    expect(details.open).toBe(false);
+    const startEl = host!.querySelector(".start-confirm")!;
+    expect(startEl.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
+    setSelectValue(selectForLabel("分摊方式"), "matched_only");
     await click(button("确认起点"));
     await advance(0);
 
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/start-confirm"))).toBe(true);
     expect(previewCalls).toBe(2);
     expect(host!.textContent).not.toContain("确认起点");
+    expect(button("确认结算").disabled).toBe(false);
+  });
+
+  it("keeps group B's bill preview intact when confirming group A's start, unlocks settle when reverted to clean, and guards existing-bill preview", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
+    const memberA = groupCycle(11, 101, { name: "Group A Member", vendor_id: 9, vendor_period_id: 55, start_confirmed: false });
+    const memberB = groupCycle(12, 102, { name: "Group B Member", vendor_id: 10, vendor_period_id: 56, start_confirmed: true });
+    let startAConfirmed = false;
+    let groupBConfirmed = false;
+    const periodA = () => groupPeriod([memberA], { id: 55, vendor_id: 9, name: "Group A", start_confirmed: startAConfirmed, version: startAConfirmed ? 2 : 1, bill_import_id: 88, pending_bill: false });
+    const periodB = () => groupPeriod([memberB], { id: 56, vendor_id: 10, name: "Group B", start_confirmed: true, version: groupBConfirmed ? 2 : 1, pending_bill: !groupBConfirmed });
+
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/previews")) {
+        const curA = { ...memberA, start_confirmed: startAConfirmed, version: startAConfirmed ? 2 : 1 };
+        const curB = { ...memberB, version: groupBConfirmed ? 2 : 1 };
+        return response({
+          id: `multi-preview-${Number(startAConfirmed)}-${Number(groupBConfirmed)}`,
+          expires_at: new Date(Date.now() + 120_000).toISOString(),
+          cycles: [
+            calculation(curA, { vendor_period: periodA(), start_confirmed: startAConfirmed, can_settle: startAConfirmed }),
+            calculation(curB, { vendor_period: periodB(), start_confirmed: true, can_settle: groupBConfirmed }),
+          ],
+        });
+      }
+      if (path.endsWith("/vendor-periods/55/start-confirm")) {
+        startAConfirmed = true;
+        return response({ id: 55, version: 2 });
+      }
+      if (path.endsWith("/vendor-periods/56/bill-previews")) {
+        return response({
+          id: "group-b-bill-preview",
+          cost_fen: 12_345,
+          bill_total_fen: 12_345,
+          total: "123.45",
+          matched_amount: "123.45",
+          unmatched_amount: "0",
+          matched_count: 1,
+          unmatched_count: 0,
+          outside_count: 0,
+          outside_amount: "0",
+          local_unmatched_count: 0,
+          record_count: 1,
+          file_name: "b.csv",
+          file_hash: "hash-b",
+          end: "2026-10-01T00:00:00Z",
+          version: 1,
+          allocations: [],
+          difference_required: false,
+          can_confirm: true,
+          accounts: [{ account_id: 102, cycle_id: 12, name: "Group B Member", amount_fen: 12_345, total_consumption: "1.00", allocations: [] }],
+          basis: "matched_upstream",
+          coverage_warnings: [],
+        });
+      }
+      if (path.endsWith("/vendor-periods/56/bill-confirm")) {
+        groupBConfirmed = true;
+        return response({ id: 56, version: 2, import_id: 99 });
+      }
+      if (path.endsWith("/vendor-periods/55/bill-previews")) {
+        return response({
+          id: "group-a-existing-preview",
+          cost_fen: 12_345,
+          bill_total_fen: 12_345,
+          total: "123.45",
+          matched_amount: "123.45",
+          unmatched_amount: "0",
+          matched_count: 1,
+          unmatched_count: 0,
+          outside_count: 0,
+          outside_amount: "0",
+          local_unmatched_count: 0,
+          record_count: 1,
+          file_name: "a.csv",
+          file_hash: "hash-a",
+          end: "2026-10-01T00:00:00Z",
+          version: 2,
+          allocations: [],
+          difference_required: false,
+          can_confirm: true,
+          accounts: [{ account_id: 101, cycle_id: 11, name: "Group A Member", amount_fen: 12_345, total_consumption: "1.00", allocations: [] }],
+          basis: "matched_upstream",
+          coverage_warnings: [],
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const close = vi.fn();
+
+    await render(<SettleForm {...formProps({
+      ids: [11, 12],
+      cycles: [memberA, memberB],
+      vendorPeriods: [periodA(), periodB()],
+      close,
+    })} />);
+    await advance(0);
+
+    // Group B uploads CSV and runs bill preview while Group A's start is still unconfirmed.
+    const panels = host!.querySelectorAll<HTMLElement>(".vendor-bill");
+    expect(panels).toHaveLength(2);
+    const fileInputB = panels[1].querySelector<HTMLInputElement>('input[type="file"]')!;
+    const csv = "timestamp,cost\n2026-09-20T00:00:00Z,123.45\n";
+    Object.defineProperty(fileInputB, "files", { configurable: true, value: [{ name: "b.csv", size: csv.length, text: async () => csv }] });
+    await act(async () => {
+      fileInputB.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const previewBtnB = Array.from(panels[1].querySelectorAll("button")).find(b => b.textContent?.trim() === "账单预览")!;
+    await click(previewBtnB);
+    expect(panels[1].textContent).toContain("确认分摊依据");
+
+    // Confirming Group A's start must NOT wipe Group B's unconfirmed bill preview.
+    const confirmStartA = Array.from(panels[0].querySelectorAll("button")).find(b => b.textContent?.trim() === "确认起点")!;
+    await click(confirmStartA);
+    await advance(0);
+    expect(panels[1].textContent).toContain("确认分摊依据");
+
+    // Confirm Group B's bill; now both groups can settle.
+    const confirmBillB = Array.from(panels[1].querySelectorAll("button")).find(b => b.textContent?.trim() === "确认分摊依据")!;
+    await click(confirmBillB);
+    await advance(0);
+    expect(button("确认结算").disabled).toBe(false);
+
+    // Typing a supplement rate locks settle, and reverting it back to empty unlocks settle without closing the modal.
+    const rateB = panels[1].querySelector<HTMLInputElement>('input[aria-label="Group B Member 补计倍率"]')!;
+    setInputValue(rateB, "0.25");
+    expect(button("确认结算").disabled).toBe(true);
+    setInputValue(rateB, "");
+    expect(button("确认结算").disabled).toBe(false);
+
+    // Clicking "沿用已导入账单" on Group A marks draft dirty, blocking settle and backdrop close until confirmed.
+    const reuseBtnA = Array.from(panels[0].querySelectorAll("button")).find(b => b.textContent?.trim() === "沿用已导入账单")!;
+    await click(reuseBtnA);
+    expect(button("确认结算").disabled).toBe(true);
+    await act(async () => {
+      host!.querySelector("dialog")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(close).not.toHaveBeenCalled();
   });
 });

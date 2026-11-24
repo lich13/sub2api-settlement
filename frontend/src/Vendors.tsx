@@ -1,4 +1,4 @@
-import { ManualBillingEditor, useManualBilling } from "./ManualBilling";
+import { ManualBillingEditor, canonicalManualBasis, useManualBilling } from "./ManualBilling";
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { api, money, costInput, amountPattern, inputDate, fromInput, date, consumption, billedMoney, downloadCsv } from "./api";
@@ -53,6 +53,7 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
   const [voidCandidate,setVoidCandidate]=useState<VendorPeriod|null>(null);const [archiveCandidate,setArchiveCandidate]=useState<Vendor|null>(null);
   const action=editing?.action, period=editing?.period;
   const available=groupCandidates(accounts).filter(a=>!search||`${a.name} ${a.id}`.toLowerCase().includes(search.toLowerCase()));
+  const allAvailableSelected=available.length>0&&available.every(a=>selected.includes(a.id));
   function edit(v?:Vendor,action:GroupAction="edit",p?:VendorPeriod){const current=p||v&&currentPeriod(v);const last=current||v?.periods[0];setEditing({vendor:v,period:current,action});setName(v?.name||"");setCost(costInput(last?.cost_fen??v?.cost_fen??0));setCreditor(last?.creditor_id||v?.creditor_id||catalog.users[0]?.id||0);setOriginalStart(current?.start||"");setStart(inputDate(current?.start));setMode(current?.start_mode||"exact");setSelected([]);setSearch("");setDirty(false);setError("");}
   async function save(e:React.FormEvent){
     e.preventDefault();if(action!=="add"&&!amountPattern.test(cost)){setError("金额最多保留两位小数");return;}
@@ -79,7 +80,7 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
       {editing.vendor&&<strong>{editing.vendor.name}</strong>}
       {action!=="add"&&<div className="form-columns"><label>{action==="renew"?"下期准确总成本（元）":"本期准确总成本（元）"}<input required inputMode="decimal" value={cost} onChange={e=>{setDirty(true);setCost(e.target.value);}}/></label><label>统一垫付人<Select value={creditor} onChange={e=>{setDirty(true);setCreditor(Number(e.target.value));}}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}
       {(action==="create"||action==="edit")&&<div className="form-columns"><label>共同起点（北京时间）<input required type="datetime-local" step="1" value={start} onChange={e=>{setDirty(true);setStart(e.target.value);}}/></label><label>起点方式<Select value={mode} onChange={e=>{setDirty(true);setMode(e.target.value as typeof mode);}}><option value="exact">准确时间</option><option value="minute_estimate">按分钟估算</option>{mode==="date_estimate"&&<option value="date_estimate">按日期估算</option>}</Select></label></div>}
-      {(action==="create"||action==="add")&&<fieldset className="member-picker"><legend>待配置账号 · 已选 {selected.length}</legend><input type="search" aria-label="搜索待配置账号" placeholder="搜索待配置账号" value={search} onChange={e=>setSearch(e.target.value)}/><div className="group-candidate-list">{available.map(a=><label className="checkline" key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e=>setSelected(prev=>e.target.checked?[...prev,a.id]:prev.filter(id=>id!==a.id))}/>{a.name}</label>)}{!available.length&&<p className="field-hint">暂无可选的待配置账号</p>}</div></fieldset>}
+      {(action==="create"||action==="add")&&<fieldset className="member-picker"><legend className="picker-head"><span>待配置账号 · 已选 {selected.length}</span>{!!available.length&&<span className="picker-actions"><button type="button" className="text-button" disabled={busy||allAvailableSelected} onClick={()=>setSelected(prev=>[...new Set([...prev,...available.map(a=>a.id)])])}>全选</button><button type="button" className="text-button" disabled={busy||!selected.length} onClick={()=>setSelected([])}>清空</button></span>}</legend><input type="search" aria-label="搜索待配置账号" placeholder="搜索待配置账号" value={search} onChange={e=>setSearch(e.target.value)}/><div className="group-candidate-list">{available.map(a=><label className="checkline" key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e=>setSelected(prev=>e.target.checked?[...prev,a.id]:prev.filter(id=>id!==a.id))}/>{a.name}</label>)}{!available.length&&<p className="field-hint">暂无可选的待配置账号</p>}</div></fieldset>}
       {action==="add"&&<p className="field-hint">{period?`沿用共同起点 ${date(period.start)}，保存后需重新确认整组账单。`:"新增成员从下一期生效，已结算账期保持不变。"}</p>}
       {action==="edit"&&<><div className="group-member-names">{period?.members?.map(c=><p className="field-hint" key={c.id}>{c.current_name||c.name}{c.account_deleted?" · 已删除，保留本期账务":""}</p>)}</div><p className="field-hint">保存后整组账单确认失效。</p></>}
       {action==="renew"&&<p className="field-hint">从上一期结束时间 {date(editing.vendor?.periods[0]?.end||"")} 连续开始，自动沿用全组存续成员。</p>}
@@ -88,17 +89,25 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
   </div></Modal>;
 }
 
-export function VendorBillPanel({period,cycles,end,previewKey,onConfirmed,onDraftChange}:{period:VendorPeriod;cycles:Cycle[];end:string;previewKey:string;onConfirmed:()=>Promise<void>;onDraftChange?:(dirty:boolean)=>void}){
+export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{period:VendorPeriod;cycles:Cycle[];end:string;onConfirmed:()=>Promise<void>;onDraftChange?:(dirty:boolean)=>void}){
   const [csv,setCsv]=useState("");const [fileName,setFileName]=useState("");const [preview,setPreview]=useState<VendorBillPreview|null>(null);
   const [ambiguous,setAmbiguous]=useState<LocalUnmatched[]>([]);
-  const [difference,setDifference]=useState(false);const [outside,setOutside]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState("");
-  const [start,setStart]=useState(inputDate(period.start));const seq=useRef(0);const reads=useRef(0);const manual=useManualBilling(period.manual_basis);
-  function invalidate(){++seq.current;setPreview(null);setDifference(false);setOutside(false);setBusy(false);}
-  function changed(){invalidate();onDraftChange?.(true);}
-  const manualWindow=useRef(end);
-  useEffect(()=>{invalidate();setAmbiguous([]);if(manualWindow.current!==end)manual.resetSelection();manualWindow.current=end;},[end,period.version,previewKey]);
+  const [busy,setBusy]=useState(false);const [error,setError]=useState("");
+  const [start,setStart]=useState(inputDate(period.start));const seq=useRef(0);const reads=useRef(0);const csvInput=useRef<HTMLInputElement>(null);const manual=useManualBilling(period.manual_basis);
+  const [committedBasis,setCommittedBasis]=useState(()=>canonicalManualBasis(period.manual_basis));
+  useEffect(()=>{if(period.manual_basis&&!manual.touched.current)setCommittedBasis(canonicalManualBasis(period.manual_basis));},[period.manual_basis]);
+  const hasDraft=preview!==null||csv.trim()!==""||canonicalManualBasis(manual.basis)!==committedBasis;
+  const draftCallback=useRef(onDraftChange);draftCallback.current=onDraftChange;
+  useEffect(()=>{draftCallback.current?.(hasDraft);},[hasDraft]);
+  useEffect(()=>()=>{draftCallback.current?.(false);},[]);
+  function invalidate(){++seq.current;setPreview(null);setBusy(false);}
+  function changed(){invalidate();}
+  const prevEnd=useRef(end);
+  useEffect(()=>{invalidate();setAmbiguous([]);},[end,period.id,period.version]);
+  useEffect(()=>{if(prevEnd.current!==end){prevEnd.current=end;manual.resetSelection();}},[end]);
   useEffect(()=>()=>{++seq.current;++reads.current;},[]);
   async function inspect(existing=false){
+    if(!period.start_confirmed){setError("请先确认共同起点后再匹配账单");return;}
     if(!manual.valid){setError("倍率须为非负数，最多六位小数");return;}
     const token=++seq.current;setBusy(true);setError("");
     try{
@@ -107,19 +116,18 @@ export function VendorBillPanel({period,cycles,end,previewKey,onConfirmed,onDraf
       if(token!==seq.current)return;
       setPreview(p);
       setAmbiguous(p.local_unmatched?.filter(r=>r.reason==="ambiguous")||[]);
-      setDifference(false);setOutside(false);
     }catch(e){if(token===seq.current){setPreview(null);setError((e as Error).message);}}finally{if(token===seq.current)setBusy(false);}
   }
   async function confirm(){if(!preview)return;const token=seq.current;setBusy(true);setError("");try{
-    await api(`/vendor-periods/${period.id}/bill-confirm`,"POST",{version:period.version,preview_id:preview.id,accept_difference:difference,accept_outside:outside});
-    if(token===seq.current){setPreview(null);setAmbiguous([]);onDraftChange?.(false);await onConfirmed();}
+    await api(`/vendor-periods/${period.id}/bill-confirm`,"POST",{version:period.version,preview_id:preview.id});
+    if(token===seq.current){setCommittedBasis(canonicalManualBasis(manual.basis));setCsv("");setFileName("");if(csvInput.current)csvInput.current.value="";setPreview(null);setAmbiguous([]);await onConfirmed();}
   }catch(e){if(token===seq.current)setError((e as Error).message);}finally{if(token===seq.current)setBusy(false);}}
   async function confirmStart(){setBusy(true);setError("");try{await api(`/vendor-periods/${period.id}/start-confirm`,"POST",{version:period.version,start:start===inputDate(period.start)?period.start:fromInput(start),members:cycles.map(c=>({cycle_id:c.id,version:c.version}))});await onConfirmed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
   return <section className="bill-import vendor-bill"><div className="bill-import-head"><strong>{period.name} · 整组上游账单</strong><b className="amount">{money(period.cost_fen)}</b></div><p className="field-hint">{cycles.map(c=>c.name).join("、")} · 统一按本期总成本分摊</p>
-    {!period.start_confirmed&&<div className="start-confirm"><label>确认共同起点<input type="datetime-local" step="1" value={start} onChange={e=>setStart(e.target.value)}/></label><button className="button" disabled={busy} onClick={confirmStart}>确认起点</button></div>}
+    {!period.start_confirmed&&<div className="start-confirm"><label>确认共同起点<input type="datetime-local" step="1" value={start} onChange={e=>setStart(e.target.value)}/></label><button className="button primary" disabled={busy} onClick={confirmStart}>确认起点</button><p className="field-hint warning-text">请先确认共同起点后再匹配账单</p></div>}
     <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={cycles} summary={preview?.manual_summary} ambiguous={ambiguous} onResetAmbiguous={()=>setAmbiguous([])} changed={changed}/>
-    {manual.source!=="local_only"&&<label>CSV 文件<input type="file" accept=".csv,text/csv" onChange={async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>10*1024*1024){setError("CSV 不能超过 10 MB");return;}const token=++reads.current;changed();setAmbiguous([]);const text=await f.text();if(token===reads.current){setCsv(text);setFileName(f.name);}}}/></label>}
-    <div className="start-actions"><button className="button" disabled={busy||!manual.valid||(manual.source!=="local_only"&&!csv.trim())||!end} onClick={()=>inspect()}>{busy?"处理中…":"账单预览"}</button>{manual.source!=="local_only"&&!!period.bill_import_id&&<button className="button" disabled={busy||!manual.valid||!end} onClick={()=>inspect(true)}>沿用已导入账单</button>}</div>
+    {manual.source!=="local_only"&&<label>CSV 文件<input ref={csvInput} type="file" accept=".csv,text/csv" onChange={async e=>{const f=e.target.files?.[0];const token=++reads.current;changed();setAmbiguous([]);if(!f){setCsv("");setFileName("");return;}if(f.size>10*1024*1024){setError("CSV 不能超过 10 MB");return;}const text=await f.text();if(token===reads.current){setCsv(text);setFileName(f.name);}}}/></label>}
+    <div className="start-actions"><button className="button" disabled={busy||!period.start_confirmed||!manual.valid||(manual.source!=="local_only"&&!csv.trim())||!end} onClick={()=>inspect()}>{busy?"处理中…":"账单预览"}</button>{manual.source!=="local_only"&&!!period.bill_import_id&&<button className="button" disabled={busy||!period.start_confirmed||!manual.valid||!end} onClick={()=>inspect(true)}>沿用已导入账单</button>}</div>
     {preview&&<div className="bill-stats">
       <div><span>组准确成本</span><b>{money(preview.cost_fen)}</b></div><div><span>账单总额</span><b>{preview.bill_total_fen==null?"未提供":money(preview.bill_total_fen)}</b></div>
       {preview.bill_total_fen!=null&&<div><span>差额</span><b>{preview.difference_amount&&Number(preview.difference_amount)!==0&&Math.abs(Number(preview.difference_amount))<0.005?"差异不足 ¥0.01":money(preview.cost_fen-preview.bill_total_fen)}</b></div>}
@@ -128,12 +136,10 @@ export function VendorBillPanel({period,cycles,end,previewKey,onConfirmed,onDraf
       <p className="field-hint">{preview.basis==="manual_supplement"?"按已匹配扣费与手动补计权重拆分，组总成本不变。":preview.basis==="local_consumption"?"无正金额匹配，按各账号本地原始消费分摊。":"未匹配费用按各账号已匹配上游扣费比例分摊。"}</p>
       {preview.coverage_warnings.map(g=><p key={g.account_id} className="form-error">{g.warning}</p>)}
       {preview.accounts.map(a=><div key={a.account_id}><span>{a.name}</span><b className="amount">{a.amount_fen==null?"—":money(a.amount_fen)}</b></div>)}
-      {!!preview.outside_count&&<div><span>范围外</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
+      {!!preview.outside_count&&<div><span>范围外（已自动排除）</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
       {(preview.unmatched_count>0||preview.outside_count>0||!!preview.local_unmatched?.length)&&<button className="text-button" onClick={()=>downloadCsv(`/vendor-periods/${period.id}/bill-previews/${preview.id}/unmatched.csv`,"账号组未匹配账单.csv").catch(e=>setError(e.message))}>导出未匹配明细</button>}
-      {preview.difference_required&&<label className="checkline"><input type="checkbox" checked={difference} onChange={e=>setDifference(e.target.checked)}/>确认组成本与账单、未匹配和覆盖差异</label>}
-      {!!preview.outside_count&&<label className="checkline"><input type="checkbox" checked={outside} onChange={e=>setOutside(e.target.checked)}/>确认排除范围外记录</label>}
       {!preview.can_confirm&&<p className="form-error">{preview.manual_basis?"请确认本地消费覆盖及正金额分摊依据":"没有正金额匹配或本地消费依据，无法分摊"}</p>}
-      <button className="button primary" disabled={busy||!preview.can_confirm||!period.start_confirmed||(preview.difference_required&&!difference)||(preview.outside_count>0&&!outside)} onClick={confirm}>确认分摊依据</button>
+      <button className="button primary" disabled={busy||!preview.can_confirm||!period.start_confirmed} onClick={confirm}>确认分摊依据</button>
     </div>}
     {error&&<p className="form-error" role="alert">{error}</p>}
   </section>;

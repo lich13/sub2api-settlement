@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import {
   api,
   downloadCsv,
@@ -60,55 +61,78 @@ export function BillImportPanel({
   cycle,
   calculation,
   end,
-  previewKey,
   onConfirmed,
   onDraftChange,
 }: {
   cycle: Cycle;
   calculation?: Calculation;
   end: string;
-  previewKey: string;
   onConfirmed: () => Promise<void>;
   onDraftChange?: (dirty: boolean) => void;
 }) {
   const [csv, setCsv] = useState("");
   const [fileName, setFileName] = useState("");
   const [preview, setPreview] = useState<BillPreview | null>(null);
-  const [acceptDifference, setAcceptDifference] = useState(false);
-  const [acceptOutside, setAcceptOutside] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const effectiveCycle =
     calculation && calculation.cycle.version >= cycle.version
       ? calculation.cycle
       : cycle;
+  const startConfirmed = calculation
+    ? calculation.start_confirmed !== false
+    : effectiveCycle.start_confirmed !== false;
+  const [open, setOpen] = useState(
+    effectiveCycle.cost_source === "upstream_bill" ||
+      effectiveCycle.cost_source === "manual_bill",
+  );
   const [mode, setMode] = useState<BillMode>(
     effectiveCycle.bill_allocation_mode || "proportional",
   );
+  const [committedMode, setCommittedMode] = useState<BillMode>(
+    effectiveCycle.bill_allocation_mode || "proportional",
+  );
   function invalidate() {
-    onDraftChange?.(true);
     ++requestVersion.current;
     setPreview(null);
     setBusy(false);
-    setAcceptDifference(false);
-    setAcceptOutside(false);
   }
   const requestVersion = useRef(0);
   const fileRead = useRef(0);
   const csvInput = useRef<HTMLInputElement>(null);
+  const draftCallback = useRef(onDraftChange);
+  draftCallback.current = onDraftChange;
+  const hasDraft =
+    preview !== null ||
+    csv.trim() !== "" ||
+    (!!effectiveCycle.bill_import_id && mode !== committedMode);
+  useEffect(() => {
+    draftCallback.current?.(hasDraft);
+  }, [hasDraft]);
+  useEffect(() => () => draftCallback.current?.(false), []);
 
   useEffect(() => {
-    setMode(effectiveCycle.bill_allocation_mode || "proportional");
-  }, [effectiveCycle.id, effectiveCycle.bill_allocation_mode]);
+    const nextMode = effectiveCycle.bill_allocation_mode || "proportional";
+    setMode(nextMode);
+    setCommittedMode(nextMode);
+    if (
+      effectiveCycle.cost_source === "upstream_bill" ||
+      effectiveCycle.cost_source === "manual_bill"
+    ) {
+      setOpen(true);
+    }
+  }, [
+    effectiveCycle.id,
+    effectiveCycle.bill_allocation_mode,
+    effectiveCycle.cost_source,
+  ]);
 
   useEffect(() => {
     ++requestVersion.current;
     setPreview(null);
     setBusy(false);
-    setAcceptDifference(false);
-    setAcceptOutside(false);
     setError("");
-  }, [end, effectiveCycle.id, effectiveCycle.version, previewKey]);
+  }, [end, effectiveCycle.id, effectiveCycle.version]);
   useEffect(
     () => () => {
       ++requestVersion.current;
@@ -118,6 +142,10 @@ export function BillImportPanel({
   );
 
   async function inspect(useExisting = false, selectedMode = mode) {
+    if (!startConfirmed) {
+      setError("请先确认周期起点后再匹配账单");
+      return;
+    }
     if (!end) {
       setError("请填写有效的结束时间");
       return;
@@ -144,8 +172,6 @@ export function BillImportPanel({
       );
       if (token !== requestVersion.current) return;
       setPreview(result);
-      setAcceptDifference(false);
-      setAcceptOutside(false);
     } catch (e) {
       if (token !== requestVersion.current) return;
       setError((e as Error).message);
@@ -156,25 +182,18 @@ export function BillImportPanel({
   }
   async function confirm() {
     if (!preview || !preview.can_confirm) return;
-    if (preview.difference_required && !acceptDifference) {
-      setError("请确认未匹配记录的差异");
-      return;
-    }
-    if (preview.outside_count > 0 && !acceptOutside) {
-      setError("请确认周期范围外的账单记录");
-      return;
-    }
     setBusy(true);
     setError("");
     try {
       await api(`/cycles/${effectiveCycle.id}/bill-confirm`, "POST", {
         version: effectiveCycle.version,
         preview_id: preview.id,
-        accept_difference: acceptDifference,
-        accept_outside: acceptOutside,
       });
+      setCommittedMode(mode);
+      setCsv("");
+      setFileName("");
+      if (csvInput.current) csvInput.current.value = "";
       setPreview(null);
-      onDraftChange?.(false);
       await onConfirmed();
     } catch (e) {
       setError((e as Error).message);
@@ -185,6 +204,17 @@ export function BillImportPanel({
   async function useLocalConsumption() {
     invalidate();
     ++fileRead.current;
+    if (
+      effectiveCycle.cost_source !== "upstream_bill" &&
+      effectiveCycle.cost_source !== "manual_bill"
+    ) {
+      setCsv("");
+      setFileName("");
+      if (csvInput.current) csvInput.current.value = "";
+      setMode(committedMode);
+      setError("");
+      return;
+    }
     const token = requestVersion.current;
     setBusy(true);
     setError("");
@@ -205,7 +235,7 @@ export function BillImportPanel({
       setFileName("");
       if (csvInput.current) csvInput.current.value = "";
       setMode("proportional");
-      onDraftChange?.(false);
+      setCommittedMode("proportional");
       await onConfirmed();
     } catch (e) {
       if (token === requestVersion.current) setError((e as Error).message);
@@ -214,30 +244,46 @@ export function BillImportPanel({
     }
   }
   return (
-    <div className="bill-import">
-      <div className="bill-import-head">
-        <strong>单账号计费</strong>
-        <span>{effectiveCycle.name}</span>
-      </div>
+    <details
+      className="bill-import"
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary className="bill-import-summary">
+        <div>
+          <strong>上游账单（可选）</strong>
+          <span>
+            {effectiveCycle.name} ·{" "}
+            {effectiveCycle.cost_source === "upstream_bill"
+              ? "替换账单"
+              : "默认按本地消费分摊"}
+          </span>
+        </div>
+        <ChevronDown size={16} />
+      </summary>
       <p className="field-hint">
         本期总成本 {money(effectiveCycle.cost_fen)}
         ，可直接按本地原始消费占比分摊，无需上传账单或填写倍率。
       </p>
       <button
+        type="button"
         className="button"
-        disabled={busy || effectiveCycle.cost_kind === "estimated"}
+        disabled={
+          busy ||
+          effectiveCycle.cost_kind === "estimated" ||
+          (effectiveCycle.cost_source !== "upstream_bill" &&
+            effectiveCycle.cost_source !== "manual_bill" &&
+            !hasDraft)
+        }
         onClick={useLocalConsumption}
       >
         按本地消费比例分摊
       </button>
-      <div className="bill-import-head">
-        <strong>上游账单（可选）</strong>
-        <span>
-          {effectiveCycle.cost_source === "upstream_bill"
-            ? "替换账单"
-            : "独立账号"}
-        </span>
-      </div>
+      {!startConfirmed && (
+        <p className="field-hint warning-text">
+          请先确认周期起点后再匹配账单
+        </p>
+      )}
       <label>
         分摊方式
         <Select
@@ -245,10 +291,11 @@ export function BillImportPanel({
           disabled={busy}
           onChange={(e) => {
             const next = e.target.value as BillMode;
+            const hasSource =
+              !!csv.trim() || !!effectiveCycle.bill_import_id;
             setMode(next);
             invalidate();
-            if (csv.trim() || effectiveCycle.bill_import_id)
-              void inspect(!csv.trim(), next);
+            if (hasSource) void inspect(!csv.trim(), next);
           }}
         >
           <option value="proportional">比例分摊</option>
@@ -264,15 +311,17 @@ export function BillImportPanel({
           disabled={busy}
           onChange={async (e) => {
             const file = e.target.files?.[0];
-            if (!file) return;
+            const token = ++fileRead.current;
+            invalidate();
+            if (!file) {
+              setFileName("");
+              setCsv("");
+              return;
+            }
             if (file.size > 10 * 1024 * 1024) {
               setError("CSV 不能超过 10 MB");
               return;
             }
-            const token = ++fileRead.current;
-            invalidate();
-            setBusy(false);
-            setPreview(null);
             const content = await file.text();
             if (token !== fileRead.current) return;
             setFileName(file.name);
@@ -282,16 +331,18 @@ export function BillImportPanel({
       </label>
       <div className="start-actions">
         <button
+          type="button"
           className="button"
-          disabled={busy || !csv.trim() || !end}
+          disabled={busy || !startConfirmed || !csv.trim() || !end}
           onClick={() => inspect()}
         >
           {busy && !preview ? "匹配中…" : "账单预览"}
         </button>
         {!!effectiveCycle.bill_import_id && (
           <button
+            type="button"
             className="button"
-            disabled={busy}
+            disabled={busy || !startConfirmed}
             onClick={() => inspect(true)}
           >
             沿用已导入账单
@@ -352,7 +403,7 @@ export function BillImportPanel({
           )}
           {!!preview.outside_count && (
             <div>
-              <span>范围外</span>
+              <span>范围外（已自动排除）</span>
               <b>
                 {preview.outside_count} 条 ·{" "}
                 {billedMoney(preview.outside_amount)}
@@ -363,6 +414,7 @@ export function BillImportPanel({
             preview.outside_count > 0 ||
             (preview.local_unmatched?.length || 0) > 0) && (
             <button
+              type="button"
               className="text-button"
               disabled={busy}
               onClick={async () => {
@@ -385,38 +437,14 @@ export function BillImportPanel({
               导出未匹配明细
             </button>
           )}
-          {preview.difference_required && (
-            <label className="checkline">
-              <input
-                type="checkbox"
-                checked={acceptDifference}
-                onChange={(e) => setAcceptDifference(e.target.checked)}
-              />
-              确认本地差异，按已匹配扣费比例分摊
-            </label>
-          )}
-          {!!preview.outside_count && (
-            <label className="checkline">
-              <input
-                type="checkbox"
-                checked={acceptOutside}
-                onChange={(e) => setAcceptOutside(e.target.checked)}
-              />
-              确认不计入范围外记录
-            </label>
-          )}
           <BillAllocation cycle={effectiveCycle} preview={preview} />
           {!preview.can_confirm && (
             <FormError error="请确认起点、消费覆盖及正金额计费依据" />
           )}
           <button
+            type="button"
             className="button primary"
-            disabled={
-              busy ||
-              !preview.can_confirm ||
-              (preview.difference_required && !acceptDifference) ||
-              (!!preview.outside_count && !acceptOutside)
-            }
+            disabled={busy || !preview.can_confirm}
             onClick={confirm}
           >
             {busy
@@ -430,7 +458,7 @@ export function BillImportPanel({
         </div>
       )}
       {error && <div className="form-error">{error}</div>}
-    </div>
+    </details>
   );
 }
 
@@ -455,7 +483,21 @@ export function SettleForm({
   close: () => void;
   renewByDefault?: boolean;
 }) {
-  const [end, setEnd] = useState(() => inputDate());
+  const [end, setEnd] = useState(() => {
+    const confirmedEnds = new Set<string>();
+    for (const c of cycles) {
+      if (!c.vendor_period_id && c.bill_end) confirmedEnds.add(c.bill_end);
+    }
+    for (const p of vendorPeriods) {
+      if (p.members?.some((m) => ids.includes(m.id)) && p.bill_end) {
+        confirmedEnds.add(p.bill_end);
+      }
+    }
+    if (confirmedEnds.size === 1) {
+      return inputDate([...confirmedEnds][0]);
+    }
+    return inputDate();
+  });
   const [touched, setTouched] = useState(false);
   const [displayPreview, setDisplayPreview] = useState<Preview | null>(null);
   const [renew, setRenew] = useState<
@@ -493,7 +535,9 @@ export function SettleForm({
         setRenew(
           Object.fromEntries(
             next.cycles
-              .filter((c) => !c.cycle.account_deleted && !c.cycle.vendor_period_id)
+              .filter(
+                (c) => !c.cycle.account_deleted && !c.cycle.vendor_period_id,
+              )
               .map((c) => [
                 c.cycle.id,
                 {
@@ -575,6 +619,12 @@ export function SettleForm({
       calculation,
     ]),
   );
+  const unconfirmedStarts = (displayPreview?.cycles || []).filter(
+    (c) =>
+      !c.cycle.vendor_period_id &&
+      !c.start_confirmed &&
+      (c.start_mode === "date_estimate" || c.start_mode === "minute_estimate"),
+  );
   async function settle() {
     if (hasBillDraft) {
       setError("请先预览并确认已修改的计费依据");
@@ -584,7 +634,7 @@ export function SettleForm({
       !pendingSubmission.current &&
       deleteIds.some((id) => !deleteScopes[id])
     ) {
-      setError("请先核验并确认删除范围");
+      setError("请先核验删除范围");
       return;
     }
     if ((!preview || loading) && !pendingSubmission.current) return;
@@ -729,6 +779,17 @@ export function SettleForm({
           className="settlement-fields"
           disabled={busy || !!pendingSubmission.current}
         >
+          {unconfirmedStarts.map((c) => (
+            <div key={`start-${c.cycle.id}`}>
+              <strong>
+                {cycleMap.get(c.cycle.id)?.name || c.cycle.name} · 确认周期起点
+              </strong>
+              <StartConfirmation
+                calculation={c}
+                onConfirmed={() => inspect()}
+              />
+            </div>
+          ))}
           {groups.map((g) => (
             <div key={g.id}>
               <VendorBillPanel
@@ -744,7 +805,6 @@ export function SettleForm({
                     (c) => c.vendor_period_id === g.id && c.end,
                   )?.end || cutoff
                 }
-                previewKey={preview?.id || ""}
                 onConfirmed={() => inspect()}
               />
               <label className="checkline renewal">
@@ -827,7 +887,6 @@ export function SettleForm({
                   cycle={cycle}
                   calculation={calculations.get(cycle.id)}
                   end={cutoff}
-                  previewKey={preview?.id || ""}
                   onConfirmed={() => inspect()}
                 />
               ))}
@@ -844,15 +903,6 @@ export function SettleForm({
                   },
                 }}
               />
-              {!c.cycle.vendor_period_id &&
-                !c.start_confirmed &&
-                (c.start_mode === "date_estimate" ||
-                  c.start_mode === "minute_estimate") && (
-                  <StartConfirmation
-                    calculation={c}
-                    onConfirmed={() => inspect()}
-                  />
-                )}
               {c.start_warning && c.start_warning !== "周期起点未确认" && (
                 <div className="form-error">{c.start_warning}</div>
               )}

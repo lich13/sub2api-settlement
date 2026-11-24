@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   CircleAlert,
@@ -430,11 +430,13 @@ export function ExpenseForm({
   const initialCreditor = source?.creditor_id || catalog.users[0]?.id || 0;
   const initialMode: "equal" | "custom" = source?.allocation_mode || "equal";
   const initialMembers = Object.fromEntries(
-    (source?.members || []).map((m) => [
-      m.user_id,
-      m.percent ||
-        (m.weight !== undefined ? (Number(m.weight) / 100).toFixed(2) : ""),
-    ]),
+    source
+      ? (source.members || []).map((m) => [
+          m.user_id,
+          m.percent ||
+            (m.weight !== undefined ? (Number(m.weight) / 100).toFixed(2) : ""),
+        ])
+      : catalog.users.map((u) => [u.id, ""]),
   );
   const [name, setName] = useState(initialName);
   const [cost, setCost] = useState(initialCost);
@@ -579,7 +581,44 @@ export function ExpenseForm({
           </Select>
         </label>
         <fieldset className="member-picker">
-          <legend>参与人</legend>
+          <legend className="picker-head">
+            <span>参与人 · 已选 {selected.length}</span>
+            {!!availableUsers.length && (
+              <span className="picker-actions">
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy || selected.length === availableUsers.length}
+                  onClick={() =>
+                    setMembers(
+                      Object.fromEntries(
+                        availableUsers.map((u, i) => [
+                          u.id,
+                          mode === "custom"
+                            ? (
+                                (Math.floor(10000 / availableUsers.length) +
+                                  (i < 10000 % availableUsers.length ? 1 : 0)) /
+                                100
+                              ).toFixed(2)
+                            : "",
+                        ]),
+                      ),
+                    )
+                  }
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={busy || !selected.length}
+                  onClick={() => setMembers({})}
+                >
+                  清空
+                </button>
+              </span>
+            )}
+          </legend>
           <div className="member-list">
             {availableUsers.map((u) => {
               const checked = Object.prototype.hasOwnProperty.call(
@@ -801,13 +840,16 @@ export function AllocationRows({ allocations }: { allocations: Share[] }) {
 export function StartConfirmation({
   calculation,
   onConfirmed,
+  onStateChange,
 }: {
   calculation: Calculation;
   onConfirmed: () => Promise<void>;
+  onStateChange?: (state: { busy: boolean; dirty: boolean }) => void;
 }) {
-  const [value, setValue] = useState(
-    inputDate(calculation.start_lower || calculation.cycle.start),
+  const initialValue = inputDate(
+    calculation.start_lower || calculation.cycle.start,
   );
+  const [value, setValue] = useState(initialValue);
   const [candidate, setCandidate] = useState<{
     version: number;
     anchor: string;
@@ -818,6 +860,14 @@ export function StartConfirmation({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const dirty =
+    value !== initialValue || method !== "provided_time" || candidate !== null;
+  const stateCallback = useRef(onStateChange);
+  stateCallback.current = onStateChange;
+  useEffect(() => {
+    stateCallback.current?.({ busy, dirty });
+  }, [busy, dirty]);
+  useEffect(() => () => stateCallback.current?.({ busy: false, dirty: false }), []);
   async function findCandidate() {
     setBusy(true);
     setError("");

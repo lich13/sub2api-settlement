@@ -284,10 +284,12 @@ async function click(button: HTMLButtonElement) {
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (!setter) throw new Error("input value setter is unavailable");
-  setter.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("input value setter is unavailable");
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function inputForLabel(labelText: string) {
@@ -334,7 +336,10 @@ async function removeAccount(setup: ReturnType<typeof setupFetch>) {
     await Promise.resolve();
   });
   expect(setup.stateCalls()).toBe(2);
-  setup.nextState.resolve(response(stateSnapshot([{ id: 2, name: "Active account" }], "2026-10-02T00:00:00.000Z")));
+  await act(async () => {
+    setup.nextState.resolve(response(stateSnapshot([{ id: 2, name: "Active account" }], "2026-10-02T00:00:00.000Z")));
+    await Promise.resolve();
+  });
   await flush();
 }
 
@@ -610,5 +615,59 @@ describe("App account visibility", () => {
       .map(node => node.textContent?.trim())
       .filter(Boolean);
     expect(directText).not.toContain("0");
+  });
+
+  it("supports header select-all, batch settle-and-renew, filter selection retention, and default-selected expense participants", async () => {
+    const accounts = rosterAccounts();
+    setupFetch({
+      initialState: stateSnapshot(namesFor(accounts)),
+      initialOverview: overviewFor(accounts),
+      initialCatalog: {
+        ...catalogFor(accounts),
+        users: [
+          { id: 9, name: "Admin" },
+          { id: 10, name: "Member Two" },
+        ],
+      },
+    });
+    await renderApp();
+    await flush();
+
+    const selectAll = host!.querySelector<HTMLInputElement>(
+      'input[aria-label="全选当前可结算项"]',
+    )!;
+    expect(selectAll.checked).toBe(false);
+    await act(async () => {
+      selectAll.click();
+    });
+    expect(selectAll.checked).toBe(true);
+    expect(host!.textContent).toContain("批量结算 (2)");
+    expect(host!.textContent).toContain("批量结算并续费 (2)");
+
+    const filterSelect = host!.querySelector<HTMLSelectElement>(
+      'select[aria-label="状态筛选"]',
+    )!;
+    await act(async () => {
+      filterSelect.value = "open";
+      filterSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host!.textContent).toContain("批量结算并续费 (2)");
+
+    await click(topButton("清空"));
+    expect(host!.textContent).not.toContain("批量结算 (");
+
+    await click(topButton("固定费用"));
+    await click(topButton("新增固定费用"));
+    const dialog = host!.querySelector<HTMLDialogElement>("dialog[open]")!;
+    const participantChecks = Array.from(
+      dialog.querySelectorAll<HTMLInputElement>(".member-list input[type=checkbox]"),
+    );
+    expect(participantChecks).toHaveLength(2);
+    expect(participantChecks.every((c) => c.checked)).toBe(true);
+
+    await click(buttonIn(dialog, "清空"));
+    expect(participantChecks.every((c) => !c.checked)).toBe(true);
+    await click(buttonIn(dialog, "全选"));
+    expect(participantChecks.every((c) => c.checked)).toBe(true);
   });
 });

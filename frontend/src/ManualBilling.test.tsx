@@ -80,17 +80,21 @@ function checkbox(text: string) {
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (!setter) throw new Error("input value setter is unavailable");
-  setter.call(input, value);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setter) throw new Error("input value setter is unavailable");
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 
 function setSelectValue(select: HTMLSelectElement, value: string) {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-  if (!setter) throw new Error("select value setter is unavailable");
-  setter.call(select, value);
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
+    if (!setter) throw new Error("select value setter is unavailable");
+    setter.call(select, value);
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 
 function setFile(input: HTMLInputElement, name: string, text: string) {
@@ -392,7 +396,6 @@ describe("manual billing for a vendor group", () => {
       period={vendorPeriod()}
       cycles={[alpha, beta]}
       end="2026-10-01T00:00:00Z"
-      previewKey="stable"
       onConfirmed={vi.fn(async () => {})}
     />);
     setSelectValue(selectForLabel("账单来源"), "local_only");
@@ -411,7 +414,7 @@ describe("manual billing for a vendor group", () => {
     expect(body).not.toHaveProperty("file_name");
   });
 
-  it("invalidates an old confirmation when a rate, source, or ambiguity selection changes", async () => {
+  it("invalidates an old confirmation when a rate, source, or ambiguity selection changes, and supports select-all/clear", async () => {
     let billCalls = 0;
     const fetcher = vi.fn<typeof fetch>(async input => {
       if (String(input).endsWith("/bill-previews")) {
@@ -420,7 +423,10 @@ describe("manual billing for a vendor group", () => {
           id: `manual-preview-${billCalls}`,
           manual_basis: { source: "local_only", rates: [{ account_id: 101, rate: billCalls === 1 ? "1" : "2" }], ambiguous_usage_ids: [] },
           manual_summary: { source: "local_only", amount: `${billCalls}.00`, accounts: [] },
-          local_unmatched: [{ usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous", included: false }],
+          local_unmatched: [
+            { usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous", included: false },
+            { usage_id: 9002, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:01Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous", included: false },
+          ],
         }));
       }
       if (String(input).endsWith("/bill-confirm")) return response({});
@@ -432,7 +438,6 @@ describe("manual billing for a vendor group", () => {
       period={vendorPeriod()}
       cycles={[alpha]}
       end="2026-10-01T00:00:00Z"
-      previewKey="stable"
       onConfirmed={vi.fn(async () => {})}
     />);
     setSelectValue(selectForLabel("账单来源"), "local_only");
@@ -449,32 +454,27 @@ describe("manual billing for a vendor group", () => {
 
     setSelectValue(selectForLabel("账单来源"), "local_only");
     await click(button("账单预览"));
-    const ambiguous = host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]');
-    if (!ambiguous) throw new Error("ambiguous request checkbox not rendered");
-    await act(async () => {
-      ambiguous.click();
-      await Promise.resolve();
-    });
+    await click(button("全选"));
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(true);
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
     expect(optionalButton("确认分摊依据")).toBeUndefined();
+    await click(button("清空"));
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(false);
     expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-confirm"))).toHaveLength(0);
   });
 
-  it("keeps an unsubmitted source, rate, and CSV draft through an ordinary refresh", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => response({}));
+  it("activates upstream supplement directly from rate input without a separate toggle checkbox and keeps drafts across refresh", async () => {
+    const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith("/bill-previews") ? response(vendorPreview()) : response({}));
     vi.stubGlobal("fetch", fetcher);
     const props = {
       period: vendorPeriod(),
       cycles: [alpha],
       end: "2026-10-01T00:00:00Z",
-      previewKey: "stable",
       onConfirmed: vi.fn(async () => {}),
     };
 
     await render(<VendorBillPanel {...props} />);
-    await act(async () => {
-      checkbox("缺失请求补计").click();
-      await Promise.resolve();
-    });
+    expect(host!.textContent).not.toContain("缺失请求补计");
     setInputValue(rateInput("Alpha"), "1.75");
     const fileInput = host!.querySelector<HTMLInputElement>(".vendor-bill input[type=file]");
     if (!fileInput) throw new Error("vendor CSV input not found");
@@ -487,30 +487,32 @@ describe("manual billing for a vendor group", () => {
     });
 
     await render(<VendorBillPanel {...props} cycles={[...props.cycles]} period={{ ...props.period }} />);
-    expect(checkbox("缺失请求补计").checked).toBe(true);
     expect(rateInput("Alpha").value).toBe("1.75");
     expect(host!.querySelector<HTMLInputElement>(".vendor-bill input[type=file]")?.files?.[0]?.name).toBe("draft.csv");
+    await click(button("账单预览"));
+    const billCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
+    expect(JSON.parse(String(billCall?.[1]?.body)).manual_basis).toEqual({
+      source: "upstream",
+      rates: [{ account_id: 101, rate: "1.75" }],
+      ambiguous_usage_ids: [],
+    });
   });
 
-  it("preserves confirmed ambiguity choices on reopen and an automatic preview refresh", async () => {
+  it("preserves confirmed ambiguity choices on reopen and only resets them when the cutoff window changes", async () => {
     const fetcher = vi.fn<typeof fetch>(async input => String(input).endsWith("/bill-previews") ? response(vendorPreview()) : response({}));
     vi.stubGlobal("fetch", fetcher);
     const props = {
       period: vendorPeriod({ bill_import_id: 4, manual_basis: { source: "upstream", rates: [{ account_id: 101, rate: "0.5" }], ambiguous_usage_ids: [9001] } }),
-      cycles: [alpha], end: "2026-10-01T00:00:00Z", previewKey: "first", onConfirmed: vi.fn(async () => {}),
+      cycles: [alpha], end: "2026-10-01T00:00:00Z", onConfirmed: vi.fn(async () => {}),
     };
     await render(<VendorBillPanel {...props} />);
     await click(button("沿用已导入账单"));
     let calls = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"));
     expect(JSON.parse(String(calls[0][1]?.body)).manual_basis.ambiguous_usage_ids).toEqual([9001]);
-    await render(<VendorBillPanel {...props} previewKey="refreshed" />);
+    await render(<VendorBillPanel {...props} end="2026-10-02T00:00:00Z" />);
     await click(button("沿用已导入账单"));
     calls = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"));
-    expect(JSON.parse(String(calls[1][1]?.body)).manual_basis.ambiguous_usage_ids).toEqual([9001]);
-    await render(<VendorBillPanel {...props} end="2026-10-02T00:00:00Z" previewKey="new-window" />);
-    await click(button("沿用已导入账单"));
-    calls = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"));
-    expect(JSON.parse(String(calls[2][1]?.body)).manual_basis.ambiguous_usage_ids).toEqual([]);
+    expect(JSON.parse(String(calls[1][1]?.body)).manual_basis.ambiguous_usage_ids).toEqual([]);
   });
 
   it("ignores stale preview errors and results after a newer manual request", async () => {
@@ -532,7 +534,6 @@ describe("manual billing for a vendor group", () => {
       period={vendorPeriod()}
       cycles={[alpha]}
       end="2026-10-01T00:00:00Z"
-      previewKey="stable"
       onConfirmed={vi.fn(async () => {})}
     />);
     setSelectValue(selectForLabel("账单来源"), "local_only");
@@ -561,5 +562,47 @@ describe("manual billing for a vendor group", () => {
     await click(button("账单预览"));
     expect(host!.textContent).toContain("¥2.00");
     expect(host!.textContent).not.toContain("stale fixture failure");
+  });
+
+  it("drops checked ambiguous requests for an account when its supplement rate is cleared", async () => {
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      if (String(input).endsWith("/bill-previews")) {
+        return response(vendorPreview({
+          local_unmatched: [
+            { usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "0.5", amount: "0.50", reason: "ambiguous", included: false },
+            { usage_id: 9002, account_id: 102, user_id: 1, created_at: "2026-09-20T00:00:01Z", model: "fixture-model", local_amount: "1.00", rate: "0.2", amount: "0.20", reason: "ambiguous", included: false },
+          ],
+        }));
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<VendorBillPanel
+      period={vendorPeriod()}
+      cycles={[alpha, beta]}
+      end="2026-10-01T00:00:00Z"
+      onConfirmed={vi.fn(async () => {})}
+    />);
+    setSelectValue(selectForLabel("账单来源"), "local_only");
+    setInputValue(rateInput("Alpha"), "0.5");
+    setInputValue(rateInput("Beta"), "0.2");
+    await click(button("账单预览"));
+    await click(button("全选"));
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(true);
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
+
+    setInputValue(rateInput("Alpha"), "");
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(false);
+    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
+
+    await click(button("账单预览"));
+    const calls = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"));
+    const lastBody = JSON.parse(String(calls[calls.length - 1][1]?.body));
+    expect(lastBody.manual_basis).toEqual({
+      source: "local_only",
+      rates: [{ account_id: 102, rate: "0.2" }],
+      ambiguous_usage_ids: [9002],
+    });
   });
 });

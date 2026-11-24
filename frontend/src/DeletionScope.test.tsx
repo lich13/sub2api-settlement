@@ -36,7 +36,7 @@ function response(data: unknown): Response {
 }
 
 describe("DeletionScope", () => {
-  it("shows the verified root and shadow accounts and reports only explicit confirmation", async () => {
+  it("shows verified root and shadow accounts inline and binds the scope digest without an inner checkbox", async () => {
     const scope: DeletionScopeValue = {
       account_id: 100,
       digest: "a".repeat(64),
@@ -49,10 +49,15 @@ describe("DeletionScope", () => {
     const updatedScope: DeletionScopeValue = {
       ...scope,
       digest: "b".repeat(64),
-      targets: [...scope.targets, { id: 103, name: "新增子账号 Delta", shadow: true }],
+      targets: [
+        ...scope.targets,
+        { id: 103, name: "新增子账号 Delta", shadow: true },
+      ],
     };
     let calls = 0;
-    const fetcher = vi.fn<typeof fetch>(async () => response(calls++ === 0 ? scope : updatedScope));
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      response(calls++ === 0 ? scope : updatedScope),
+    );
     vi.stubGlobal("fetch", fetcher);
     const onConfirmed = vi.fn();
 
@@ -67,31 +72,12 @@ describe("DeletionScope", () => {
     expect(host!.textContent).toContain("子账号 Gamma");
     expect(host!.textContent).toContain("母账号");
     expect(host!.textContent).toContain("影子账号");
-
-    const checkbox = host!.querySelector<HTMLInputElement>("input[type=checkbox]");
-    expect(checkbox).toBeDefined();
-    expect(checkbox!.checked).toBe(false);
-    expect(onConfirmed).not.toHaveBeenCalledWith(scope);
-
-    await act(async () => {
-      checkbox!.click();
-      await Promise.resolve();
-    });
+    expect(host!.querySelector("input[type=checkbox]")).toBeNull();
     expect(onConfirmed).toHaveBeenLastCalledWith(scope);
 
-    await act(async () => {
-      checkbox!.click();
-      await Promise.resolve();
-    });
-    expect(onConfirmed).toHaveBeenLastCalledWith(null);
-
-    await act(async () => {
-      checkbox!.click();
-      await Promise.resolve();
-    });
-    expect(onConfirmed).toHaveBeenLastCalledWith(scope);
-    const recheck = Array.from(host!.querySelectorAll("button"))
-      .find(button => button.textContent?.trim() === "重新核验范围");
+    const recheck = Array.from(host!.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "重新核验范围",
+    );
     expect(recheck).toBeDefined();
     await act(async () => {
       recheck!.click();
@@ -101,13 +87,6 @@ describe("DeletionScope", () => {
     });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(host!.textContent).toContain("新增子账号 Delta");
-    expect(checkbox!.checked).toBe(false);
-    expect(onConfirmed).toHaveBeenLastCalledWith(null);
-
-    await act(async () => {
-      checkbox!.click();
-      await Promise.resolve();
-    });
     expect(onConfirmed).toHaveBeenLastCalledWith(updatedScope);
   });
 });

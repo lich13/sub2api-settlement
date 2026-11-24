@@ -487,36 +487,13 @@ async fn vendor_bill_difference_requires_explicit_confirmation_and_keeps_c_sourc
         )
         .await
         .expect("prepare difference bill");
-    let confirm_payload = json!({
-        "preview_id":preview["id"],
-        "version":period["version"],
-        "accept_difference":false,
-        "accept_outside":false
-    });
-    assert_error(
-        mutate_with_prepared(
-            &harness,
-            "vendor-difference-reject",
-            &format!("vendor-bill-confirm:{}", period["id"].as_i64().unwrap()),
-            &confirm_payload,
-            Prepared {
-                vendor_bill: Some(prepared.clone()),
-                ..Prepared::default()
-            },
-        )
-        .await,
-        422,
-        "请确认账单总额",
-    );
     let accepted = mutate_with_prepared(
         &harness,
         "vendor-difference-accept",
         &format!("vendor-bill-confirm:{}", period["id"].as_i64().unwrap()),
         &json!({
             "preview_id":preview["id"],
-            "version":period["version"],
-            "accept_difference":true,
-            "accept_outside":false
+            "version":period["version"]
         }),
         Prepared {
             vendor_bill: Some(prepared),
@@ -524,7 +501,7 @@ async fn vendor_bill_difference_requires_explicit_confirmation_and_keeps_c_sourc
         },
     )
     .await
-    .expect("accept difference bill");
+    .expect("accept difference bill in one step");
     assert_eq!(accepted["id"], period["id"]);
     let saved_period = vendor_period_row(&harness, period["id"].as_i64().unwrap()).await;
     assert_eq!(saved_period["bill_difference_confirmed"], 1);

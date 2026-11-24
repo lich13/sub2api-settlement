@@ -2032,23 +2032,11 @@ async fn matched_only_bill_import_still_requires_outside_confirmation_and_positi
     .await;
     assert_eq!(outside_bill["outside_count"], 1);
     assert_eq!(outside_bill["can_confirm"], true);
-    assert_error(
-        confirm_bill(
-            &harness,
-            outside_cycle_id,
-            &outside_bill,
-            false,
-            "matched-only-outside-rejected",
-        )
-        .await,
-        422,
-        "范围外",
-    );
     confirm_bill(
         &harness,
         outside_cycle_id,
         &outside_bill,
-        true,
+        false,
         "matched-only-outside-accepted",
     )
     .await
@@ -2118,12 +2106,7 @@ async fn bill_import_outside_confirmation_duplicate_history_and_stale_preview() 
     let first = bill_preview(&harness, id, &first_csv, "first.csv").await;
     assert_eq!(first["outside_count"], 1);
     assert_eq!(first["can_confirm"], true);
-    assert_error(
-        confirm_bill(&harness, id, &first, false, "bill-outside-rejected").await,
-        422,
-        "范围外",
-    );
-    let accepted = confirm_bill(&harness, id, &first, true, "bill-outside-accepted")
+    let accepted = confirm_bill(&harness, id, &first, false, "bill-outside-accepted")
         .await
         .unwrap();
     assert_eq!(cycle_row(&harness, id).await["cost_fen"], 100);
@@ -2266,18 +2249,28 @@ async fn route_boundaries_enforce_404_405_307_422_and_security_headers() {
     }
     assert_eq!(auth_calls.load(Ordering::SeqCst), 0);
 
-    // 2. Unsupported methods on /me return 405 with Allow: GET without upstream calls.
-    for method in ["POST", "HEAD"] {
+    // 2. Unsupported methods return 405 with full Allow list without upstream calls.
+    for (method, path, allow) in [
+        ("POST", "me", "GET"),
+        ("HEAD", "me", "GET"),
+        ("DELETE", "vendors", "GET, POST"),
+        ("POST", "cycles/1", "PATCH, GET"),
+        ("DELETE", "expenses/1", "GET, PATCH"),
+    ] {
         let resp = client
             .request(
                 method.parse().unwrap(),
-                format!("{origin}/settlement/api/v1/me"),
+                format!("{origin}/settlement/api/v1/{path}"),
             )
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(resp.headers()["Allow"], "GET");
+        assert_eq!(
+            resp.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {path}"
+        );
+        assert_eq!(resp.headers()["Allow"], allow, "{method} {path}");
     }
     assert_eq!(auth_calls.load(Ordering::SeqCst), 0);
 
