@@ -138,16 +138,6 @@ impl Service {
         vendor: &Value,
         data: &Value,
     ) -> Result<Value> {
-        if optional(
-            db,
-            "SELECT id FROM vendor_periods WHERE vendor_id=?",
-            &[vendor["id"].clone()],
-        )
-        .await?
-        .is_some()
-        {
-            return Err(Error::conflict("账号组已有账期，请使用整组续费入口"));
-        }
         let start = self.resolve_start(db, data).await?;
         let pid=exec(db,"INSERT INTO vendor_periods(vendor_id,name,cost_fen,creditor_id,start,start_mode,start_upper,start_confirmed,created_at) VALUES(?,?,?,?,?,?,?,?,?)",&[vendor["id"].clone(),vendor["name"].clone(),json!(cents(text(data,"cost"))?),data["creditor_id"].clone(),start["start"].clone(),start["start_mode"].clone(),start["start_upper"].clone(),start["start_confirmed"].clone(),json!(time::now())]).await?.last_insert_rowid();
         let p = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(pid)]).await?;
@@ -167,16 +157,6 @@ impl Service {
         let v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
         if v["version"] != data["version"] || !v["archived_at"].is_null() {
             return Err(Error::conflict("账号组已变化，请刷新"));
-        }
-        if optional(
-            db,
-            "SELECT id FROM vendor_periods WHERE vendor_id=?",
-            &[json!(id)],
-        )
-        .await?
-        .is_none()
-        {
-            return Err(Error::conflict("请先配置账号组首期，再追加账号"));
         }
         let p = optional(
             db,

@@ -53,7 +53,6 @@ const balance = (overrides: Partial<NetBalance> = {}): NetBalance => ({
 const payment = (overrides: Partial<NetPayment> = {}): NetPayment => ({
   ...balance(),
   id: 42,
-  actor_id: 1,
   created_at: "2026-10-01T00:30:00Z",
   ...overrides,
 });

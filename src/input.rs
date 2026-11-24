@@ -50,9 +50,6 @@ fn positive(v: &mut Value, k: &str) -> Result<()> {
     Ok(())
 }
 fn choice(v: &Value, k: &str, values: &[&str], nullable: bool) -> Result<()> {
-    if values.is_empty() {
-        return Err(Error::unavailable());
-    }
     if nullable && v[k].is_null() {
         return Ok(());
     }
@@ -242,7 +239,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         ),
         "start-confirm" => (
             &["version", "start", "method", "source_usage_id"],
-            json!({"method":"legacy","source_usage_id":null}),
+            json!({"source_usage_id":null}),
         ),
         "free" => (&["name", "version"], json!({"version":null})),
         "upgrade-paid" => (
@@ -299,15 +296,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             ],
             json!({"csv":null,"file_name":"usage.csv","import_id":null,"allocation_mode":null}),
         ),
-        "bill-confirm" => (
-            &[
-                "version",
-                "preview_id",
-                "accept_difference",
-                "accept_outside",
-            ],
-            json!({"accept_difference":false,"accept_outside":false}),
-        ),
+        "bill-confirm" => (&["version", "preview_id"], json!({})),
         "settle" => (
             &[
                 "preview_id",
@@ -409,12 +398,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
         )?;
     }
     if fields.contains(&"method") {
-        choice(
-            &v,
-            "method",
-            &["legacy", "provided_time", "first_usage_after"],
-            false,
-        )?;
+        choice(&v, "method", &["provided_time", "first_usage_after"], false)?;
     }
     for k in ["start", "end"] {
         if fields.contains(&k) && !v[k].is_null() {
@@ -466,13 +450,6 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             string(&v, "file_name", 0, 200)?;
             if !v["csv"].is_null() {
                 string(&v, "csv", 0, 10 * 1024 * 1024)?;
-            }
-        }
-        "bill-confirm" => {
-            for k in ["accept_difference", "accept_outside"] {
-                if !v[k].is_boolean() {
-                    return Err(Error::invalid("确认项无效"));
-                }
             }
         }
         "settle" => {
@@ -617,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_objects_and_empty_choice_definitions_return_errors() {
+    fn malformed_objects_return_errors() {
         for value in [Value::Null, json!([]), json!(42), json!("object")] {
             let error = normalize("create", value).unwrap_err();
             assert_eq!(error.status, 422);
@@ -633,7 +610,6 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.status, 422);
         assert_eq!(error.message, "请求必须是对象");
-        assert!(choice(&json!({"state": "x"}), "state", &[], false).is_err());
     }
 
     #[test]

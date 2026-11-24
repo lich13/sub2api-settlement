@@ -111,7 +111,6 @@ export function ManualBillingEditor({
   changed,
   onResetAmbiguous,
   disabled = false,
-  proportional = true,
 }: {
   manual: ReturnType<typeof useManualBilling>;
   accounts: { account_id: number; name: string }[];
@@ -120,7 +119,6 @@ export function ManualBillingEditor({
   changed: () => void;
   onResetAmbiguous?: () => void;
   disabled?: boolean;
-  proportional?: boolean;
 }) {
   const [limit, setLimit] = useState(50);
   const selectableIds = ambiguous
@@ -228,11 +226,9 @@ export function ManualBillingEditor({
               </button>
             </div>
           </div>
-          {proportional && (
-            <p className="field-hint">
-              歧义费用可能已包含在上游总额中，勾选前请核对，系统不能自动去重。
-            </p>
-          )}
+          <p className="field-hint">
+            歧义费用可能已包含在上游总额中，勾选前请核对，系统不能自动去重。
+          </p>
           {ambiguous.slice(0, limit).map((r) => (
             <label className="checkline manual-request" key={r.usage_id}>
               <input

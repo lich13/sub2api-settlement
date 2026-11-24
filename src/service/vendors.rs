@@ -127,24 +127,12 @@ impl Service {
             }
             v["current_members"] =
                 json!(Self::current_vendor_members(&mut db, int(v, "id")).await?);
-            v["current_period"] = periods
-                .iter()
-                .find(|p| p["status"] == "open" && p["end"].is_null())
-                .cloned()
-                .unwrap_or(Value::Null);
-            v["waiting_renewal"] = json!(
-                v["current_period"].is_null()
-                    && periods.first().is_some_and(|p| p["status"] == "settled")
-            );
             v["periods"] = json!(periods);
         }
         Ok(json!({"vendors":vendors,"account_revision":state["revision"]}))
     }
     pub async fn save_vendor(&self, db: &mut Db, actor: &Value, data: &Value) -> Result<Value> {
         admin(actor)?;
-        if data.get("account_ids").is_none() {
-            return Err(Error::invalid("请选择待配置账号"));
-        }
         one(
             db,
             "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",

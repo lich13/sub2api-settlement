@@ -392,11 +392,9 @@ describe("SettleForm preview integration", () => {
         local_unmatched_count: 0,
         record_count: 1,
         file_name: "draft.csv",
-        file_hash: "fixture-hash",
         end: "2026-10-01T00:00:00Z",
         version: 1,
         allocations: [],
-        difference_required: false,
         can_confirm: true,
       });
       return response({});
@@ -505,11 +503,9 @@ describe("SettleForm preview integration", () => {
           local_unmatched_count: 0,
           record_count: 2,
           file_name: "usage.csv",
-          file_hash: "fixture-hash",
           end: "2026-10-01T00:00:00Z",
           version: 1,
           allocations: [],
-          difference_required: false,
           can_confirm: true,
         });
       }
@@ -561,11 +557,9 @@ describe("SettleForm preview integration", () => {
             local_unmatched_count: 0,
             record_count: 3,
             file_name: "usage.csv",
-            file_hash: "fixture-hash",
             end: "2026-10-01T00:00:00Z",
             version: 1,
             allocations: [],
-            difference_required: true,
             can_confirm: true,
           });
         }
@@ -618,11 +612,9 @@ describe("SettleForm preview integration", () => {
         local_unmatched_count: 0,
         record_count: 3,
         file_name: "usage.csv",
-        file_hash: "fixture-hash",
         end: "2026-10-01T00:00:00Z",
         version: 1,
         allocations: [],
-        difference_required: false,
         can_confirm: true,
       }));
       await Promise.resolve();
@@ -741,8 +733,8 @@ describe("SettleForm preview integration", () => {
     const memberB = groupCycle(12, 102, { name: "Group B Member", vendor_id: 10, vendor_period_id: 56, start_confirmed: true });
     let startAConfirmed = false;
     let groupBConfirmed = false;
-    const periodA = () => groupPeriod([memberA], { id: 55, vendor_id: 9, name: "Group A", start_confirmed: startAConfirmed, version: startAConfirmed ? 2 : 1, bill_import_id: 88, pending_bill: false });
-    const periodB = () => groupPeriod([memberB], { id: 56, vendor_id: 10, name: "Group B", start_confirmed: true, version: groupBConfirmed ? 2 : 1, pending_bill: !groupBConfirmed });
+    const periodA = () => groupPeriod([memberA], { id: 55, vendor_id: 9, name: "Group A", start_confirmed: startAConfirmed, version: startAConfirmed ? 2 : 1, bill_import_id: 88 });
+    const periodB = () => groupPeriod([memberB], { id: 56, vendor_id: 10, name: "Group B", start_confirmed: true, version: groupBConfirmed ? 2 : 1 });
 
     const fetcher = vi.fn<typeof fetch>(async input => {
       const path = String(input);
@@ -777,11 +769,9 @@ describe("SettleForm preview integration", () => {
           local_unmatched_count: 0,
           record_count: 1,
           file_name: "b.csv",
-          file_hash: "hash-b",
           end: "2026-10-01T00:00:00Z",
           version: 1,
           allocations: [],
-          difference_required: false,
           can_confirm: true,
           accounts: [{ account_id: 102, cycle_id: 12, name: "Group B Member", amount_fen: 12_345, total_consumption: "1.00", allocations: [] }],
           basis: "matched_upstream",
@@ -807,11 +797,9 @@ describe("SettleForm preview integration", () => {
           local_unmatched_count: 0,
           record_count: 1,
           file_name: "a.csv",
-          file_hash: "hash-a",
           end: "2026-10-01T00:00:00Z",
           version: 2,
           allocations: [],
-          difference_required: false,
           can_confirm: true,
           accounts: [{ account_id: 101, cycle_id: 11, name: "Group A Member", amount_fen: 12_345, total_consumption: "1.00", allocations: [] }],
           basis: "matched_upstream",

@@ -177,7 +177,7 @@ impl std::fmt::Display for Decimal {
         }
     }
 }
-pub const AMOUNT_PATTERN: &str = r"^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$";
+const AMOUNT_PATTERN: &str = r"^(?:0|[1-9][0-9]{0,9})(?:\.[0-9]{1,2})?$";
 pub fn valid_amount(s: &str) -> bool {
     static RE: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(AMOUNT_PATTERN).expect("fixed amount regex"));

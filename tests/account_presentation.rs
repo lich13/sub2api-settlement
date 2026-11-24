@@ -317,8 +317,6 @@ async fn confirm_matched_only_bill(harness: &Harness, cycle_id: i64) {
     let payload = json!({
         "version":cycle["version"],
         "preview_id":bill["id"],
-        "accept_difference":false,
-        "accept_outside":false
     });
     let (prepared_bill, revision) = harness
         .app

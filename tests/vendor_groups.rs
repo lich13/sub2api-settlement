@@ -124,8 +124,6 @@ async fn confirm_vendor_bill(harness: &Harness, period: &Value) {
             &json!({
                 "preview_id":preview["id"],
                 "version":period["version"],
-                "accept_difference":false,
-                "accept_outside":false
             }),
             Prepared {
                 vendor_bill: Some(prepared),
@@ -565,8 +563,6 @@ async fn add_vendor_members_is_versioned_and_persists_current_membership() {
         .find(|v| v["id"] == vendor["id"])
         .cloned()
         .unwrap();
-    assert_eq!(group_view["current_period"]["id"], period["id"]);
-    assert!(!group_view["waiting_renewal"].as_bool().unwrap());
     assert_eq!(group_view["current_members"].as_array().unwrap().len(), 3);
 
     assert_error(
@@ -679,8 +675,6 @@ async fn settlement_keeps_vendor_membership_and_renews_as_one_group() {
         .find(|v| v["id"] == vendor["id"])
         .cloned()
         .unwrap();
-    assert!(vendor_view["current_period"].is_null());
-    assert!(vendor_view["waiting_renewal"].as_bool().unwrap());
     assert_eq!(vendor_view["current_members"].as_array().unwrap().len(), 2);
     let renewed = mutate(
         &harness,
@@ -700,15 +694,6 @@ async fn settlement_keeps_vendor_membership_and_renews_as_one_group() {
     assert_eq!(next["renewed_from_period_id"], period["id"]);
     assert_eq!(next["status"], "open");
     assert_eq!(next["start"], END.replace('+', ".000000+"));
-    let renewed_view = harness.app.service.vendors(&admin()).await.unwrap()["vendors"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|v| v["id"] == vendor["id"])
-        .cloned()
-        .unwrap();
-    assert_eq!(renewed_view["current_period"]["id"], next["id"]);
-    assert!(!renewed_view["waiting_renewal"].as_bool().unwrap());
     let current_cycles = harness
         .rows("cycles")
         .await

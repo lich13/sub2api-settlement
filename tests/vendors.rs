@@ -141,12 +141,7 @@ fn bill_csv() -> String {
     .to_owned()
 }
 
-async fn confirm_vendor_bill(
-    harness: &Harness,
-    period: &Value,
-    csv: String,
-    accept_difference: bool,
-) -> Result<Value> {
+async fn confirm_vendor_bill(harness: &Harness, period: &Value, csv: String) -> Result<Value> {
     let preview = harness
         .app
         .service
@@ -178,8 +173,6 @@ async fn confirm_vendor_bill(
         &json!({
             "preview_id":preview["id"],
             "version":period["version"],
-            "accept_difference":accept_difference,
-            "accept_outside":false
         }),
         Prepared {
             vendor_bill: Some(prepared),
@@ -411,7 +404,7 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
             &harness,
             "vendor-bound-start",
             &format!("start-confirm:{first}"),
-            &json!({"version":first_row["version"],"start":START,"method":"legacy","source_usage_id":null}),
+            &json!({"version":first_row["version"],"start":START,"method":"provided_time","source_usage_id":null}),
         )
         .await,
         409,
@@ -439,7 +432,7 @@ async fn vendor_group_blocks_old_account_paths_and_redacts_bill_allocation() {
         409,
         "必须包含全部成员",
     );
-    confirm_vendor_bill(&harness, &period, bill_csv(), false)
+    confirm_vendor_bill(&harness, &period, bill_csv())
         .await
         .expect("confirm vendor bill");
     let detail = harness
@@ -560,7 +553,7 @@ async fn vendor_group_settles_as_one_renews_and_voids_only_as_a_group() {
     let period = period_from_vendor(&vendor);
     let first = cycle_for_account(&harness, 100).await;
     let second = cycle_for_account(&harness, 200).await;
-    confirm_vendor_bill(&harness, &period, bill_csv(), false)
+    confirm_vendor_bill(&harness, &period, bill_csv())
         .await
         .expect("confirm settlement bill");
     let current = vendor_period_row(&harness, period["id"].as_i64().unwrap()).await;
@@ -624,7 +617,7 @@ async fn vendor_group_payment_blocks_group_void() {
     let period = period_from_vendor(&vendor);
     let first = cycle_for_account(&harness, 100).await;
     let second = cycle_for_account(&harness, 200).await;
-    confirm_vendor_bill(&harness, &period, bill_csv(), false)
+    confirm_vendor_bill(&harness, &period, bill_csv())
         .await
         .expect("confirm paid vendor bill");
     settle_group(

@@ -13,7 +13,7 @@ export function expandVendorSelection(ids:number[], periods:VendorPeriod[]) {
 }
 export type GroupAction = "create" | "edit" | "add" | "renew";
 export function currentPeriod(v: Vendor) { return v.periods.find(p=>p.status==="open" && !p.end) || v.periods.find(p=>p.status==="open"); }
-export function groupCandidates(accounts: Account[]) { return accounts.filter(a=>a.kind==="unconfigured" && !a.deleted && !a.vendor_id && a.cycle?.status!=="open"); }
+function groupCandidates(accounts: Account[]) { return accounts.filter(a=>a.kind==="unconfigured" && !a.deleted && !a.vendor_id && a.cycle?.status!=="open"); }
 
 export function VendorGroups({vendors,accounts,admin,query,filter,onSettle,onManage,onDetail,totals,selected=[],onToggle}:{vendors:Vendor[];accounts:Account[];admin:boolean;query:string;filter:string;onSettle:(ids:number[],renew:boolean)=>void;onManage:(id:number,action?:Exclude<GroupAction,"create">)=>void;onDetail:(id:number)=>void;totals?:Overview["vendor_totals"];selected?:number[];onToggle?:(ids:number[])=>void}) {
   const groups=vendors.filter(v=>!v.archived_at && (filter==="all" || filter==="paid" || (filter==="open" && currentPeriod(v))));

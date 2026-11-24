@@ -383,12 +383,10 @@ async fn bill_preview_with_mode(
         .expect("synthetic bill preview")
 }
 
-fn bill_payload(cycle_version: Value, preview_id: &Value, accept_outside: bool) -> Value {
+fn bill_payload(cycle_version: Value, preview_id: &Value) -> Value {
     json!({
         "version":cycle_version,
         "preview_id":preview_id,
-        "accept_difference":false,
-        "accept_outside":accept_outside,
     })
 }
 
@@ -426,11 +424,10 @@ async fn confirm_bill(
     harness: &Harness,
     cycle_id: i64,
     preview: &Value,
-    accept_outside: bool,
     key: &str,
 ) -> Result<Value> {
     let cycle = cycle_row(harness, cycle_id).await;
-    let payload = bill_payload(cycle["version"].clone(), &preview["id"], accept_outside);
+    let payload = bill_payload(cycle["version"].clone(), &preview["id"]);
     let prepared = prepare_bill(&harness.app, cycle_id, &payload).await?;
     confirm_bill_on(&harness.app, cycle_id, &payload, prepared, key).await
 }
@@ -1878,7 +1875,7 @@ async fn bill_import_matches_request_id_and_five_second_token_fallback_before_ro
     assert_eq!(preview["unmatched_count"], 0);
     assert_eq!(preview["total"], "0.01000000");
     assert_eq!(preview["cost_fen"], 1);
-    let confirmed = confirm_bill(&harness, id, &preview, false, "bill-matching-confirm")
+    let confirmed = confirm_bill(&harness, id, &preview, "bill-matching-confirm")
         .await
         .unwrap();
     let cycle = cycle_row(&harness, id).await;
@@ -1936,7 +1933,7 @@ async fn bill_import_matched_only_allocates_only_matched_cost_and_redacts_raw_da
     assert_eq!(bill_allocations[&3]["amount_fen"], 101);
     assert_eq!(bill_allocations[&4]["amount_fen"], 200);
 
-    let confirmed = confirm_bill(&harness, id, &bill, false, "matched-only-confirm")
+    let confirmed = confirm_bill(&harness, id, &bill, "matched-only-confirm")
         .await
         .unwrap();
     assert!(confirmed["bill_import_id"].as_i64().unwrap() > 0);
@@ -2036,7 +2033,6 @@ async fn matched_only_bill_import_still_requires_outside_confirmation_and_positi
         &harness,
         outside_cycle_id,
         &outside_bill,
-        false,
         "matched-only-outside-accepted",
     )
     .await
@@ -2073,7 +2069,6 @@ async fn matched_only_bill_import_still_requires_outside_confirmation_and_positi
             &harness,
             empty_match_id,
             &empty_match_bill,
-            false,
             "matched-only-no-match-confirm",
         )
         .await,
@@ -2106,13 +2101,13 @@ async fn bill_import_outside_confirmation_duplicate_history_and_stale_preview() 
     let first = bill_preview(&harness, id, &first_csv, "first.csv").await;
     assert_eq!(first["outside_count"], 1);
     assert_eq!(first["can_confirm"], true);
-    let accepted = confirm_bill(&harness, id, &first, false, "bill-outside-accepted")
+    let accepted = confirm_bill(&harness, id, &first, "bill-outside-accepted")
         .await
         .unwrap();
     assert_eq!(cycle_row(&harness, id).await["cost_fen"], 100);
 
     let duplicate = bill_preview(&harness, id, &first_csv, "renamed-copy.csv").await;
-    let duplicate_result = confirm_bill(&harness, id, &duplicate, true, "bill-duplicate-confirm")
+    let duplicate_result = confirm_bill(&harness, id, &duplicate, "bill-duplicate-confirm")
         .await
         .unwrap();
     assert_eq!(
@@ -2123,7 +2118,7 @@ async fn bill_import_outside_confirmation_duplicate_history_and_stale_preview() 
 
     let stale = bill_preview(&harness, id, &first_csv, "stale-copy.csv").await;
     let stale_cycle = cycle_row(&harness, id).await;
-    let stale_payload = bill_payload(stale_cycle["version"].clone(), &stale["id"], true);
+    let stale_payload = bill_payload(stale_cycle["version"].clone(), &stale["id"]);
     let stale_prepared = prepare_bill(&harness.app, id, &stale_payload)
         .await
         .unwrap();
@@ -2137,15 +2132,9 @@ async fn bill_import_outside_confirmation_duplicate_history_and_stale_preview() 
         "fixture-2",
     )]);
     let replacement = bill_preview(&harness, id, &replacement_csv, "replacement.csv").await;
-    let replaced = confirm_bill(
-        &harness,
-        id,
-        &replacement,
-        false,
-        "bill-replacement-confirm",
-    )
-    .await
-    .unwrap();
+    let replaced = confirm_bill(&harness, id, &replacement, "bill-replacement-confirm")
+        .await
+        .unwrap();
     assert_ne!(replaced["bill_import_id"], accepted["bill_import_id"]);
     assert_eq!(cycle_row(&harness, id).await["cost_fen"], 50);
     assert_eq!(harness.rows("bill_imports").await.len(), 2);
@@ -2431,7 +2420,7 @@ async fn concurrent_idempotent_replays_and_conflicting_mutations_preserve_exclus
         "fixture-6",
     )]);
     let bp_same = bill_preview(&harness, bill_cid, &csv_a, "same.csv").await;
-    let same_bill_payload = bill_payload(json!(1), &bp_same["id"], false);
+    let same_bill_payload = bill_payload(json!(1), &bp_same["id"]);
     let prep_left = prepare_bill(&harness.app, bill_cid, &same_bill_payload)
         .await
         .unwrap();
@@ -2467,8 +2456,8 @@ async fn concurrent_idempotent_replays_and_conflicting_mutations_preserve_exclus
     let rep_a = bill_preview(&harness, bill_cid, &csv_a, "rep-a.csv").await;
     let rep_b = bill_preview(&harness, bill_cid, &csv_b, "rep-b.csv").await;
     let cur_ver = cycle_row(&harness, bill_cid).await["version"].clone();
-    let pay_a = bill_payload(cur_ver.clone(), &rep_a["id"], false);
-    let pay_b = bill_payload(cur_ver, &rep_b["id"], false);
+    let pay_a = bill_payload(cur_ver.clone(), &rep_a["id"]);
+    let pay_b = bill_payload(cur_ver, &rep_b["id"]);
     let prep_a = prepare_bill(&harness.app, bill_cid, &pay_a).await.unwrap();
     let prep_b = prepare_bill(&peer, bill_cid, &pay_b).await.unwrap();
     let (res_a, res_b) = tokio::join!(

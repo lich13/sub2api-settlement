@@ -136,8 +136,6 @@ async fn confirm_vendor(harness: &Harness, period: &Value, preview: &Value) -> R
     let payload = json!({
         "preview_id": preview["id"],
         "version": period["version"],
-        "accept_difference": false,
-        "accept_outside": false,
     });
     let prepared = harness
         .app
@@ -206,18 +204,11 @@ async fn preview_cycle(
         .await
 }
 
-async fn confirm_cycle(
-    harness: &Harness,
-    cycle_id: i64,
-    preview: &Value,
-    accept_difference: bool,
-) -> Result<Value> {
+async fn confirm_cycle(harness: &Harness, cycle_id: i64, preview: &Value) -> Result<Value> {
     let cycle = cycle_row(harness, cycle_id).await;
     let payload = json!({
         "version": cycle["version"],
         "preview_id": preview["id"],
-        "accept_difference": accept_difference,
-        "accept_outside": false,
     });
     let (bill, revision) = harness
         .app
@@ -230,7 +221,7 @@ async fn confirm_cycle(
         .mutate(
             &admin(),
             &format!(
-                "manual-bill-confirm-{cycle_id}-{accept_difference}-{}",
+                "manual-bill-confirm-{cycle_id}-{}",
                 preview["id"].as_str().unwrap_or("preview")
             ),
             &format!("bill-confirm:{cycle_id}"),
@@ -330,7 +321,7 @@ async fn independent_cycle_can_return_to_local_proportions_with_the_same_cost() 
             )
             .await
             .expect("old billing basis preview");
-            confirm_cycle(&harness, cycle_id, &bill, false)
+            confirm_cycle(&harness, cycle_id, &bill)
                 .await
                 .expect("confirm old billing basis");
         }
@@ -1097,8 +1088,6 @@ async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
             &json!({
                 "preview_id": changed_preview["id"],
                 "version": confirmed_period["version"],
-                "accept_difference": false,
-                "accept_outside": false,
             }),
             Prepared {
                 vendor_bill: Some(prepared_bill),

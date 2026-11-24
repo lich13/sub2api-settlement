@@ -74,7 +74,6 @@ const overview: Overview = {
   estimated_fen: 0,
   pending_fen: 0,
   receivable_fen: 0,
-  submitted_fen: 0,
   last_sync: "2026-10-01T00:00:00Z",
   sync_error: null,
   coverage_from: "2026-01-01T00:00:00Z",

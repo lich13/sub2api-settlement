@@ -433,7 +433,6 @@ td small {
 .bill-import[open] > .bill-import-summary { margin-bottom: 13px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .bill-import[open] > .bill-import-summary > svg { transform: rotate(180deg); }
 .bill-import-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 13px; }
-.bill-import-head span { color: var(--warning); font-size: 11px; }
 .bill-import > .field-hint { margin: 0 0 12px; }
 .bill-import label { margin-bottom: 12px; }
 .bill-import input[type="file"] { padding: 8px; }
@@ -452,7 +451,6 @@ td small {
 .bill-stats > div { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
 .bill-stats > div span { color: var(--muted); }
 .bill-stats > div b { text-align: right; overflow-wrap: anywhere; }
-.bill-stats .checkline { margin: 3px 0 !important; color: var(--ink); }
 .bill-stats > .button { justify-self: end; margin-top: 4px; }
 .expense-list { display: grid; gap: 11px; }
 .expense-row { border: 1px solid var(--line); border-radius: 9px; background: var(--surface); padding: 17px 19px; }
@@ -914,9 +912,6 @@ td small {
   color: var(--warning);
   font-size: 11px;
 }
-.bill-actions .warning-text {
-  margin-right: auto;
-}
 .segments {
   display: inline-flex;
   background: var(--line);
@@ -946,7 +941,7 @@ td small {
   background: var(--surface);
   padding: 0 20px;
 }
-.audit-list > div:not(.empty) {
+.audit-list > div {
   display: flex;
   gap: 20px;
   justify-content: space-between;
@@ -1025,17 +1020,6 @@ td small {
   font-size: 15px;
   line-height: 1.8;
   overflow-wrap: anywhere;
-}
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 .vendor-groups { display: grid; gap: 12px; margin: 0 24px 16px; }
 .vendor-group { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
@@ -1488,7 +1472,7 @@ td small {
     flex-wrap: wrap;
     padding: 12px 14px;
   }
-  .audit-list > div:not(.empty) {
+  .audit-list > div {
     display: block;
   }
   .audit-list time {

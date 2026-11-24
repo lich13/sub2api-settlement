@@ -111,11 +111,9 @@ const billPreview: BillPreview = {
   local_unmatched_count: 0,
   record_count: 2,
   file_name: "synthetic.csv",
-  file_hash: "fixture-hash",
   end: "2025-02-01T00:00:00Z",
   version: 1,
   allocations: [],
-  difference_required: true,
   can_confirm: true,
 };
 

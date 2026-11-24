@@ -253,9 +253,6 @@ impl Service {
         admin(actor)?;
         accurate_cost(data)?;
         let local_basis = data["cost_source"] == "manual";
-        if !data["cost_source"].is_null() && !local_basis {
-            return Err(Error::invalid("修改成本时仅支持切换为本地消费比例"));
-        }
         let c = one(db, "SELECT * FROM cycles WHERE id=?", &[json!(cid)]).await?;
         Self::independent_cycle(&c).await?;
         if c["status"] != "open" {
@@ -370,11 +367,7 @@ impl Service {
         if !estimate(text(&c, "start_mode")) || flag(&c, "start_confirmed") {
             return Err(Error::invalid("该周期无需确认起点"));
         }
-        let method = if text(data, "method").is_empty() {
-            "legacy"
-        } else {
-            text(data, "method")
-        };
+        let method = text(data, "method");
         let anchor = time::instant(text(data, "start"))?;
         let mut start = anchor.clone();
         let mut source_id = Value::Null;
@@ -387,38 +380,15 @@ impl Service {
             source_id = first["id"].clone();
         }
         let lower = c["start_lower"].as_str().unwrap_or(text(&c, "start"));
-        if method == "legacy" && c["start_mode"] == "minute_estimate" && start != lower {
-            return Err(Error::invalid("请确认所选分钟起点，修改时间后需重新预览"));
-        }
-        if method == "legacy"
-            && c["start_upper"]
-                .as_str()
-                .is_some_and(|upper| start.as_str() < lower || start.as_str() >= upper)
-        {
-            return Err(Error::invalid("确认时间必须位于估算日期范围内"));
-        }
         self.validate_cycle(
             db,
             int(&c, "account_id"),
             &start,
             c["end"].as_str(),
             Some(cid),
-            method != "legacy",
+            true,
         )
         .await?;
-        if method == "legacy"
-            && Self::coverage_error(
-                db,
-                &json!({"account_id":c["account_id"],"start":start}),
-                c["end"].as_str().unwrap_or(&time::now()),
-            )
-            .await?
-            .is_some()
-        {
-            return Err(Error::invalid(
-                "该周期存在未采集的历史记录，无法确认完整消费",
-            ));
-        }
         let confirmed = time::now();
         exec(db,"UPDATE cycles SET start=?,start_lower=?,start_upper=NULL,start_mode='exact',start_confirmed=1,start_confirmed_by=?,start_confirmed_at=?,start_anchor=?,start_source_usage_id=?,version=version+1 WHERE id=? AND version=?",&[json!(start),json!(start),actor["id"].clone(),json!(confirmed),if method=="first_usage_after"{json!(anchor)}else{Value::Null},source_id.clone(),json!(cid),c["version"].clone()]).await?;
         audit(db,actor,"confirm_cycle_start",json!(cid),&json!({"before":{"start":c["start"],"start_mode":c["start_mode"],"start_lower":lower,"start_upper":c["start_upper"]},"start":start,"confirmed_at":confirmed,"method":method,"anchor":anchor,"source_usage_id":source_id})).await?;

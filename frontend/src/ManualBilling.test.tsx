@@ -188,11 +188,9 @@ function billPreview(overrides: Partial<BillPreview> = {}): BillPreview {
     local_unmatched_count: 0,
     record_count: 2,
     file_name: "usage.csv",
-    file_hash: "fixture-hash",
     end: "2026-10-01T00:00:00Z",
     version: 3,
     allocations: [],
-    difference_required: false,
     can_confirm: true,
     ...overrides,
   };
@@ -424,8 +422,8 @@ describe("manual billing for a vendor group", () => {
           manual_basis: { source: "local_only", rates: [{ account_id: 101, rate: billCalls === 1 ? "1" : "2" }], ambiguous_usage_ids: [] },
           manual_summary: { source: "local_only", amount: `${billCalls}.00`, accounts: [] },
           local_unmatched: [
-            { usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous", included: false },
-            { usage_id: 9002, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:01Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous", included: false },
+            { usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous" },
+            { usage_id: 9002, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:01Z", model: "fixture-model", local_amount: "1.00", rate: "2", amount: "2.00", reason: "ambiguous" },
           ],
         }));
       }
@@ -569,8 +567,8 @@ describe("manual billing for a vendor group", () => {
       if (String(input).endsWith("/bill-previews")) {
         return response(vendorPreview({
           local_unmatched: [
-            { usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "0.5", amount: "0.50", reason: "ambiguous", included: false },
-            { usage_id: 9002, account_id: 102, user_id: 1, created_at: "2026-09-20T00:00:01Z", model: "fixture-model", local_amount: "1.00", rate: "0.2", amount: "0.20", reason: "ambiguous", included: false },
+            { usage_id: 9001, account_id: 101, user_id: 1, created_at: "2026-09-20T00:00:00Z", model: "fixture-model", local_amount: "1.00", rate: "0.5", amount: "0.50", reason: "ambiguous" },
+            { usage_id: 9002, account_id: 102, user_id: 1, created_at: "2026-09-20T00:00:01Z", model: "fixture-model", local_amount: "1.00", rate: "0.2", amount: "0.20", reason: "ambiguous" },
           ],
         }));
       }

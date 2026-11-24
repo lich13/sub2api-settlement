@@ -168,12 +168,7 @@ fn bill_csv() -> String {
     .to_owned()
 }
 
-async fn confirm_vendor_bill(
-    harness: &Harness,
-    period: &Value,
-    csv: String,
-    accept_difference: bool,
-) -> Result<Value> {
+async fn confirm_vendor_bill(harness: &Harness, period: &Value, csv: String) -> Result<Value> {
     let preview = harness
         .app
         .service
@@ -205,8 +200,6 @@ async fn confirm_vendor_bill(
         &json!({
             "preview_id":preview["id"],
             "version":period["version"],
-            "accept_difference":accept_difference,
-            "accept_outside":false
         }),
         Prepared {
             vendor_bill: Some(prepared),
@@ -390,8 +383,6 @@ async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
             &json!({
                 "preview_id":preview["id"],
                 "version":period["version"],
-                "accept_difference":false,
-                "accept_outside":false
             }),
             Prepared {
                 vendor_bill: Some(prepared),
@@ -460,8 +451,6 @@ async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
             &json!({
                 "preview_id":preview["id"],
                 "version":current["version"],
-                "accept_difference":false,
-                "accept_outside":false
             }),
             Prepared {
                 vendor_bill: Some(prepared),
@@ -482,7 +471,7 @@ async fn vendor_settlement_rejects_usage_revision_without_partial_orders() {
     let period = period_from_vendor(&vendor);
     let first = cycle_for_account(&harness, 100).await;
     let second = cycle_for_account(&harness, 200).await;
-    confirm_vendor_bill(&harness, &period, bill_csv(), false)
+    confirm_vendor_bill(&harness, &period, bill_csv())
         .await
         .expect("confirm vendor bill");
 
@@ -556,7 +545,7 @@ async fn vendor_renewal_preserves_old_end_and_rejects_old_group_retry() {
     let period = period_from_vendor(&vendor);
     let first = cycle_for_account(&harness, 100).await;
     let second = cycle_for_account(&harness, 200).await;
-    confirm_vendor_bill(&harness, &period, bill_csv(), false)
+    confirm_vendor_bill(&harness, &period, bill_csv())
         .await
         .expect("confirm vendor bill");
     let current = vendor_period_row(&harness, period["id"].as_i64().unwrap()).await;
@@ -695,7 +684,7 @@ async fn deleted_vendor_member_keeps_settlement_financial_history() {
     let period = period_from_vendor(&vendor);
     let first = cycle_for_account(&harness, 100).await;
     let second = cycle_for_account(&harness, 200).await;
-    confirm_vendor_bill(&harness, &period, bill_csv(), false)
+    confirm_vendor_bill(&harness, &period, bill_csv())
         .await
         .expect("confirm vendor bill");
 

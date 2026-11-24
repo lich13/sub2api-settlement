@@ -284,8 +284,6 @@ async fn independent_cycle_can_clear_manual_draft_and_settle_through_http() {
         json!({
             "version": version,
             "preview_id": bill["id"],
-            "accept_difference": false,
-            "accept_outside": false,
         }),
     )
     .await;

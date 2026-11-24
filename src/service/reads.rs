@@ -45,13 +45,12 @@ impl Service {
         for a in &mut accounts {
             let earliest = store::optional(
                 &mut db,
-                "SELECT id,created_at FROM usage WHERE root_id=? ORDER BY created_at,id LIMIT 1",
+                "SELECT created_at FROM usage WHERE root_id=? ORDER BY created_at,id LIMIT 1",
                 &[a["id"].clone()],
             )
             .await?
             .unwrap_or(Value::Null);
             a["earliest_usage_at"] = earliest["created_at"].clone();
-            a["earliest_usage_id"] = earliest["id"].clone();
         }
         Ok(
             json!({"accounts":accounts,"account_revision":state["revision"],"account_sync_error":state["error"],"users":all(&mut db,"SELECT id,name FROM users WHERE deleted=0 AND status='active' ORDER BY id",&[]).await?,"coverage_from":store::meta(&mut db,"coverage_from").await?}),
@@ -219,8 +218,7 @@ impl Service {
             .iter()
             .find_map(|r| r.get("data_error").filter(|v| !v.is_null()))
             .cloned();
-        let submitted=one(&mut db,"SELECT coalesce(sum(amount_fen),0) AS amount FROM orders WHERE payer_id=? AND status='submitted'",&[actor["id"].clone()]).await?;
-        let mut response = json!({"accounts":rows,"account_revision":state["revision"],"account_sync_error":state["error"],"estimated_fen":if !sync_error.is_null()||row_error.is_some()||vendor_pending||rows.iter().any(|r|flag(r,"allocation_pending")){None}else{Some(estimated)},"pending_fen":balances.iter().filter(|b|b["payer_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"receivable_fen":balances.iter().filter(|b|b["creditor_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"submitted_fen":submitted["amount"],"last_sync":last,"sync_error":if sync_error.is_null(){row_error.unwrap_or(Value::Null)}else{sync_error},"coverage_from":store::meta(&mut db,"coverage_from").await?});
+        let mut response = json!({"accounts":rows,"account_revision":state["revision"],"account_sync_error":state["error"],"estimated_fen":if !sync_error.is_null()||row_error.is_some()||vendor_pending||rows.iter().any(|r|flag(r,"allocation_pending")){None}else{Some(estimated)},"pending_fen":balances.iter().filter(|b|b["payer_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"receivable_fen":balances.iter().filter(|b|b["creditor_id"]==actor["id"]).map(|b|int(b,"amount_fen")).sum::<i64>(),"last_sync":last,"sync_error":if sync_error.is_null(){row_error.unwrap_or(Value::Null)}else{sync_error},"coverage_from":store::meta(&mut db,"coverage_from").await?});
         if !vendor_totals.is_empty() {
             response["vendor_totals"] = json!(vendor_totals);
         }

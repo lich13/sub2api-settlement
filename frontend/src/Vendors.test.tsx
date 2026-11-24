@@ -2,7 +2,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VendorBillPanel, VendorGroups, VendorManager, expandVendorSelection, groupCandidates } from "./Vendors";
+import { VendorBillPanel, VendorGroups, VendorManager, expandVendorSelection } from "./Vendors";
 import type { Account, Catalog, Cycle, Vendor, VendorBillPreview, VendorPeriod } from "./types";
 
 let root: Root | undefined;
@@ -183,11 +183,9 @@ function billPreview(overrides: Partial<VendorBillPreview> = {}): VendorBillPrev
     local_unmatched_count: 0,
     record_count: 1,
     file_name: "usage.csv",
-    file_hash: "fixture-hash",
     end: "2026-10-01T00:00:00Z",
     version: 1,
     allocations: [],
-    difference_required: false,
     can_confirm: true,
     accounts: [{
       account_id: 101,
@@ -317,9 +315,6 @@ describe("vendor group manager v0.11.1 flows", () => {
     const deleted = unconfiguredAccount(103, "Deleted", { deleted: true });
     const assigned = unconfiguredAccount(104, "Already assigned", { vendor_id: 5 });
     const configured = account(105, "Configured", cycle({ id: 15, account_id: 105 }));
-
-    expect(groupCandidates([eligible, cancelledDraft, deleted, assigned, configured]).map(a => a.id))
-      .toEqual([101, 102]);
 
     await render(<VendorManager
       vendors={[]}
@@ -603,7 +598,6 @@ describe("vendor bill panel", () => {
           unmatched_count: 1,
           outside_count: 1,
           outside_amount: "5.00",
-          difference_required: true,
         }));
       }
       return response({});

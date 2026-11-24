@@ -210,7 +210,7 @@ pub fn admin(actor: &Value) -> Result<()> {
     }
     Ok(())
 }
-pub fn valid_key(key: &str) -> Result<()> {
+fn valid_key(key: &str) -> Result<()> {
     if key.is_empty() || key.chars().count() > 128 {
         return Err(Error::new(400, "请求缺少有效的操作编号"));
     }
