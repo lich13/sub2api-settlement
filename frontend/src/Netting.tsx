@@ -1,4 +1,5 @@
-import { ChevronDown } from "lucide-react";
+import { memo } from "react";
+import ChevronDown from "lucide-react/icons/chevron-down";
 import { money, date } from "./api";
 import { Empty } from "./Forms";
 import type { Actor, NetBalance, NetDetail, NetPayment, Order } from "./types";
@@ -20,7 +21,7 @@ export function NettingReceivables({ balances }: { balances: NetBalance[] }) {
 }
 
 export function NettingDetails({ value }: { value: NetDetail }) {
-  return <section className="netting-detail">
+  return <section>
     <dl className="netting-totals">
       <div><dt>{value.name_a} 应付 {value.name_b}</dt><dd>{money(value.a_to_b_fen)}</dd></div>
       <div><dt>{value.name_b} 应付 {value.name_a}</dt><dd>{money(value.b_to_a_fen)}</dd></div>
@@ -41,13 +42,14 @@ export function NettingDetails({ value }: { value: NetDetail }) {
   </section>;
 }
 
-export function NettingList({ me, balances, payments, orders, adminView, filter, query, busy, onPay, onDetail, onOrder, onLegacyPaid }: {
+export const NettingList = memo(function NettingList({ me, balances, payments, orders, adminView, filter, query, busy, onPay, onDetail, onOrder, onLegacyPaid }: {
   me: Actor; balances: NetBalance[]; payments: NetPayment[]; orders: Order[];
   adminView: boolean; filter: string; query: string; busy: boolean;
   onPay: (value: NetBalance) => void; onDetail: (value: NetBalance | NetPayment) => void;
   onOrder: (id: number) => void; onLegacyPaid: (order: Order) => void;
 }) {
-  const matches = (text: string) => text.toLowerCase().includes(query.toLowerCase());
+  const q = query.trim().toLowerCase();
+  const matches = (text: string) => !q || text.toLowerCase().includes(q);
   const allPairs = adminView && me.role === "admin";
   const participant = (b: NetBalance) => b.user_a === me.id || b.user_b === me.id;
   const pending = (filter === "all" || filter === "pending") ? balances.filter(b =>
@@ -78,4 +80,4 @@ export function NettingList({ me, balances, payments, orders, adminView, filter,
     {!pending.length && !history.length && !legacy.length && empty}
     {adminView && <details className="raw-orders"><summary>原始订单 · {raw.length} 张<ChevronDown size={16} /></summary>{raw.map(o => <button className="netting-order" key={o.id} onClick={() => onOrder(o.id)}><div><strong>{o.account_name}</strong><span>#{o.id} · {o.payer_name} → {o.creditor_name}</span></div><b>{money(o.amount_fen)}</b></button>)}</details>}
   </div>;
-}
+});

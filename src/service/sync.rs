@@ -42,8 +42,15 @@ impl Service {
                 .filter(|a| int(a, "root_id") == root)
                 .map(|a| int(a, "id"))
                 .collect();
-            let known_ids = sqlx::query_scalar::<_,i64>("SELECT id FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id")
-                .bind(root).bind(lower).bind(actual_end).fetch_all(&mut *db).await?;
+            let mut known_ids = sqlx::query_scalar::<_, i64>(
+                "SELECT id FROM usage WHERE root_id=? AND created_at>=? AND created_at<?",
+            )
+            .bind(root)
+            .bind(lower)
+            .bind(actual_end)
+            .fetch_all(&mut *db)
+            .await?;
+            known_ids.sort_unstable();
             scopes.push(Scope {
                 root,
                 accounts,
@@ -155,9 +162,26 @@ impl Service {
             exec(&mut db, "DELETE FROM rust_sync_stage", &[]).await?;
             exec(&mut db, "DELETE FROM rust_sync_changed", &[]).await?;
         }
-        self.inventory.persist(&mut db).await?;
-        for u in &snapshot.header.users {
-            exec(&mut db,"INSERT INTO users VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,role=excluded.role,status=excluded.status,deleted=excluded.deleted",&[u["id"].clone(),u["name"].clone(),u["role"].clone(),u["status"].clone(),json!(i64::from(flag(u,"deleted")))]).await?;
+        let persisted_seq = if self.inventory.needs_persist().await {
+            Some(self.inventory.persist_seq(&mut db).await?)
+        } else {
+            None
+        };
+        for chunk in snapshot.header.users.chunks(256) {
+            let mut q = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "INSERT INTO users(id,name,role,status,deleted) ",
+            );
+            q.push_values(chunk, |mut b, u| {
+                b.push_bind(int(u, "id"))
+                    .push_bind(text(u, "name"))
+                    .push_bind(text(u, "role"))
+                    .push_bind(text(u, "status"))
+                    .push_bind(i64::from(flag(u, "deleted")));
+            });
+            q.push(
+                " ON CONFLICT(id) DO UPDATE SET name=excluded.name,role=excluded.role,status=excluded.status,deleted=excluded.deleted WHERE users.name IS NOT excluded.name OR users.role IS NOT excluded.role OR users.status IS NOT excluded.status OR users.deleted IS NOT excluded.deleted",
+            );
+            q.build().execute(&mut *db).await?;
         }
         let (old_coverage_from, old_gaps) = Self::coverage_meta(&mut db).await?;
         if old_coverage_from.is_null() {
@@ -182,24 +206,41 @@ impl Service {
             scopes.as_deref(),
         )
         .await?;
-        // This predicate is a code-owned constant, never source or request data.
-        let differs = "u.id IS NULL OR u.account_id!=s.account_id OR u.root_id!=s.root_id OR u.user_id!=s.user_id OR u.amount!=s.amount OR u.created_at!=s.created_at OR (s.detail IS NOT NULL AND (d.payload IS NULL OR d.payload!=s.detail))";
-        let changed_windows = all(
-            &mut db,
-            &format!(
-                "SELECT root_id, MIN(created_at) AS min_at, MAX(created_at) AS max_at FROM (SELECT s.root_id AS root_id, s.created_at AS created_at FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs} UNION ALL SELECT u.root_id AS root_id, u.created_at AS created_at FROM rust_sync_stage s JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE {differs}) GROUP BY root_id"
-            ),
-            &[],
-        )
-        .await?
-        .into_iter()
-        .map(|r| {
-            (
-                int(&r, "root_id"),
-                (text(&r, "min_at").to_owned(), text(&r, "max_at").to_owned()),
+        let mut changed_windows = BTreeMap::<i64, (String, String)>::new();
+        {
+            use futures_util::TryStreamExt;
+            use sqlx::Row;
+            let mut stream = sqlx::query(
+                "SELECT s.root_id, s.created_at, u.root_id, u.created_at FROM rust_sync_stage s LEFT JOIN usage u ON u.id=s.id LEFT JOIN usage_details d ON d.usage_id=s.id WHERE u.id IS NULL OR u.account_id!=s.account_id OR u.root_id!=s.root_id OR u.user_id!=s.user_id OR u.amount!=s.amount OR u.created_at!=s.created_at OR (s.detail IS NOT NULL AND (d.payload IS NULL OR d.payload!=s.detail))",
             )
-        })
-        .collect::<BTreeMap<_, _>>();
+            .fetch(&mut *db);
+            let mut record_window = |root_id: i64, created_at: &str| {
+                changed_windows
+                    .entry(root_id)
+                    .and_modify(|(min_at, max_at)| {
+                        if created_at < min_at.as_str() {
+                            min_at.clear();
+                            min_at.push_str(created_at);
+                        }
+                        if created_at > max_at.as_str() {
+                            max_at.clear();
+                            max_at.push_str(created_at);
+                        }
+                    })
+                    .or_insert_with(|| (created_at.to_owned(), created_at.to_owned()));
+            };
+            while let Some(row) = stream.try_next().await? {
+                let s_root: i64 = row.try_get(0)?;
+                let s_at: &str = row.try_get(1)?;
+                record_window(s_root, s_at);
+                if let (Some(u_root), Some(u_at)) = (
+                    row.try_get::<Option<i64>, _>(2)?,
+                    row.try_get::<Option<&str>, _>(3)?,
+                ) {
+                    record_window(u_root, u_at);
+                }
+            }
+        }
         if !changed_windows.is_empty() {
             let root_ids: Vec<i64> = changed_windows.keys().copied().collect();
             for chunk in root_ids.chunks(1024) {
@@ -222,7 +263,33 @@ impl Service {
         let check_coverage =
             coverage_changed || (checkpoint.reconcile() && !array(&gaps).is_empty());
         checkpoint.publish(&mut db, &roots).await?;
+        exec(&mut db, "DELETE FROM rust_sync_stage", &[]).await?;
+        exec(&mut db, "DELETE FROM rust_sync_changed", &[]).await?;
+        if scopes.is_none() {
+            exec(
+                &mut db,
+                "DELETE FROM sessions WHERE expires_at<=?",
+                &[json!(time::epoch())],
+            )
+            .await?;
+            let cutoff = json!(time::after(-3600));
+            for table in ["previews", "bill_previews", "vendor_bill_previews"] {
+                debug_assert!(matches!(
+                    table,
+                    "previews" | "bill_previews" | "vendor_bill_previews"
+                ));
+                exec(
+                    &mut db,
+                    &format!("DELETE FROM {table} WHERE expires_at<?"),
+                    std::slice::from_ref(&cutoff),
+                )
+                .await?;
+            }
+        }
         db.commit().await?;
+        if let Some(seq) = persisted_seq {
+            self.inventory.mark_persisted(seq).await;
+        }
         if changed_windows.is_empty() && !check_coverage {
             return Ok(());
         }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+import ChevronRight from "lucide-react/icons/chevron-right";
 import { date, money } from "./api";
 import { DeletionTargets, type DeletionScopeValue } from "./DeletionScope";
 import { Allocation, Empty, FormError, StartConfirmation, Status } from "./Forms";

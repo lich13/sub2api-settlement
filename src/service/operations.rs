@@ -37,6 +37,27 @@ pub fn csv_bytes(headers: &[&str], rows: impl IntoIterator<Item = Vec<String>>) 
     Ok([b"\xef\xbb\xbf".as_slice(), &bytes].concat())
 }
 
+pub(super) fn unmatched_and_outside(result: &Value) -> impl Iterator<Item = (&Value, bool)> {
+    crate::json::array(&result["unmatched"])
+        .iter()
+        .map(|row| (row, false))
+        .chain(
+            crate::json::array(&result["outside"])
+                .iter()
+                .map(|row| (row, true)),
+        )
+}
+
+pub(super) fn unmatched_csv_reason(row: &Value, outside: bool) -> &'static str {
+    if outside {
+        "周期范围外"
+    } else if row["reason"] == "ambiguous" {
+        "存在歧义"
+    } else {
+        "未找到本地请求"
+    }
+}
+
 impl Service {
     pub async fn unmatched_bill_csv(
         &self,
@@ -81,35 +102,20 @@ impl Service {
                 "上游扣费（元，原始精度）",
                 "未匹配原因",
             ],
-            crate::json::array(&result["unmatched"])
-                .iter()
-                .map(|row| (row, false))
-                .chain(
-                    crate::json::array(&result["outside"])
-                        .iter()
-                        .map(|row| (row, true)),
-                )
-                .map(|(row, outside)| {
-                    let reason = if outside {
-                        "周期范围外"
-                    } else if row["reason"] == "ambiguous" {
-                        "存在歧义"
-                    } else {
-                        "未找到本地请求"
-                    };
-                    vec![
-                        int(row, "row").to_string(),
-                        text(row, "created_at").to_owned(),
-                        text(row, "model").to_owned(),
-                        text(row, "request_id").to_owned(),
-                        int(row, "input_tokens").to_string(),
-                        int(row, "output_tokens").to_string(),
-                        int(row, "cache_read_tokens").to_string(),
-                        int(row, "cache_creation_tokens").to_string(),
-                        text(row, "amount").to_owned(),
-                        reason.to_owned(),
-                    ]
-                }),
+            unmatched_and_outside(result).map(|(row, outside)| {
+                vec![
+                    int(row, "row").to_string(),
+                    text(row, "created_at").to_owned(),
+                    text(row, "model").to_owned(),
+                    text(row, "request_id").to_owned(),
+                    int(row, "input_tokens").to_string(),
+                    int(row, "output_tokens").to_string(),
+                    int(row, "cache_read_tokens").to_string(),
+                    int(row, "cache_creation_tokens").to_string(),
+                    text(row, "amount").to_owned(),
+                    unmatched_csv_reason(row, outside).to_owned(),
+                ]
+            }),
         )
     }
     pub async fn deletion_scope(&self, actor: &Value, account_id: i64) -> Result<Value> {
@@ -230,36 +236,32 @@ pub(super) fn manual_basis_csv(result: &Value) -> Result<Vec<u8>> {
             .into(),
         ]
     });
-    let upstream = array(&result["unmatched"])
-        .iter()
-        .map(|r| (r, false))
-        .chain(array(&result["outside"]).iter().map(|r| (r, true)))
-        .map(|(r, outside)| {
-            vec![
-                "上游账单".into(),
-                int(r, "row").to_string(),
-                String::new(),
-                text(r, "created_at").into(),
-                text(r, "model").into(),
-                String::new(),
-                String::new(),
-                text(r, "amount").into(),
-                if outside {
-                    "周期范围外"
-                } else if r["reason"] == "ambiguous" {
-                    "匹配歧义"
-                } else {
-                    "本地缺失"
-                }
-                .into(),
-                if outside || result["allocation_mode"] == "matched_only" {
-                    "排除"
-                } else {
-                    "按比例分摊"
-                }
-                .into(),
-            ]
-        });
+    let upstream = unmatched_and_outside(result).map(|(r, outside)| {
+        vec![
+            "上游账单".into(),
+            int(r, "row").to_string(),
+            String::new(),
+            text(r, "created_at").into(),
+            text(r, "model").into(),
+            String::new(),
+            String::new(),
+            text(r, "amount").into(),
+            if outside {
+                "周期范围外"
+            } else if r["reason"] == "ambiguous" {
+                "匹配歧义"
+            } else {
+                "本地缺失"
+            }
+            .into(),
+            if outside || result["allocation_mode"] == "matched_only" {
+                "排除"
+            } else {
+                "按比例分摊"
+            }
+            .into(),
+        ]
+    });
     csv_bytes(
         &[
             "来源",

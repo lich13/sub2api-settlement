@@ -283,7 +283,7 @@ async fn sync_rebuilds_partial_durable_stage_before_publishing_source_rows() {
     usage.last_mut().unwrap()["amount"] = json!("1.00");
     write_source(&fixture, usage);
     app.service.sync(true).await.unwrap();
-    assert_eq!(count_rows(&app, "rust_sync_stage").await, 2049);
+    assert_eq!(count_rows(&app, "rust_sync_stage").await, 0);
     assert_eq!(count_rows(&app, "usage").await, 2049);
     app.service.source.close().await;
     app.service.store.close().await;

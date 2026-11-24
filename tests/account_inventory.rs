@@ -493,3 +493,57 @@ async fn account_state_and_overview_share_role_scoped_accounts_and_revision() {
     app.service.source.close().await;
     app.service.store.close().await;
 }
+
+#[tokio::test]
+async fn deferred_inventory_flushes_on_next_service_mutation() {
+    let temporary = TempDir::new().unwrap();
+    let fixture = temporary.path().join("source.json");
+    write_fixture(
+        &fixture,
+        vec![account(100, "Initial account name", None, false)],
+        json!([]),
+    );
+    let app = App::new(config(temporary.path(), fixture.clone()))
+        .await
+        .unwrap();
+    app.service.inventory.refresh(true).await;
+    refresh_until_persisted(&app).await;
+
+    write_fixture(
+        &fixture,
+        vec![account(100, "Renamed while writer busy", None, true)],
+        json!([]),
+    );
+    let writer = app.service.store.write().await.unwrap();
+    let state = app.service.inventory.refresh(true).await;
+    assert!(state["error"].is_null());
+    assert!(app.service.inventory.state.read().await.dirty);
+    writer.rollback().await.unwrap();
+
+    // Any subsequent Service::mutate flushes the deferred roster into SQLite.
+    let admin = json!({"id": 1, "name": "Fixture Admin", "role": "admin"});
+    app.service
+        .mutate(
+            &admin,
+            "flush-deferred-inventory",
+            "inbox_read",
+            &json!({}),
+            settlement::service::Prepared::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(!app.service.inventory.state.read().await.dirty);
+    assert_eq!(deleted_flag(&app, 100).await, 1);
+    let mut db = app.service.store.read().await.unwrap();
+    let persisted_name: String = sqlx::query_scalar("SELECT name FROM accounts WHERE id=100")
+        .fetch_one(&mut *db)
+        .await
+        .unwrap();
+    db.commit().await.unwrap();
+    assert_eq!(persisted_name, "Renamed while writer busy");
+
+    app.service.source.close().await;
+    app.service.store.close().await;
+}

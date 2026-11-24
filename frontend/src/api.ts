@@ -11,7 +11,11 @@ export function formatVersion(value = APP_VERSION) {
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
+const INVALID_JSON = Symbol("invalid-json");
 export function setCsrf(value: string, userId?: number) {
+  if (!value || (userId !== undefined && userId !== currentUser)) {
+    pending.clear();
+  }
   csrf = value;
   currentUser = userId;
 }
@@ -20,34 +24,43 @@ export async function api<T = any>(
   method = "GET",
   body?: unknown,
 ): Promise<T> {
-  const signature = method + path + JSON.stringify(body);
-  const key = pending.get(signature) || crypto.randomUUID();
-  if (method !== "GET") pending.set(signature, key);
+  const isRead = method === "GET";
+  const serialized = body !== undefined ? JSON.stringify(body) : undefined;
+  let signature = "";
+  let key = "";
+  if (!isRead) {
+    signature = `${currentUser ?? ""}:${method}:${path}:${serialized ?? ""}`;
+    key = pending.get(signature) || crypto.randomUUID();
+    pending.set(signature, key);
+  }
   const response = await fetch("/settlement/api/v1" + path, {
     method,
     credentials: "same-origin",
     cache: "no-store",
     headers: {
-      "Content-Type": "application/json",
-      ...(currentUser ? { "X-Settlement-User": String(currentUser) } : {}),
-      ...(method === "GET"
+      ...(isRead && serialized === undefined
         ? {}
-        : { "X-CSRF-Token": csrf, "Idempotency-Key": key }),
+        : { "Content-Type": "application/json" }),
+      ...(currentUser ? { "X-Settlement-User": String(currentUser) } : {}),
+      ...(isRead ? {} : { "X-CSRF-Token": csrf, "Idempotency-Key": key }),
     },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    ...(serialized !== undefined ? { body: serialized } : {}),
   });
-  const data = await response.json();
-  if (response.status < 500) pending.delete(signature);
+  const data = await response.json().catch(() => INVALID_JSON);
+  if (signature && response.status < 500) pending.delete(signature);
   if (!response.ok) {
     if (response.status === 401)
       window.dispatchEvent(new Event("settlement:expired"));
     const detail =
-      typeof data.detail === "string"
+      data !== INVALID_JSON && data && typeof data.detail === "string"
         ? data.detail
         : "输入格式不正确，请检查金额和时间";
     throw new ApiError(detail, response.status);
   }
-  return data;
+  if (data === INVALID_JSON) {
+    throw new ApiError("服务器返回格式异常，请稍后重试", response.status);
+  }
+  return data as T;
 }
 const integerFormat = new Intl.NumberFormat("zh-CN");
 const decimal2Format = new Intl.NumberFormat("zh-CN", {
@@ -92,8 +105,8 @@ export async function downloadCsv(path: string, filename: string) {
   });
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event("settlement:expired"));
-    const data = await response.json();
-    throw new ApiError(typeof data.detail === "string" ? data.detail : "导出失败，请重试", response.status);
+    const data = await response.json().catch(() => null);
+    throw new ApiError(data && typeof data.detail === "string" ? data.detail : "导出失败，请重试", response.status);
   }
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
@@ -165,7 +178,11 @@ export function inputDate(value = new Date().toISOString()) {
     .slice(0, 19);
 }
 export function fromInput(value: string) {
-  return new Date(value + "+08:00").toISOString();
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("请填写有效的时间");
+  const parsed = new Date(trimmed + "+08:00");
+  if (Number.isNaN(parsed.getTime())) throw new Error("请填写有效的时间");
+  return parsed.toISOString();
 }
 export const amountPattern = /^(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$/;
 export const percentPattern = /^(0|[1-9][0-9]{0,2})(\.[0-9]{1,2})?$/;

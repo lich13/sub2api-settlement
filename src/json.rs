@@ -45,6 +45,15 @@ pub(crate) fn merge(mut a: Value, b: Value) -> Value {
     }
     a
 }
+pub(crate) const BILL_DETAIL_KEYS: &[&str] = &[
+    "matched",
+    "unmatched",
+    "outside",
+    "local_unmatched",
+    "weights",
+    "manual_weights",
+];
+
 pub(crate) fn without(mut v: Value, keys: &[&str]) -> Value {
     if let Some(m) = v.as_object_mut() {
         for k in keys {

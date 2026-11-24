@@ -789,4 +789,77 @@ describe("SettleForm preview integration", () => {
     });
     expect(close).not.toHaveBeenCalled();
   });
+
+  it("disables start-confirm inputs during in-flight POST mutations and always delivers onConfirmed", async () => {
+    const cycleStartDeferred = deferred<Response>();
+    const vendorStartDeferred = deferred<Response>();
+    let cycleConfirmed = false;
+    let vendorConfirmed = false;
+    const member = groupCycle(21, 201, { name: "Group Member", vendor_id: 12, vendor_period_id: 66, start_confirmed: false });
+    const period = () => groupPeriod([member], { id: 66, vendor_id: 12, name: "Group C", start_confirmed: vendorConfirmed, version: vendorConfirmed ? 2 : 1 });
+
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path.endsWith("/previews")) {
+        const single = cycle({ id: 7, start_mode: "minute_estimate", start_confirmed: cycleConfirmed, version: cycleConfirmed ? 2 : 1 });
+        const grp = { ...member, start_confirmed: vendorConfirmed, version: vendorConfirmed ? 2 : 1 };
+        return response({
+          id: `flight-${Number(cycleConfirmed)}-${Number(vendorConfirmed)}`,
+          expires_at: new Date(Date.now() + 120_000).toISOString(),
+          cycles: [
+            calculation(single, { start_mode: "minute_estimate", start_confirmed: cycleConfirmed, can_settle: cycleConfirmed }),
+            calculation(grp, { vendor_period: period(), start_confirmed: vendorConfirmed, can_settle: vendorConfirmed }),
+          ],
+        });
+      }
+      if (path.endsWith("/cycles/7/start-confirm")) return cycleStartDeferred.promise;
+      if (path.endsWith("/vendor-periods/66/start-confirm")) return vendorStartDeferred.promise;
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await render(<SettleForm {...formProps({
+      ids: [7, 21],
+      cycles: [cycle({ id: 7, start_mode: "minute_estimate", start_confirmed: false }), member],
+      vendorPeriods: [period()],
+    })} />);
+
+    // 1. Single-cycle StartConfirmation locks its datetime input and submit button while POST /start-confirm is in flight.
+    const singleConfirm = dom.host!.querySelectorAll<HTMLElement>(".start-confirm")[0];
+    const singleInput = singleConfirm.querySelector<HTMLInputElement>('input[type="datetime-local"]')!;
+    const singleBtn = Array.from(singleConfirm.querySelectorAll("button")).find(b => b.textContent?.trim() === "确认起点")!;
+    await click(singleBtn);
+    expect(singleInput.disabled).toBe(true);
+    expect(singleBtn.disabled).toBe(true);
+    // Attempting a synthetic input change mid-flight must not unlock busy or drop onConfirmed.
+    setInputValue(singleInput, "2026-09-02T09:00:00");
+    expect(singleBtn.disabled).toBe(true);
+
+    cycleConfirmed = true;
+    await act(async () => {
+      cycleStartDeferred.resolve(response({ id: 7, version: 2 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // 2. VendorBillPanel locks both its start input and ManualBillingEditor while POST /vendor-periods/:id/start-confirm is in flight.
+    const vendorPanel = dom.host!.querySelector<HTMLElement>(".vendor-bill")!;
+    const vendorStartInput = vendorPanel.querySelector<HTMLInputElement>('.start-confirm input[type="datetime-local"]')!;
+    const vendorRateInput = vendorPanel.querySelector<HTMLInputElement>('input[aria-label="Group Member 补计倍率"]')!;
+    const vendorStartBtn = Array.from(vendorPanel.querySelectorAll("button")).find(b => b.textContent?.trim() === "确认起点")!;
+    await click(vendorStartBtn);
+    expect(vendorStartInput.disabled).toBe(true);
+    expect(vendorRateInput.disabled).toBe(true);
+    expect(vendorStartBtn.disabled).toBe(true);
+    setInputValue(vendorRateInput, "1.5");
+    expect(vendorStartBtn.disabled).toBe(true);
+
+    vendorConfirmed = true;
+    await act(async () => {
+      vendorStartDeferred.resolve(response({ id: 66, version: 2 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(vendorPanel.querySelector(".start-confirm")).toBeNull();
+  });
 });

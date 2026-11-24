@@ -119,7 +119,41 @@ pub fn normalize_datetime(s: &str) -> Option<String> {
     ))
 }
 
+fn parse_canonical_utc(s: &str) -> Option<OffsetDateTime> {
+    let b = s.as_bytes();
+    if b.len() != 32
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+        || b[19] != b'.'
+        || &b[26..32] != b"+00:00"
+    {
+        return None;
+    }
+    let digit = |i: usize| -> Option<u32> {
+        let d = b[i].wrapping_sub(b'0');
+        (d < 10).then_some(u32::from(d))
+    };
+    let d2 = |i: usize| Some((digit(i)? * 10 + digit(i + 1)?) as u8);
+    let year = (digit(0)? * 1000 + digit(1)? * 100 + digit(2)? * 10 + digit(3)?) as i32;
+    let month = Month::try_from(d2(5)?).ok()?;
+    let date = Date::from_calendar_date(year, month, d2(8)?).ok()?;
+    let micros = digit(20)? * 100_000
+        + digit(21)? * 10_000
+        + digit(22)? * 1_000
+        + digit(23)? * 100
+        + digit(24)? * 10
+        + digit(25)?;
+    let time = Time::from_hms_micro(d2(11)?, d2(14)?, d2(17)?, micros).ok()?;
+    Some(date.with_time(time).assume_utc())
+}
+
 pub fn parse(s: &str) -> Result<OffsetDateTime> {
+    if let Some(d) = parse_canonical_utc(s) {
+        return Ok(d);
+    }
     let normalized: std::borrow::Cow<'_, str> = if s.contains(' ') {
         std::borrow::Cow::Owned(s.replace(' ', "T"))
     } else {
@@ -166,6 +200,9 @@ pub fn parse(s: &str) -> Result<OffsetDateTime> {
 }
 
 pub fn instant(s: &str) -> Result<String> {
+    if parse_canonical_utc(s).is_some() {
+        return Ok(s.to_owned());
+    }
     Ok(format(parse(s)?))
 }
 
@@ -183,9 +220,14 @@ pub fn format(d: OffsetDateTime) -> String {
     )
 }
 
+fn is_test_env() -> bool {
+    static TEST_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *TEST_ENV.get_or_init(|| std::env::var("SETTLEMENT_ENV").as_deref() == Ok("test"))
+}
+
 fn now_utc() -> OffsetDateTime {
     // Fixed time is accepted only by the isolated fixture runtime.
-    if std::env::var("SETTLEMENT_ENV").as_deref() == Ok("test")
+    if is_test_env()
         && let Ok(v) = std::env::var("SETTLEMENT_TEST_NOW")
         && let Ok(d) = parse(&v)
     {
@@ -276,5 +318,25 @@ mod tests {
         ] {
             assert!(is_expired_at(&value, now));
         }
+    }
+
+    #[test]
+    fn canonical_utc_fast_path_matches_rfc3339_and_rejects_invalid_dates() {
+        let leap = "2024-02-29T23:59:59.987654+00:00";
+        assert_eq!(instant(leap).unwrap(), leap);
+        assert_eq!(format(parse(leap).unwrap()), leap);
+        assert_eq!(instant("2024-03-01 07:59:59.987654+08:00").unwrap(), leap);
+        assert_eq!(
+            parse("2025-02-29T00:00:00.000000+00:00")
+                .unwrap_err()
+                .message,
+            "day is out of range for month"
+        );
+        assert_eq!(
+            parse("2025-13-01T00:00:00.000000+00:00")
+                .unwrap_err()
+                .message,
+            "month must be in 1..12"
+        );
     }
 }

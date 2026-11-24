@@ -1,9 +1,12 @@
-import { ChevronRight, CircleAlert, Edit3 } from "lucide-react";
+import { memo, useMemo } from "react";
+import ChevronRight from "lucide-react/icons/chevron-right";
+import CircleAlert from "lucide-react/icons/circle-alert";
+import Edit3 from "lucide-react/icons/edit-3";
 import { date, money } from "./api";
 import { Empty, Status } from "./Forms";
 import type { Account, Cycle, ExpenseCalculation } from "./types";
 
-export function AccountsTable({
+export const AccountsTable = memo(function AccountsTable({
   accounts,
   isAdmin,
   syncError,
@@ -34,6 +37,7 @@ export function AccountsTable({
   onSettle: (ids: number[], renew?: boolean) => void;
   onDetail: (cycleId: number) => void;
 }) {
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   return (
     <div className="table-shell">
       <table className="accounts-table">
@@ -71,7 +75,7 @@ export function AccountsTable({
                     <input
                       aria-label={`选择 ${a.name}`}
                       type="checkbox"
-                      checked={!!a.cycle && selected.includes(a.cycle.id)}
+                      checked={!!a.cycle && selectedSet.has(a.cycle.id)}
                       onChange={() => a.cycle && onToggle(a.cycle.id)}
                     />
                   )}
@@ -79,8 +83,8 @@ export function AccountsTable({
               )}
               <td data-label="账号" className="account-name">
                 <div className="account-title">
-                  <span className={"platform " + a.platform}>
-                    {a.platform.slice(0, 1).toUpperCase()}
+                  <span className={"platform" + (a.platform ? " " + a.platform : "")}>
+                    {(a.platform || "?").slice(0, 1).toUpperCase()}
                   </span>
                   <div>
                     <strong>{a.name}</strong>
@@ -89,7 +93,7 @@ export function AccountsTable({
                         ? "免费资源"
                         : a.kind === "paid" && a.cycle
                           ? `${!a.start_confirmed && a.start_mode === "date_estimate" ? "约 " + date(a.start_lower) + " — " + date(a.start_upper) : !a.start_confirmed && a.start_mode === "minute_estimate" ? "约 " + date(a.start_lower, "minute") : date(a.cycle.start)}${a.cycle.end ? " — " + date(a.cycle.end) : " 起"}`
-                          : a.platform}
+                          : a.platform || "—"}
                     </small>
                   </div>
                 </div>
@@ -153,9 +157,9 @@ export function AccountsTable({
               </td>
               <td data-label="状态">
                 {a.kind === "unconfigured" ? (
-                  <span className="status neutral">待配置</span>
+                  <span className="status">待配置</span>
                 ) : a.kind === "free" ? (
-                  <span className="status neutral">免费</span>
+                  <span className="status">免费</span>
                 ) : a.data_error ? (
                   <span className="status warning">
                     <CircleAlert size={12} />
@@ -257,9 +261,9 @@ export function AccountsTable({
       )}
     </div>
   );
-}
+});
 
-export function ExpensesList({
+export const ExpensesList = memo(function ExpensesList({
   items,
   actorId,
   isAdmin,
@@ -338,4 +342,4 @@ export function ExpensesList({
       {!items.length && <Empty text="暂无固定费用" />}
     </div>
   );
-}
+});

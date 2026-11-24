@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import {
-  ArrowUpRight,
-  CircleAlert,
-  CircleCheck,
-  Clock3,
-  ReceiptText,
-  X,
-} from "lucide-react";
+import ArrowUpRight from "lucide-react/icons/arrow-up-right";
+import CircleAlert from "lucide-react/icons/circle-alert";
+import CircleCheck from "lucide-react/icons/circle-check";
+import Clock3 from "lucide-react/icons/clock-3";
+import ReceiptText from "lucide-react/icons/receipt-text";
+import X from "lucide-react/icons/x";
 import {
   api,
   money,
@@ -853,32 +851,65 @@ export function StartConfirmation({
     "provided_time",
   );
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState("");
   const dirty =
     value !== initialValue || method !== "provided_time" || candidate !== null;
   const stateCallback = useRef(onStateChange);
   stateCallback.current = onStateChange;
+  const requestSeq = useRef(0);
+  const mounted = useRef(true);
   useEffect(() => {
     stateCallback.current?.({ busy, dirty });
   }, [busy, dirty]);
-  useEffect(() => () => stateCallback.current?.({ busy: false, dirty: false }), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      ++requestSeq.current;
+      stateCallback.current?.({ busy: false, dirty: false });
+    };
+  }, []);
   async function findCandidate() {
+    if (confirming) return;
+    let afterIso: string;
+    try {
+      afterIso = fromInput(value);
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
+    const token = ++requestSeq.current;
     setBusy(true);
     setError("");
     setCandidate(null);
     try {
-      setCandidate(
-        await api(
-          `/cycles/${calculation.cycle.id}/start-candidate?after=${encodeURIComponent(fromInput(value))}`,
-        ),
+      const result = await api<{
+        version: number;
+        anchor: string;
+        usage: { id: number; created_at: string } | null;
+      }>(
+        `/cycles/${calculation.cycle.id}/start-candidate?after=${encodeURIComponent(afterIso)}`,
       );
+      if (token === requestSeq.current) setCandidate(result);
     } catch (e) {
-      setError((e as Error).message);
+      if (token === requestSeq.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (token === requestSeq.current) setBusy(false);
     }
   }
   async function confirm() {
+    if (confirming) return;
+    let startIso: string;
+    try {
+      startIso =
+        method === "first_usage_after" ? candidate!.anchor : fromInput(value);
+    } catch (e) {
+      setError((e as Error).message);
+      return;
+    }
+    ++requestSeq.current;
+    setConfirming(true);
     setBusy(true);
     setError("");
     try {
@@ -887,20 +918,20 @@ export function StartConfirmation({
           method === "first_usage_after"
             ? candidate!.version
             : calculation.cycle.version,
-        start:
-          method === "first_usage_after"
-            ? candidate!.anchor
-            : fromInput(value),
+        start: startIso,
         method,
         ...(method === "first_usage_after"
           ? { source_usage_id: candidate!.usage!.id }
           : {}),
       });
-      await onConfirmed();
+      if (mounted.current) await onConfirmed();
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (mounted.current) {
+        setConfirming(false);
+        setBusy(false);
+      }
     }
   }
   return (
@@ -912,6 +943,9 @@ export function StartConfirmation({
             value={method}
             disabled={busy}
             onChange={(e) => {
+              if (confirming) return;
+              ++requestSeq.current;
+              setBusy(false);
               setMethod(e.target.value as typeof method);
               setCandidate(null);
             }}
@@ -927,8 +961,12 @@ export function StartConfirmation({
           <input
             type="datetime-local"
             step="1"
+            disabled={confirming}
             value={value}
             onChange={(e) => {
+              if (confirming) return;
+              ++requestSeq.current;
+              setBusy(false);
               setValue(e.target.value);
               setCandidate(null);
             }}

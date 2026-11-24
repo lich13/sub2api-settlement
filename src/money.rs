@@ -145,6 +145,81 @@ impl Decimal {
         }
         self.negative_zero = false;
     }
+    /// Add a decimal string in-place without allocating a temporary `BigInt`
+    /// for ordinary non-negative ASCII decimals (`<=38` digits).
+    pub fn add_str(&mut self, s: &str) -> Result<()> {
+        if self.scale >= 0 && !s.is_empty() && s.len() <= 39 {
+            let mut acc: u128 = 0;
+            let mut digits: usize = 0;
+            let mut frac: Option<usize> = None;
+            let mut plain = true;
+            for b in s.bytes() {
+                if b.is_ascii_digit() {
+                    if digits < 38 {
+                        acc = acc * 10 + u128::from(b - b'0');
+                        digits += 1;
+                        if let Some(f) = &mut frac {
+                            *f += 1;
+                        }
+                    } else {
+                        plain = false;
+                        break;
+                    }
+                } else if b == b'.' && frac.is_none() {
+                    frac = Some(0);
+                } else {
+                    plain = false;
+                    break;
+                }
+            }
+            if plain && digits > 0 {
+                let scale = frac.unwrap_or(0) as i64;
+                if acc == 0 {
+                    if scale > self.scale {
+                        let diff = scale - self.scale;
+                        if !self.coefficient.is_zero() {
+                            if diff <= 38 {
+                                self.coefficient *= 10u128.pow(diff as u32);
+                            } else {
+                                self.coefficient *= pow_cow(diff).as_ref();
+                            }
+                        }
+                        self.scale = scale;
+                    }
+                    self.negative_zero = false;
+                    return Ok(());
+                }
+                match self.scale.cmp(&scale) {
+                    std::cmp::Ordering::Equal => {
+                        self.coefficient += acc;
+                        self.negative_zero = false;
+                        return Ok(());
+                    }
+                    std::cmp::Ordering::Less if scale - self.scale <= 38 => {
+                        if !self.coefficient.is_zero() {
+                            self.coefficient *= 10u128.pow((scale - self.scale) as u32);
+                        }
+                        self.coefficient += acc;
+                        self.scale = scale;
+                        self.negative_zero = false;
+                        return Ok(());
+                    }
+                    std::cmp::Ordering::Greater if self.scale - scale <= 38 => {
+                        if let Some(scaled) =
+                            acc.checked_mul(10u128.pow((self.scale - scale) as u32))
+                        {
+                            self.coefficient += scaled;
+                            self.negative_zero = false;
+                            return Ok(());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.add(&Self::parse(s)?);
+        Ok(())
+    }
     pub fn subtract(&self, other: &Self) -> Self {
         let scale = self.scale.max(other.scale);
         Self {
@@ -161,27 +236,30 @@ impl Decimal {
             negative_zero: false,
         }
     }
-    pub fn rounded(&self, precision: u32) -> Self {
+    pub fn round_in_place(&mut self, precision: u32) {
         // 2^(3p) < 10^p: ordinary amounts need no decimal length check to
         // prove that they already fit the requested significant digits.
         if precision != 0 && self.coefficient.bits() <= u64::from(precision) * 3 {
-            return self.clone();
+            return;
         }
         let abs = self.coefficient.abs();
         let count = decimal_len_abs(&abs);
         if count <= precision as i64 {
-            return self.clone();
+            return;
         }
         let n = count - precision as i64;
         let d = pow_cow(n);
         let (q, r) = self.coefficient.div_rem(d.as_ref());
         let twice = r.abs() * 2;
         let up = &twice > d.as_ref() || (&twice == d.as_ref() && q.is_odd());
-        Self {
-            coefficient: q + if up { BigInt::one() } else { BigInt::zero() },
-            scale: self.scale - n,
-            negative_zero: false,
-        }
+        self.coefficient = q + if up { BigInt::one() } else { BigInt::zero() };
+        self.scale -= n;
+        self.negative_zero = false;
+    }
+    pub fn rounded(&self, precision: u32) -> Self {
+        let mut copy = self.clone();
+        copy.round_in_place(precision);
+        copy
     }
     pub fn fen_half_up(&self) -> Result<i64> {
         round_cents(&self.rational())
@@ -446,5 +524,39 @@ mod tests {
         assert_eq!(Decimal::parse("1e-18").unwrap().to_string(), "1E-18");
         assert_eq!(Decimal::parse("-0.00e5").unwrap().to_string(), "-0E+3");
         assert_eq!(Decimal::parse("0000.0000").unwrap().to_string(), "0.0000");
+
+        let samples = [
+            "0",
+            "0.00",
+            "0.00000000",
+            "-0.0",
+            "12",
+            "12.340",
+            ".5",
+            "5.",
+            "0.00000001",
+            "1e-18",
+            "999999999999999999999999999999.12345678",
+            &format!("{d39}.0001"),
+        ];
+        for first in samples {
+            for second in samples {
+                let mut fast = Decimal::zero();
+                fast.add_str(first).unwrap();
+                fast.add_str(second).unwrap();
+                let mut reference = Decimal::zero();
+                reference.add(&Decimal::parse(first).unwrap());
+                reference.add(&Decimal::parse(second).unwrap());
+                assert_eq!(fast, reference, "{first} + {second}");
+            }
+        }
+        for bad in ["", ".", "1.2.3", "-0.01", "nan", "1e99999"] {
+            let mut d = Decimal::zero();
+            assert_eq!(
+                d.add_str(bad).unwrap_err().message,
+                Decimal::parse(bad).unwrap_err().message,
+                "bad={bad:?}"
+            );
+        }
     }
 }

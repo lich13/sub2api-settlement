@@ -116,4 +116,49 @@ describe("useAccountState", () => {
     });
     expect(current().state).toMatchObject({ revision: "2026-10-02T00:00:00.000Z", accounts: [{ id: 2, name: "Newest" }], active_ids: [2] });
   });
+
+  it("clears a transient poll error when the same revision recovers and preserves state reference on unchanged polls", async () => {
+    vi.useFakeTimers();
+    const snapshot = () => ({
+      revision: "2026-10-01T00:00:00.000Z",
+      accounts: [{ id: 1, name: "Alpha" }],
+      active_ids: [1],
+      checked_at: "2026-10-01T00:00:00.000Z",
+      error: null,
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(snapshot()))
+      .mockRejectedValueOnce(new Error("temporary upstream timeout"))
+      .mockResolvedValueOnce(response(snapshot()))
+      .mockResolvedValueOnce(response(snapshot()));
+    vi.stubGlobal("fetch", fetcher);
+
+    await mount(9);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(current().state?.error).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(current().state).toMatchObject({
+      revision: "2026-10-01T00:00:00.000Z",
+      error: "账号状态核对失败，暂保留最近列表",
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const recovered = current().state;
+    expect(recovered?.error).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    expect(Object.is(current().state, recovered)).toBe(true);
+  });
 });

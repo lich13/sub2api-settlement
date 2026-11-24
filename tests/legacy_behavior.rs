@@ -2178,6 +2178,18 @@ async fn route_boundaries_enforce_404_405_307_422_and_security_headers() {
     let mut cfg = support::legacy::config(temp.path(), fixture_path);
     cfg.origin = origin.clone();
     cfg.verify_url = format!("http://{verify_addr}");
+    std::fs::create_dir_all(cfg.assets.join("assets/__qa__")).unwrap();
+    std::fs::write(cfg.assets.join("index.html"), "<!doctype html>").unwrap();
+    std::fs::write(
+        cfg.assets.join("assets/index-hashed123.js"),
+        "console.log(1);",
+    )
+    .unwrap();
+    std::fs::write(
+        cfg.assets.join("assets/__qa__/index.html"),
+        "<!doctype html>",
+    )
+    .unwrap();
     let app = App::new(cfg).await.unwrap();
     app.service.sync(true).await.unwrap();
     let router = app
@@ -2298,6 +2310,38 @@ async fn route_boundaries_enforce_404_405_307_422_and_security_headers() {
             resp.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
             "{invalid_url}"
+        );
+    }
+
+    // 4. Static hashed assets get 1-year immutable Cache-Control on 200, while 404, __qa__ and HTML stay no-store.
+    for (asset_path, expected_status, expected_cache) in [
+        (
+            "/settlement/assets/index-hashed123.js",
+            StatusCode::OK,
+            "public, max-age=31536000, immutable",
+        ),
+        (
+            "/settlement/assets/missing-asset.js",
+            StatusCode::NOT_FOUND,
+            "no-store",
+        ),
+        (
+            "/settlement/assets/__qa__/index.html",
+            StatusCode::OK,
+            "no-store",
+        ),
+        ("/settlement/", StatusCode::OK, "no-store"),
+    ] {
+        let resp = client
+            .get(format!("{origin}{asset_path}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), expected_status, "{asset_path}");
+        assert_eq!(
+            resp.headers()["Cache-Control"],
+            expected_cache,
+            "{asset_path}"
         );
     }
 
@@ -2475,4 +2519,115 @@ async fn concurrent_idempotent_replays_and_conflicting_mutations_preserve_exclus
     assert_eq!(pay_1.is_ok() as u8 + pay_2.is_ok() as u8, 1);
     assert_eq!(pay_1.err().or_else(|| pay_2.err()).unwrap().status, 409);
     assert_eq!(harness.rows("netting_payments").await.len(), 1);
+}
+
+#[tokio::test]
+async fn bill_previews_cap_retention_at_four_compact_rows_and_preserve_stale_409() {
+    let harness = Harness::new().await;
+    let cycle = create_cycle(
+        &harness,
+        &cycle_payload(100, "10.00", 2, START),
+        "cap-bill-cycle",
+    )
+    .await;
+    let cid = cycle["id"].as_i64().unwrap();
+    let mut ids = Vec::new();
+    for i in 1..=6 {
+        let csv = csv_text(&[(
+            "2025-01-10T00:00:00+00:00",
+            &format!("{i}.00"),
+            "fixture-model",
+            10,
+            20,
+            "fixture-2",
+        )]);
+        let p = bill_preview(&harness, cid, &csv, &format!("cap-{i}.csv")).await;
+        assert!(
+            p.get("matched").is_none(),
+            "compact preview omits matched array"
+        );
+        ids.push(p["id"].as_str().unwrap().to_owned());
+    }
+    let mut db = harness.app.service.store.read().await.unwrap();
+    let retained = settlement::store::all(
+        &mut db,
+        "SELECT id, payload FROM bill_previews ORDER BY rowid",
+        &[],
+    )
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+    assert_eq!(
+        retained.len(),
+        4,
+        "at most 4 recent previews retained per cycle/actor"
+    );
+    for row in &retained {
+        let payload: Value = serde_json::from_str(row["payload"].as_str().unwrap()).unwrap();
+        assert!(payload["result"].get("matched").is_none());
+    }
+    // Oldest #1 and #2 were pruned (404); #3 (stale) and #6 (newest) are still retained.
+    let ver = cycle_row(&harness, cid).await["version"].clone();
+    assert_eq!(
+        prepare_bill(
+            &harness.app,
+            cid,
+            &bill_payload(ver.clone(), &json!(ids[0]))
+        )
+        .await
+        .err()
+        .unwrap()
+        .status,
+        404
+    );
+    let stale_payload = bill_payload(ver.clone(), &json!(ids[2]));
+    let latest_payload = bill_payload(ver, &json!(ids[5]));
+    let stale_prep = prepare_bill(&harness.app, cid, &stale_payload)
+        .await
+        .unwrap();
+    let latest_prep = prepare_bill(&harness.app, cid, &latest_payload)
+        .await
+        .unwrap();
+    confirm_bill_on(
+        &harness.app,
+        cid,
+        &latest_payload,
+        latest_prep,
+        "cap-confirm-latest",
+    )
+    .await
+    .unwrap();
+    let stale_err = confirm_bill_on(
+        &harness.app,
+        cid,
+        &stale_payload,
+        stale_prep,
+        "cap-confirm-stale",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(stale_err.status, 409);
+
+    let settled_prev = preview(&harness, &[cid], &[], END).await;
+    settle_preview(
+        &harness,
+        settled_prev["id"].as_str().unwrap(),
+        "cap-settle",
+        json!([]),
+    )
+    .await
+    .unwrap();
+    let snap: Value = serde_json::from_str(
+        harness.rows("settlements").await[0]["snapshot"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    for stripped in ["matched", "unmatched", "outside", "weights"] {
+        assert!(
+            snap["bill"].get(stripped).is_none(),
+            "{stripped} stripped from snapshot"
+        );
+    }
+    assert_eq!(snap["bill"]["matched_count"], 1);
 }

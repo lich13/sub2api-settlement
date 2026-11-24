@@ -415,9 +415,15 @@ async fn sync_selection_rechecks_old_rows_in_the_entire_selected_range() {
     assert!(usage_row(&app, 4).await.is_some());
     assert_eq!(usage_row(&app, 3).await.unwrap().1, 101);
     assert_eq!(
-        ids(&app, "SELECT id FROM rust_sync_stage ORDER BY id").await,
-        vec![1, 2, 4],
-        "selected sync must scan all records in-range, including old IDs"
+        ids(&app, "SELECT id FROM rust_source_presence ORDER BY id").await,
+        vec![1, 2, 3, 4],
+        "selected sync must record in-range IDs in presence while preserving out-of-range IDs"
+    );
+    assert!(
+        ids(&app, "SELECT id FROM rust_sync_stage ORDER BY id")
+            .await
+            .is_empty(),
+        "staging table must be cleared once changes are published"
     );
     close_app(&app).await;
 }

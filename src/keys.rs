@@ -3,12 +3,11 @@ use crate::{
     json::{hash, text},
     store::{self, Store},
 };
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::BTreeMap,
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -17,8 +16,10 @@ const KEYRING: &str = "session.keys.json";
 const PENDING: &str = "session.keys.pending.json";
 
 /// Shared by the service and offline maintenance commands. The file handle is
-/// retained for their entire lifetime; a crashed process releases the OS lock.
-pub struct LedgerLock(File);
+/// retained for their entire lifetime; dropping or crashing releases the OS lock.
+pub struct LedgerLock {
+    _file: File,
+}
 impl LedgerLock {
     pub fn acquire(directory: &Path) -> Result<Self> {
         std::fs::create_dir_all(directory)?;
@@ -26,14 +27,11 @@ impl LedgerLock {
             .create(true)
             .truncate(false)
             .open(directory.join("settlement.lock"))?;
-        file.try_lock_exclusive()
-            .map_err(|_| Error::conflict("账本正在使用，请先停止结算服务"))?;
-        Ok(Self(file))
-    }
-}
-impl Drop for LedgerLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
+        file.try_lock().map_err(|error| match error {
+            TryLockError::WouldBlock => Error::conflict("账本正在使用，请先停止结算服务"),
+            TryLockError::Error(io_error) => io_error.into(),
+        })?;
+        Ok(Self { _file: file })
     }
 }
 

@@ -523,75 +523,77 @@ enum Route<'a> {
 }
 impl<'a> Route<'a> {
     fn parse(path: &'a str) -> Option<Self> {
-        Some(
-            match path
-                .trim_end_matches('/')
-                .split('/')
-                .collect::<Vec<_>>()
-                .as_slice()
-            {
-                ["me"] => Self::Me,
-                ["overview"] => Self::Overview,
-                ["catalog"] => Self::Catalog,
-                ["history"] => Self::History,
-                ["inbox"] => Self::Inbox,
-                ["inbox", "read"] => Self::InboxRead,
-                ["audit"] => Self::Audit,
-                ["audit.csv"] => Self::AuditCsv,
-                ["operations", "status"] => Self::OperationsStatus,
-                ["accounts", "state"] => Self::AccountsState,
-                ["accounts", aid, "free"] => Self::AccountFree(aid),
-                ["accounts", aid, "upgrade-paid"] => Self::AccountUpgradePaid(aid),
-                ["accounts", aid, "deletion-scope"] => Self::DeletionScope(aid),
-                ["account-deletions"] => Self::AccountDeletions,
-                ["account-deletions", jid, "retry"] => Self::DeletionRetry(jid),
-                ["account-deletions", jid, "cancel"] => Self::DeletionCancel(jid),
-                ["vendors"] => Self::Vendors,
-                ["vendors", vid, "members"] => Self::VendorMembers(vid),
-                ["vendors", vid, "renew"] => Self::VendorRenew(vid),
-                ["vendors", vid, "archive"] => Self::VendorArchive(vid),
-                ["vendor-periods", pid] => Self::VendorPeriod(pid),
-                ["vendor-periods", pid, "start-confirm"] => Self::VendorStartConfirm(pid),
-                ["vendor-periods", pid, "bill-previews"] => Self::VendorBillPreviews(pid),
-                ["vendor-periods", pid, "bill-confirm"] => Self::VendorBillConfirm(pid),
-                ["vendor-periods", pid, "void"] => Self::VendorPeriodVoid(pid),
-                [
-                    "vendor-periods",
-                    pid,
-                    "bill-previews",
-                    bpid,
-                    "unmatched.csv",
-                ] => Self::UnmatchedCsv {
-                    vendor: true,
-                    cycle_id: pid,
-                    preview_id: bpid,
-                },
-                ["cycles"] => Self::Cycles,
-                ["cycles", cid] => Self::Cycle(cid),
-                ["cycles", cid, "start-candidate"] => Self::StartCandidate(cid),
-                ["cycles", cid, "start-confirm"] => Self::CycleStartConfirm(cid),
-                ["cycles", cid, "bill-previews"] => Self::CycleBillPreviews(cid),
-                ["cycles", cid, "bill-confirm"] => Self::CycleBillConfirm(cid),
-                ["cycles", cid, "bill-previews", bpid, "unmatched.csv"] => Self::UnmatchedCsv {
-                    vendor: false,
-                    cycle_id: cid,
-                    preview_id: bpid,
-                },
-                ["previews"] => Self::Previews,
-                ["expenses"] => Self::Expenses,
-                ["expenses", eid] => Self::Expense(eid),
-                ["settlements"] => Self::Settlements,
-                ["settlements", sid, "void"] => Self::SettlementVoid(sid),
-                ["netting", "balances"] => Self::NettingBalances,
-                ["netting", "balances", a, b] => Self::NettingPair(a, b),
-                ["netting", "payments"] => Self::NettingPayments,
-                ["netting", "payments", pid] => Self::NettingPayment(pid),
-                ["orders"] => Self::Orders,
-                ["orders", oid] => Self::Order(oid),
-                ["orders", oid, "actions"] => Self::OrderActions(oid),
-                _ => return None,
+        let mut parts = [""; 5];
+        let mut len = 0;
+        for segment in path.trim_end_matches('/').split('/') {
+            if len == parts.len() {
+                return None;
+            }
+            parts[len] = segment;
+            len += 1;
+        }
+        Some(match &parts[..len] {
+            ["me"] => Self::Me,
+            ["overview"] => Self::Overview,
+            ["catalog"] => Self::Catalog,
+            ["history"] => Self::History,
+            ["inbox"] => Self::Inbox,
+            ["inbox", "read"] => Self::InboxRead,
+            ["audit"] => Self::Audit,
+            ["audit.csv"] => Self::AuditCsv,
+            ["operations", "status"] => Self::OperationsStatus,
+            ["accounts", "state"] => Self::AccountsState,
+            ["accounts", aid, "free"] => Self::AccountFree(aid),
+            ["accounts", aid, "upgrade-paid"] => Self::AccountUpgradePaid(aid),
+            ["accounts", aid, "deletion-scope"] => Self::DeletionScope(aid),
+            ["account-deletions"] => Self::AccountDeletions,
+            ["account-deletions", jid, "retry"] => Self::DeletionRetry(jid),
+            ["account-deletions", jid, "cancel"] => Self::DeletionCancel(jid),
+            ["vendors"] => Self::Vendors,
+            ["vendors", vid, "members"] => Self::VendorMembers(vid),
+            ["vendors", vid, "renew"] => Self::VendorRenew(vid),
+            ["vendors", vid, "archive"] => Self::VendorArchive(vid),
+            ["vendor-periods", pid] => Self::VendorPeriod(pid),
+            ["vendor-periods", pid, "start-confirm"] => Self::VendorStartConfirm(pid),
+            ["vendor-periods", pid, "bill-previews"] => Self::VendorBillPreviews(pid),
+            ["vendor-periods", pid, "bill-confirm"] => Self::VendorBillConfirm(pid),
+            ["vendor-periods", pid, "void"] => Self::VendorPeriodVoid(pid),
+            [
+                "vendor-periods",
+                pid,
+                "bill-previews",
+                bpid,
+                "unmatched.csv",
+            ] => Self::UnmatchedCsv {
+                vendor: true,
+                cycle_id: pid,
+                preview_id: bpid,
             },
-        )
+            ["cycles"] => Self::Cycles,
+            ["cycles", cid] => Self::Cycle(cid),
+            ["cycles", cid, "start-candidate"] => Self::StartCandidate(cid),
+            ["cycles", cid, "start-confirm"] => Self::CycleStartConfirm(cid),
+            ["cycles", cid, "bill-previews"] => Self::CycleBillPreviews(cid),
+            ["cycles", cid, "bill-confirm"] => Self::CycleBillConfirm(cid),
+            ["cycles", cid, "bill-previews", bpid, "unmatched.csv"] => Self::UnmatchedCsv {
+                vendor: false,
+                cycle_id: cid,
+                preview_id: bpid,
+            },
+            ["previews"] => Self::Previews,
+            ["expenses"] => Self::Expenses,
+            ["expenses", eid] => Self::Expense(eid),
+            ["settlements"] => Self::Settlements,
+            ["settlements", sid, "void"] => Self::SettlementVoid(sid),
+            ["netting", "balances"] => Self::NettingBalances,
+            ["netting", "balances", a, b] => Self::NettingPair(a, b),
+            ["netting", "payments"] => Self::NettingPayments,
+            ["netting", "payments", pid] => Self::NettingPayment(pid),
+            ["orders"] => Self::Orders,
+            ["orders", oid] => Self::Order(oid),
+            ["orders", oid, "actions"] => Self::OrderActions(oid),
+            _ => return None,
+        })
     }
     fn methods(self) -> (&'static [&'static str], &'static str) {
         match self {
@@ -647,23 +649,20 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         .requests
         .try_acquire()
         .map_err(|_| Error::unavailable())?;
-    let method = request.method().as_str().to_owned();
-    let path = request
-        .uri()
-        .path()
-        .strip_prefix("/settlement/api/v1/")
-        .unwrap_or("")
-        .to_owned();
-    let Some(route) = Route::parse(&path) else {
+    let (parts, raw_body) = request.into_parts();
+    let method = parts.method.as_str();
+    let raw_path = parts.uri.path();
+    let path = raw_path.strip_prefix("/settlement/api/v1/").unwrap_or("");
+    let Some(route) = Route::parse(path) else {
         return Err(Error::new(404, "Not Found"));
     };
     if path.ends_with('/') {
         let target = format!(
             "{}{}{}",
             app.config.origin,
-            request.uri().path().trim_end_matches('/'),
-            request
-                .uri()
+            raw_path.trim_end_matches('/'),
+            parts
+                .uri
                 .query()
                 .map(|q| format!("?{q}"))
                 .unwrap_or_default()
@@ -671,16 +670,20 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         return Ok(Redirect::temporary(&target).into_response());
     }
     let (methods, allow) = route.methods();
-    if !methods.contains(&method.as_str()) {
+    if !methods.contains(&method) {
         let mut response = Error::new(405, "Method Not Allowed").into_response();
         response
             .headers_mut()
             .insert("Allow", HeaderValue::from_static(allow));
         return Ok(response);
     }
-    let query = params(&request);
-    let headers = request.headers().clone();
-    let (actor, sid) = app.authenticate(&headers, method != "GET").await?;
+    let query: BTreeMap<String, String> = parts
+        .uri
+        .query()
+        .and_then(|s| serde_urlencoded::from_str(s).ok())
+        .unwrap_or_default();
+    let headers = &parts.headers;
+    let (actor, sid) = app.authenticate(headers, method != "GET").await?;
     if method != "GET" {
         app.limiter.write(int(&actor, "id")).await?;
     }
@@ -733,7 +736,7 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         )
             .into_response());
     }
-    let bytes = axum::body::to_bytes(request.into_body(), 20 * 1024 * 1024)
+    let bytes = axum::body::to_bytes(raw_body, 20 * 1024 * 1024)
         .await
         .map_err(|_| Error::new(413, "请求内容过大"))?;
     let body = if bytes.is_empty() {
@@ -742,7 +745,7 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
         serde_json::from_slice(&bytes).map_err(|_| Error::invalid("请求 JSON 无效"))?
     };
     let result = app
-        .dispatch(&method, route, &query, &headers, body, (&actor, &sid))
+        .dispatch(method, route, &query, headers, body, (&actor, &sid))
         .await;
     if method != "GET" && result.as_ref().is_err_and(|error| error.status == 409) {
         app.metrics.conflict();
@@ -750,9 +753,21 @@ async fn api(State(app): State<App>, request: Request) -> Result<Response> {
     Ok(Json(result?).into_response())
 }
 async fn security(request: Request, next: Next) -> Response {
+    let immutable_asset = request
+        .uri()
+        .path()
+        .strip_prefix("/settlement/assets/")
+        .is_some_and(|rest| !rest.is_empty() && !rest.starts_with("__qa__/") && rest != "__qa__");
     let mut response = next.run(request).await;
+    let status = response.status();
+    let cache_control =
+        if immutable_asset && (status.is_success() || status == StatusCode::NOT_MODIFIED) {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-store"
+        };
     for (k, v) in [
-        ("Cache-Control", "no-store"),
+        ("Cache-Control", cache_control),
         ("Referrer-Policy", "no-referrer"),
         ("X-Content-Type-Options", "nosniff"),
         ("X-Frame-Options", "SAMEORIGIN"),
@@ -771,10 +786,72 @@ async fn security(request: Request, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{Router, middleware, routing::get};
 
     #[test]
     fn missing_entity_is_a_bad_request() {
         assert_eq!(required_entity(None).unwrap_err().status, 400);
         assert_eq!(required_entity(Some(42)).unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn asset_cache_control_is_immutable_only_for_successful_non_qa_assets() {
+        let router = Router::new()
+            .route(
+                "/settlement/assets/index-abc123.js",
+                get(|| async { (StatusCode::OK, "ok") }),
+            )
+            .route(
+                "/settlement/assets/vendor-def456.js",
+                get(|| async { StatusCode::NOT_MODIFIED }),
+            )
+            .route(
+                "/settlement/assets/__qa__/probe.js",
+                get(|| async { (StatusCode::OK, "qa") }),
+            )
+            .route(
+                "/settlement/index.html",
+                get(|| async { (StatusCode::OK, "html") }),
+            )
+            .layer(middleware::from_fn(security));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let client = reqwest::Client::new();
+        let cache_for = |path: &'static str| {
+            let client = client.clone();
+            async move {
+                client
+                    .get(format!("http://{addr}{path}"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .headers()
+                    .get("Cache-Control")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned()
+            }
+        };
+
+        assert_eq!(
+            cache_for("/settlement/assets/index-abc123.js").await,
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(
+            cache_for("/settlement/assets/vendor-def456.js").await,
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(
+            cache_for("/settlement/assets/__qa__/probe.js").await,
+            "no-store"
+        );
+        assert_eq!(cache_for("/settlement/assets/missing.js").await, "no-store");
+        assert_eq!(cache_for("/settlement/index.html").await, "no-store");
+        server.abort();
     }
 }

@@ -157,7 +157,9 @@ impl Checkpoint {
             q.push_values(chunk, |mut row, (account, root)| {
                 row.push_bind(**account).push_bind(**root);
             });
-            q.push(" ON CONFLICT(account_id) DO UPDATE SET root_id=excluded.root_id");
+            q.push(
+                " ON CONFLICT(account_id) DO UPDATE SET root_id=excluded.root_id WHERE rust_sync_roots.root_id IS NOT excluded.root_id",
+            );
             q.build().execute(&mut *db).await?;
         }
         Ok(())

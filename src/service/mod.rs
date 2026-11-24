@@ -99,11 +99,15 @@ impl Service {
             }
             return Ok(serde_json::from_str(text(&p, "response"))?);
         }
-        self.inventory.persist(&mut db).await?;
         let (kind, id) = action
             .split_once(':')
             .map(|(a, b)| (a, b.parse::<i64>().unwrap_or(0)))
             .unwrap_or((action, 0));
+        let persisted_seq = if self.inventory.needs_persist().await {
+            Some(self.inventory.persist_seq(&mut db).await?)
+        } else {
+            None
+        };
         let result = match kind {
             "add-vendor-members" => self.add_vendor_members(&mut db, actor, id, payload).await?,
             "renew-vendor" => self.renew_vendor(&mut db, actor, id, payload).await?,
@@ -185,6 +189,9 @@ impl Service {
         )
         .await?;
         db.commit().await?;
+        if let Some(seq) = persisted_seq {
+            self.inventory.mark_persisted(seq).await;
+        }
         Ok(result)
     }
     pub async fn fresh(db: &mut Db) -> Result<()> {

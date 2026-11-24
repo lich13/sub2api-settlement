@@ -1,6 +1,6 @@
 import { ManualBillingEditor, canonicalManualBasis, useManualBilling } from "./ManualBilling";
-import React, { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import ChevronDown from "lucide-react/icons/chevron-down";
 import { api, money, costInput, amountPattern, inputDate, fromInput, date, consumption, billedMoney, exportUnmatchedCsv, readCsvFile } from "./api";
 import { FormError } from "./Forms";
 import { Modal } from "./Modal";
@@ -16,27 +16,37 @@ export type GroupAction = "create" | "edit" | "add" | "renew";
 export function currentPeriod(v: Vendor) { return v.periods.find(p=>p.status==="open" && !p.end) || v.periods.find(p=>p.status==="open"); }
 function groupCandidates(accounts: Account[]) { return accounts.filter(a=>a.kind==="unconfigured" && !a.deleted && !a.vendor_id && a.cycle?.status!=="open"); }
 export function visibleVendorGroups(vendors: Vendor[], accounts: Account[], query: string, filter: string) {
+  const q = query.trim().toLowerCase();
+  const accountById = q ? new Map(accounts.map(a => [a.id, a])) : null;
   return vendors
     .filter(v => !v.archived_at && (filter === "all" || filter === "paid" || (filter === "open" && currentPeriod(v))))
     .flatMap(vendor => {
       const period = currentPeriod(vendor), last = period || vendor.periods[0];
       const members = (vendor.current_members || last?.members?.map(c => ({ account_id: c.account_id, name: c.current_name || c.name, account_deleted: c.account_deleted, renewal_excluded: false })) || []).filter(m => !m.account_deleted);
-      if (query && !`${vendor.name} ${members.map(m => accounts.find(a => a.id === m.account_id)?.name || m.name).join(" ")}`.toLowerCase().includes(query.toLowerCase())) return [];
+      if (q && !`${vendor.name} ${members.map(m => accountById!.get(m.account_id)?.name || m.name).join(" ")}`.toLowerCase().includes(q)) return [];
       return [{ vendor, period, last, members }];
     });
 }
 
-export function VendorGroups({vendors,accounts,admin,query,filter,groups,onSettle,onManage,onDetail,totals,selected=[],onToggle}:{vendors:Vendor[];accounts:Account[];admin:boolean;query:string;filter:string;groups?:ReturnType<typeof visibleVendorGroups>;onSettle:(ids:number[],renew:boolean)=>void;onManage:(id:number,action?:Exclude<GroupAction,"create">)=>void;onDetail:(id:number)=>void;totals?:Overview["vendor_totals"];selected?:number[];onToggle?:(ids:number[])=>void}) {
-  const visible = groups ?? visibleVendorGroups(vendors, accounts, query, filter);
+export const VendorGroups = memo(function VendorGroups({vendors,accounts,admin,query,filter,groups,onSettle,onManage,onDetail,totals,selected=[],onToggle}:{vendors:Vendor[];accounts:Account[];admin:boolean;query:string;filter:string;groups?:ReturnType<typeof visibleVendorGroups>;onSettle:(ids:number[],renew:boolean)=>void;onManage:(id:number,action?:Exclude<GroupAction,"create">)=>void;onDetail:(id:number)=>void;totals?:Overview["vendor_totals"];selected?:number[];onToggle?:(ids:number[])=>void}) {
+  const visible = useMemo(() => groups ?? visibleVendorGroups(vendors, accounts, query, filter), [groups, vendors, accounts, query, filter]);
+  const accountById = useMemo(() => new Map(accounts.map(a => [a.id, a])), [accounts]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const totalsByPeriod = useMemo(
+    () => new Map((totals || []).map(t => [t.id, new Map(t.members.map(m => [m.cycle_id, m]))])),
+    [totals],
+  );
   return <div className="vendor-groups">{visible.map(({ vendor: v, period: p, last, members })=>{
+    const cycleByAccount = new Map((last?.members || []).map(c => [c.account_id, c]));
+    const periodTotals = p ? totalsByPeriod.get(p.id) : undefined;
     return <details className="vendor-group" key={v.id}>
-      <summary>{admin&&onToggle&&p&&<input type="checkbox" aria-label={`选择账号组 ${v.name}`} checked={!!p.members?.length&&p.members.every(c=>selected.includes(c.id))} onClick={e=>e.stopPropagation()} onChange={()=>onToggle(p.members?.map(c=>c.id)||[])}/>}
+      <summary>{admin&&onToggle&&p&&<input type="checkbox" aria-label={`选择账号组 ${v.name}`} checked={!!p.members?.length&&p.members.every(c=>selectedSet.has(c.id))} onClick={e=>e.stopPropagation()} onChange={()=>onToggle(p.members?.map(c=>c.id)||[])}/>}
         <div className="vendor-heading"><strong>{v.name}</strong><small>{members.length} 个账号 · {p?`${date(p.start)} 起 · ${p.start_confirmed?"进行中":"起点待确认"}`:"已结算／待续费"}</small></div>
-        <div className="vendor-total"><small>{p?"当期总成本":"上期总成本"}</small><b className="amount">{money(last?.cost_fen??v.cost_fen)}</b></div><span>{last?.creditor_name||v.creditor_name}</span><ChevronDown size={16}/>
+        <div className="vendor-total"><small>{p?"当期总成本":"上期总成本"}</small><b className="amount">{money(last?.cost_fen??v.cost_fen)}</b></div><span>{last?.creditor_name||v.creditor_name||"—"}</span><ChevronDown size={16}/>
       </summary>
       <div className="vendor-members">{members.map(m=>{
-        const c=last?.members?.find(c=>c.account_id===m.account_id), a=accounts.find(a=>a.id===m.account_id);
-        const personal=totals?.find(t=>t.id===p?.id)?.members.find(x=>x.cycle_id===c?.id);
+        const c=cycleByAccount.get(m.account_id), a=accountById.get(m.account_id);
+        const personal=c ? periodTotals?.get(c.id) : undefined;
         const pending=!!p && (personal?.allocation_pending ?? a?.allocation_pending ?? true);
         const matchedCycle=c && a?.cycle?.id===c.id;
         const share=m.renewal_excluded?"已选择删除，不续费":!c?"下期生效":pending?"待账单拆分":!matchedCycle||a?.data_error?"—":money(personal?.amount_fen??a?.mine?.amount_fen??0);
@@ -46,7 +56,7 @@ export function VendorGroups({vendors,accounts,admin,query,filter,groups,onSettl
       {admin&&<div className="row-actions vendor-actions"><button className="text-button" onClick={()=>onManage(v.id)}>管理账号组</button>{!!last&&<button className="text-button" onClick={()=>onManage(v.id,"add")}>添加账号</button>}{p?<><button className="text-button" onClick={()=>onManage(v.id,"edit")}>修改组成本</button><button className="text-button" onClick={()=>onSettle(p.members?.map(c=>c.id)||[],false)}>整组结算</button><button className="text-button primary-text" onClick={()=>onSettle(p.members?.map(c=>c.id)||[],true)}>结算并续费</button></>:!!last&&<button className="text-button primary-text" onClick={()=>onManage(v.id,"renew")}>整组续费</button>}</div>}
     </details>;
   })}</div>;
-}
+});
 
 export function VendorManager({vendors,accounts,catalog,close,refresh,initialVendorId,initialAction}:{vendors:Vendor[];accounts:Account[];catalog:Catalog;close:()=>void;refresh:()=>Promise<void>;initialVendorId?:number;initialAction?:GroupAction}) {
   const initial=initialAction==="create"?undefined:vendors.find(v=>v.id===initialVendorId&&!v.archived_at), initialPeriod=initial && (currentPeriod(initial)||initial.periods[0]);
@@ -61,8 +71,11 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
   const [voidCandidate,setVoidCandidate]=useState<VendorPeriod|null>(null);const [archiveCandidate,setArchiveCandidate]=useState<Vendor|null>(null);
   const action=editing?.action, period=editing?.period;
   const activeVendors=vendors.filter(v=>!v.archived_at&&(!initialVendorId||v.id===initialVendorId));
-  const available=groupCandidates(accounts).filter(a=>!search||`${a.name} ${a.id}`.toLowerCase().includes(search.toLowerCase()));
-  const allAvailableSelected=available.length>0&&available.every(a=>selected.includes(a.id));
+  const selectedSet=new Set(selected);
+  const accountById=new Map(accounts.map(a=>[a.id,a]));
+  const searchQuery=search.trim().toLowerCase();
+  const available=groupCandidates(accounts).filter(a=>!searchQuery||`${a.name} ${a.id}`.toLowerCase().includes(searchQuery));
+  const allAvailableSelected=available.length>0&&available.every(a=>selectedSet.has(a.id));
   function edit(v:Vendor,action:Exclude<GroupAction,"create">="edit",p?:VendorPeriod){const current=p||currentPeriod(v);const last=current||v.periods[0];setEditing({vendor:v,period:current,action});setCost(costInput(last?.cost_fen??v.cost_fen));setCreditor(last?.creditor_id||v.creditor_id||catalog.users[0]?.id||0);setOriginalStart(current?.start||"");setStart(inputDate(current?.start));setMode(current?.start_mode||"exact");setSelected([]);setSearch("");setDirty(false);setError("");}
   async function save(e:React.FormEvent){
     e.preventDefault();if(action!=="add"&&!amountPattern.test(cost)){setError("金额最多保留两位小数");return;}
@@ -83,13 +96,13 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
   return <Modal title={title} wide busy={busy} dirty={dirty || selected.length > 0} close={close}><div className="form">
     <FormError error={error} />
     {voidCandidate&&<section className="vendor-confirm-panel"><strong>作废 {voidCandidate.name} 的整组结算？</strong><p className="field-hint">本期全部待付款订单将一并作废，已有续费周期保留。</p><div className="row-actions"><button type="button" className="button" disabled={busy} onClick={()=>setVoidCandidate(null)}>取消</button><button type="button" className="button danger" disabled={busy} onClick={()=>voidPeriod(voidCandidate)}>确认整组作废</button></div></section>}
-    {archiveCandidate&&<section className="vendor-confirm-panel"><strong>归档 {archiveCandidate.name}？</strong><p className="field-hint">以下成员将恢复待配置，历史账目保留。</p><p>{archiveCandidate.current_members?.filter(a=>!a.account_deleted).map(a=>accounts.find(x=>x.id===a.account_id)?.name||a.name).join("、")||"无存续成员"}</p><div className="row-actions"><button type="button" className="button" disabled={busy} onClick={()=>setArchiveCandidate(null)}>取消</button><button type="button" className="button danger" disabled={busy} onClick={()=>archive(archiveCandidate)}>确认归档</button></div></section>}
+    {archiveCandidate&&<section className="vendor-confirm-panel"><strong>归档 {archiveCandidate.name}？</strong><p className="field-hint">以下成员将恢复待配置，历史账目保留。</p><p>{archiveCandidate.current_members?.filter(a=>!a.account_deleted).map(a=>accountById.get(a.account_id)?.name||a.name).join("、")||"无存续成员"}</p><div className="row-actions"><button type="button" className="button" disabled={busy} onClick={()=>setArchiveCandidate(null)}>取消</button><button type="button" className="button danger" disabled={busy} onClick={()=>archive(archiveCandidate)}>确认归档</button></div></section>}
     {!editing?<>{activeVendors.map(v=>{const p=currentPeriod(v);return <section className="allocation" key={v.id}><div className="allocation-head"><div><strong>{v.name}</strong></div><strong className="amount">{money(p?.cost_fen??v.periods[0]?.cost_fen??v.cost_fen)}</strong></div><div className="row-actions">{!!v.periods.length&&<button className="text-button" onClick={()=>edit(v,"add")}>添加账号</button>}{!v.periods.some(p=>p.status==="open")&&<>{!!v.periods.length&&<button className="text-button" onClick={()=>edit(v,"renew")}>整组续费</button>}<button className="text-button" disabled={busy} onClick={()=>setArchiveCandidate(v)}>归档</button></>}</div>{v.periods.map(p=><div className="vendor-period-row" key={p.id}><span>{date(p.start)} · {p.status==="open"?"进行中":"已结算"} · {money(p.cost_fen)}</span>{p.status==="open"?<button className="text-button" onClick={()=>edit(v,"edit",p)}>整组配置</button>:<button className="text-button" disabled={busy} onClick={()=>setVoidCandidate(p)}>整组作废</button>}</div>)}</section>;})}{!activeVendors.length&&<p className="field-hint">暂无可管理的账号组</p>}</>:<form onSubmit={save}>
       {action==="create"&&<label>账号组名称<input required maxLength={120} value={name} onChange={e=>{setDirty(true);setName(e.target.value);}}/></label>}
       {editing.vendor&&<strong className="vendor-edit-title">{editing.vendor.name}</strong>}
       {action!=="add"&&<div className="form-columns"><label>{action==="renew"?"下期准确总成本（元）":"本期准确总成本（元）"}<input required inputMode="decimal" placeholder="0.00" value={cost} onChange={e=>{setDirty(true);setCost(e.target.value);}} onBlur={()=>amountPattern.test(cost)&&setCost(Number(cost).toFixed(2))}/></label><label>统一垫付人<Select value={creditor} onChange={e=>{setDirty(true);setCreditor(Number(e.target.value));}}>{catalog.users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}</Select></label></div>}
       {(action==="create"||action==="edit")&&<div className="form-columns"><label>共同起点（北京时间）<input required type="datetime-local" step="1" value={start} onChange={e=>{setDirty(true);setStart(e.target.value);}}/></label><label>起点方式<Select value={mode} onChange={e=>{setDirty(true);setMode(e.target.value as typeof mode);}}><option value="exact">准确时间</option><option value="minute_estimate">按分钟估算</option>{mode==="date_estimate"&&<option value="date_estimate">按日期估算</option>}</Select></label></div>}
-      {(action==="create"||action==="add")&&<fieldset className="member-picker"><legend className="picker-head"><span>待配置账号 · 已选 {selected.length}</span>{!!available.length&&<span className="picker-actions"><button type="button" className="text-button" disabled={busy||allAvailableSelected} onClick={()=>setSelected(prev=>[...new Set([...prev,...available.map(a=>a.id)])])}>全选</button><button type="button" className="text-button" disabled={busy||!selected.length} onClick={()=>setSelected([])}>清空</button></span>}</legend><input type="search" aria-label="搜索待配置账号" placeholder="搜索待配置账号" value={search} onChange={e=>setSearch(e.target.value)}/><div className="group-candidate-list">{available.map(a=><label className="checkline" key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e=>setSelected(prev=>e.target.checked?[...prev,a.id]:prev.filter(id=>id!==a.id))}/>{a.name}</label>)}{!available.length&&<p className="field-hint">暂无可选的待配置账号</p>}</div></fieldset>}
+      {(action==="create"||action==="add")&&<fieldset className="member-picker"><legend className="picker-head"><span>待配置账号 · 已选 {selected.length}</span>{!!available.length&&<span className="picker-actions"><button type="button" className="text-button" disabled={busy||allAvailableSelected} onClick={()=>setSelected(prev=>[...new Set([...prev,...available.map(a=>a.id)])])}>全选</button><button type="button" className="text-button" disabled={busy||!selected.length} onClick={()=>setSelected([])}>清空</button></span>}</legend><input type="search" aria-label="搜索待配置账号" placeholder="搜索待配置账号" value={search} onChange={e=>setSearch(e.target.value)}/><div className="group-candidate-list">{available.map(a=><label className="checkline" key={a.id}><input type="checkbox" checked={selectedSet.has(a.id)} onChange={e=>setSelected(prev=>e.target.checked?[...prev,a.id]:prev.filter(id=>id!==a.id))}/>{a.name}</label>)}{!available.length&&<p className="field-hint">暂无可选的待配置账号</p>}</div></fieldset>}
       {action==="add"&&<p className="field-hint">{period?`沿用共同起点 ${date(period.start)}，保存后需重新确认整组账单。`:"新增成员从下一期生效，已结算账期保持不变。"}</p>}
       {action==="edit"&&<><div className="group-member-names">{period?.members?.map(c=><p className="field-hint" key={c.id}>{c.current_name||c.name}{c.account_deleted?" · 已删除，保留本期账务":""}</p>)}</div><p className="field-hint">保存后整组账单确认失效。</p></>}
       {action==="renew"&&<p className="field-hint">从上一期结束时间 {date(editing.vendor?.periods[0]?.end||"")} 连续开始，自动沿用全组存续成员。</p>}
@@ -101,19 +114,20 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
 export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{period:VendorPeriod;cycles:Cycle[];end:string;onConfirmed:()=>Promise<void>;onDraftChange?:(dirty:boolean)=>void}){
   const [csv,setCsv]=useState("");const [fileName,setFileName]=useState("");const [preview,setPreview]=useState<VendorBillPreview|null>(null);
   const [ambiguous,setAmbiguous]=useState<LocalUnmatched[]>([]);
-  const [busy,setBusy]=useState(false);const [error,setError]=useState("");
-  const [start,setStart]=useState(inputDate(period.start));const seq=useRef(0);const reads=useRef(0);const csvInput=useRef<HTMLInputElement>(null);const manual=useManualBilling(period.manual_basis);
+  const [busy,setBusy]=useState(false);const [confirming,setConfirming]=useState(false);const [error,setError]=useState("");
+  const [start,setStart]=useState(inputDate(period.start));const seq=useRef(0);const reads=useRef(0);const confirmingRef=useRef(false);const mounted=useRef(true);const csvInput=useRef<HTMLInputElement>(null);const manual=useManualBilling(period.manual_basis);
   const [committedBasis,setCommittedBasis]=useState(()=>canonicalManualBasis(period.manual_basis));
   useEffect(()=>{if(period.manual_basis&&!manual.touched.current)setCommittedBasis(canonicalManualBasis(period.manual_basis));},[period.manual_basis]);
   const hasDraft=preview!==null||csv.trim()!==""||canonicalManualBasis(manual.basis)!==committedBasis;
   const draftCallback=useRef(onDraftChange);draftCallback.current=onDraftChange;
   useEffect(()=>{draftCallback.current?.(hasDraft);},[hasDraft]);
   useEffect(()=>()=>{draftCallback.current?.(false);},[]);
-  function invalidate(){++seq.current;setPreview(null);setBusy(false);}
+  function invalidate(){if(confirmingRef.current)return;++seq.current;setPreview(null);setBusy(false);}
   const prevEnd=useRef(end);
   useEffect(()=>{invalidate();setAmbiguous([]);if(prevEnd.current!==end){prevEnd.current=end;manual.resetSelection();}},[end,period.id,period.version]);
-  useEffect(()=>()=>{++seq.current;++reads.current;},[]);
+  useEffect(()=>{mounted.current=true;return ()=>{mounted.current=false;++seq.current;++reads.current;};},[]);
   async function inspect(existing=false){
+    if(confirmingRef.current)return;
     if(!period.start_confirmed){setError("请先确认共同起点后再匹配账单");return;}
     if(!manual.valid){setError("倍率须为非负数，最多六位小数");return;}
     const token=++seq.current;setBusy(true);setError("");
@@ -125,14 +139,14 @@ export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{p
       setAmbiguous(p.local_unmatched?.filter(r=>r.reason==="ambiguous")||[]);
     }catch(e){if(token===seq.current){setPreview(null);setError((e as Error).message);}}finally{if(token===seq.current)setBusy(false);}
   }
-  async function confirm(){if(!preview)return;const token=seq.current;setBusy(true);setError("");try{
+  async function confirm(){if(!preview||confirmingRef.current)return;++seq.current;confirmingRef.current=true;setConfirming(true);setBusy(true);setError("");try{
     await api(`/vendor-periods/${period.id}/bill-confirm`,"POST",{version:period.version,preview_id:preview.id});
-    if(token===seq.current){setCommittedBasis(canonicalManualBasis(manual.basis));setCsv("");setFileName("");if(csvInput.current)csvInput.current.value="";setPreview(null);setAmbiguous([]);await onConfirmed();}
-  }catch(e){if(token===seq.current)setError((e as Error).message);}finally{if(token===seq.current)setBusy(false);}}
-  async function confirmStart(){setBusy(true);setError("");try{await api(`/vendor-periods/${period.id}/start-confirm`,"POST",{version:period.version,start:start===inputDate(period.start)?period.start:fromInput(start),members:cycles.map(c=>({cycle_id:c.id,version:c.version}))});await onConfirmed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+    if(mounted.current){setCommittedBasis(canonicalManualBasis(manual.basis));setCsv("");setFileName("");if(csvInput.current)csvInput.current.value="";setPreview(null);setAmbiguous([]);await onConfirmed();}
+  }catch(e){if(mounted.current)setError((e as Error).message);}finally{confirmingRef.current=false;if(mounted.current){setConfirming(false);setBusy(false);}}}
+  async function confirmStart(){if(confirmingRef.current)return;let startIso:string;try{startIso=start===inputDate(period.start)?period.start:fromInput(start);}catch(e){setError((e as Error).message);return;}++seq.current;confirmingRef.current=true;setConfirming(true);setBusy(true);setError("");try{await api(`/vendor-periods/${period.id}/start-confirm`,"POST",{version:period.version,start:startIso,members:cycles.map(c=>({cycle_id:c.id,version:c.version}))});if(mounted.current)await onConfirmed();}catch(e){if(mounted.current)setError((e as Error).message);}finally{confirmingRef.current=false;if(mounted.current){setConfirming(false);setBusy(false);}}}
   return <section className="bill-import vendor-bill"><div className="bill-import-head"><strong>{period.name} · 整组上游账单</strong><b className="amount">{money(period.cost_fen)}</b></div><p className="field-hint">{cycles.map(c=>c.name).join("、")} · 统一按本期总成本分摊</p>
-    {!period.start_confirmed&&<div className="start-confirm"><label>确认共同起点<input type="datetime-local" step="1" value={start} onChange={e=>setStart(e.target.value)}/></label><button className="button primary" disabled={busy} onClick={confirmStart}>确认起点</button><p className="field-hint warning-text">请先确认共同起点后再匹配账单</p></div>}
-    <ManualBillingEditor disabled={busy&&!!preview} manual={manual} accounts={cycles} summary={preview?.manual_summary} ambiguous={ambiguous} onResetAmbiguous={()=>setAmbiguous([])} changed={invalidate}/>
+    {!period.start_confirmed&&<div className="start-confirm"><label>确认共同起点<input type="datetime-local" step="1" disabled={busy} value={start} onChange={e=>setStart(e.target.value)}/></label><button className="button primary" disabled={busy} onClick={confirmStart}>确认起点</button><p className="field-hint warning-text">请先确认共同起点后再匹配账单</p></div>}
+    <ManualBillingEditor disabled={confirming||(busy&&!!preview)} manual={manual} accounts={cycles} summary={preview?.manual_summary} ambiguous={ambiguous} onResetAmbiguous={()=>setAmbiguous([])} changed={invalidate}/>
     {manual.source!=="local_only"&&<label>CSV 文件<input ref={csvInput} type="file" accept=".csv,text/csv" disabled={busy} onChange={async e=>{const r=await readCsvFile(e.target.files?.[0],reads,()=>{invalidate();setAmbiguous([]);});if(r.status==="empty"){setCsv("");setFileName("");}else if(r.status==="too_large"){setError(r.error);}else if(r.status==="ok"){setCsv(r.content);setFileName(r.name);}}}/></label>}
     <div className="start-actions"><button className="button" disabled={busy||!period.start_confirmed||!manual.valid||(manual.source!=="local_only"&&!csv.trim())||!end} onClick={()=>inspect()}>{busy?"处理中…":"账单预览"}</button>{manual.source!=="local_only"&&!!period.bill_import_id&&<button className="button" disabled={busy||!period.start_confirmed||!manual.valid||!end} onClick={()=>inspect(true)}>沿用已导入账单</button>}</div>
     {preview&&<div className="bill-stats">

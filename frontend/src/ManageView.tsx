@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { date, money } from "./api";
 import { Empty, FormError, Status } from "./Forms";
 import type { Cycle, DeletionJob } from "./types";
@@ -9,7 +10,7 @@ const deletionLabels: Record<string, string> = {
   failed: "删除未完成",
 };
 
-export function ManageCyclesTable({
+export const ManageCyclesTable = memo(function ManageCyclesTable({
   cycles,
   onDetail,
   onManageVendor,
@@ -53,7 +54,7 @@ export function ManageCyclesTable({
                 </span>
                 {c.allocation_pending ? "待账单拆分" : money(c.cost_fen)}
               </td>
-              <td data-label="垫付人">{c.creditor_name}</td>
+              <td data-label="垫付人">{c.creditor_name || "—"}</td>
               <td data-label="状态">
                 <Status value={c.status} />
                 {c.status === "open" && !c.start_confirmed && (
@@ -108,9 +109,9 @@ export function ManageCyclesTable({
       {!cycles.length && <Empty text="暂无周期" />}
     </div>
   );
-}
+});
 
-export function DeletionsList({
+export const DeletionsList = memo(function DeletionsList({
   deletions,
   busy,
   onRetry,
@@ -159,4 +160,4 @@ export function DeletionsList({
       {!active.length && <Empty text="暂无待处理删除" />}
     </div>
   );
-}
+});

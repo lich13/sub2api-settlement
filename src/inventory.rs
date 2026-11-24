@@ -8,7 +8,10 @@ use crate::{
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, HashSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, RwLock};
@@ -40,6 +43,8 @@ impl AccountSnapshot {
 #[derive(Clone)]
 pub struct Inventory {
     pub state: Arc<RwLock<AccountSnapshot>>,
+    write_seq: Arc<AtomicU64>,
+    persisted_seq: Arc<AtomicU64>,
     refresh_lock: Arc<Mutex<()>>,
     store: Store,
     source: Source,
@@ -60,6 +65,8 @@ impl Inventory {
         Ok(Self {
             store,
             source,
+            write_seq: Arc::new(AtomicU64::new(0)),
+            persisted_seq: Arc::new(AtomicU64::new(0)),
             refresh_lock: Arc::new(Mutex::new(())),
             state: Arc::new(RwLock::new(AccountSnapshot {
                 rows,
@@ -70,6 +77,17 @@ impl Inventory {
                 dirty: false,
             })),
         })
+    }
+    pub(crate) async fn needs_persist(&self) -> bool {
+        self.persisted_seq.load(Ordering::Acquire) < self.write_seq.load(Ordering::Acquire)
+            || self.state.read().await.dirty
+    }
+    pub(crate) async fn mark_persisted(&self, seq: u64) {
+        let mut state = self.state.write().await;
+        let prev = self.persisted_seq.fetch_max(seq, Ordering::AcqRel);
+        if prev.max(seq) >= self.write_seq.load(Ordering::Acquire) {
+            state.dirty = false;
+        }
     }
     pub async fn refresh(&self, force: bool) -> Value {
         if !force
@@ -112,11 +130,25 @@ impl Inventory {
             let roots=roots(&current,&known)?;
             let mut rows:BTreeMap<_,_>=prior.iter().filter(|(id,_)|!current.contains_key(id)).map(|(id,a)|{let mut a=a.clone();a["deleted"]=json!(1);(*id,a)}).collect();
             for (id,a) in current{rows.insert(id,json!({"id":id,"name":a["name"],"platform":a["platform"],"status":a["status"],"deleted":i64::from(flag(&a,"deleted")),"root_id":roots[&id],"created_at":time::instant(text(&a,"created_at"))?}));}
-            let stamp=time::now();{let mut state=self.state.write().await;state.dirty|=rows!=prior;state.rows=rows;state.revision=stamp.clone();state.checked_at=json!(stamp);state.error=Value::Null;}
-            if self.state.read().await.dirty
+            let stamp=time::now();
+            let changed = rows != prior;
+            {
+                let mut state=self.state.write().await;
+                if changed {
+                    self.write_seq.fetch_add(1, Ordering::AcqRel);
+                }
+                state.dirty|=changed;
+                if changed || state.revision.is_empty() {
+                    state.revision=stamp.clone();
+                }
+                state.rows=rows;
+                state.checked_at=json!(stamp);
+                state.error=Value::Null;
+            }
+            if self.needs_persist().await
                 && let Some(mut conn)=self.store.writes.try_acquire()
                     && store::exec(&mut conn,"BEGIN IMMEDIATE",&[]).await.is_ok(){
-                        match self.persist(&mut conn).await{Ok(())=>{store::exec(&mut conn,"COMMIT",&[]).await?;self.state.write().await.dirty=false;},Err(e)=>{let _=store::exec(&mut conn,"ROLLBACK",&[]).await;return Err(e);}}
+                        match self.persist_seq(&mut conn).await{Ok(seq)=>{store::exec(&mut conn,"COMMIT",&[]).await?;self.mark_persisted(seq).await;},Err(e)=>{let _=store::exec(&mut conn,"ROLLBACK",&[]).await;return Err(e);}}
                     }
             Ok::<(),Error>(())
         }.await;
@@ -127,11 +159,36 @@ impl Inventory {
         self.state.read().await.state()
     }
     pub async fn persist(&self, db: &mut sqlx::SqliteConnection) -> Result<()> {
-        let rows = self.state.read().await.rows.clone();
-        for row in rows.values() {
-            store::exec(db,"INSERT INTO accounts(id,name,root_id,platform,status,deleted,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,root_id=excluded.root_id,platform=excluded.platform,status=excluded.status,deleted=excluded.deleted",&[row["id"].clone(),row["name"].clone(),row["root_id"].clone(),row["platform"].clone(),row["status"].clone(),row["deleted"].clone(),row["created_at"].clone()]).await?;
-        }
+        let _ = self.persist_seq(db).await?;
         Ok(())
+    }
+    pub(crate) async fn persist_seq(&self, db: &mut sqlx::SqliteConnection) -> Result<u64> {
+        let (rows, seq) = {
+            let state = self.state.read().await;
+            (
+                state.rows.values().cloned().collect::<Vec<_>>(),
+                self.write_seq.load(Ordering::Acquire),
+            )
+        };
+        for chunk in rows.chunks(256) {
+            let mut q = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+                "INSERT INTO accounts(id,name,root_id,platform,status,deleted,created_at) ",
+            );
+            q.push_values(chunk, |mut b, row| {
+                b.push_bind(int(row, "id"))
+                    .push_bind(text(row, "name"))
+                    .push_bind(int(row, "root_id"))
+                    .push_bind(text(row, "platform"))
+                    .push_bind(text(row, "status"))
+                    .push_bind(int(row, "deleted"))
+                    .push_bind(text(row, "created_at"));
+            });
+            q.push(
+                " ON CONFLICT(id) DO UPDATE SET name=excluded.name,root_id=excluded.root_id,platform=excluded.platform,status=excluded.status,deleted=excluded.deleted WHERE accounts.name IS NOT excluded.name OR accounts.root_id IS NOT excluded.root_id OR accounts.platform IS NOT excluded.platform OR accounts.status IS NOT excluded.status OR accounts.deleted IS NOT excluded.deleted",
+            );
+            q.build().execute(&mut *db).await?;
+        }
+        Ok(seq)
     }
 }
 pub fn roots(

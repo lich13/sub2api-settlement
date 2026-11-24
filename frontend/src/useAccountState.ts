@@ -13,7 +13,7 @@ export function useAccountState(userId?: number) {
       const next = await api<AccountState>("/accounts/state");
       if (stamp !== generation.current || (latest.current && next.revision < latest.current.revision)) return;
       latest.current = next;
-      setState(next);
+      setState(prev => prev && prev.revision === next.revision && prev.error === next.error ? prev : next);
     } catch {
       if (stamp === generation.current) setState(prev => prev ? { ...prev, error: "账号状态核对失败，暂保留最近列表" } : null);
     }

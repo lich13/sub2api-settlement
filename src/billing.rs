@@ -1,6 +1,6 @@
 use crate::{
     error::{Error, Result},
-    json::{billing_digest, int, merge, text},
+    json::{digest, int, text},
     money::{Decimal, allocate, allocate_matched, valid_decimal_ascii},
     time,
 };
@@ -127,7 +127,7 @@ pub struct BillRow {
     pub row: i64,
 }
 impl BillRow {
-    pub(crate) fn tokens(&self) -> [i64; 4] {
+    fn tokens(&self) -> [i64; 4] {
         [
             self.input_tokens,
             self.output_tokens,
@@ -164,7 +164,7 @@ impl RequestDetail {
             && self.upstream_request_id.is_none()
             && self.upstream_response_model.is_none()
     }
-    pub(crate) fn tokens(&self) -> Option<[i64; 4]> {
+    fn tokens(&self) -> Option<[i64; 4]> {
         Some([
             self.input_tokens?,
             self.output_tokens?,
@@ -172,7 +172,7 @@ impl RequestDetail {
             self.cache_creation_tokens?,
         ])
     }
-    pub(crate) fn unique_request_ids(&self) -> impl Iterator<Item = &str> {
+    fn unique_request_ids(&self) -> impl Iterator<Item = &str> {
         let a = self.request_id.as_deref().unwrap_or("");
         let b = self.upstream_request_id.as_deref().unwrap_or("");
         [
@@ -182,7 +182,7 @@ impl RequestDetail {
         .into_iter()
         .flatten()
     }
-    pub(crate) fn unique_models(&self) -> impl Iterator<Item = &str> {
+    fn unique_models(&self) -> impl Iterator<Item = &str> {
         let raw = [
             self.model.as_deref().unwrap_or(""),
             self.requested_model.as_deref().unwrap_or(""),
@@ -218,6 +218,108 @@ pub struct UsageRow {
     pub root_id: i64,
     pub user_id: i64,
 }
+#[derive(Clone, Debug)]
+pub(crate) struct MatchedUsage {
+    pub usage_id: i64,
+    pub user_id: i64,
+    pub amount: Decimal,
+}
+#[derive(serde::Serialize)]
+struct MatchedBillRowRef<'a> {
+    amount: &'a str,
+    cache_creation_tokens: i64,
+    cache_read_tokens: i64,
+    created_at: &'a str,
+    input_tokens: i64,
+    model: &'a str,
+    output_tokens: i64,
+    request_id: &'a str,
+    row: i64,
+    usage_id: i64,
+    user_id: i64,
+}
+impl<'a> MatchedBillRowRef<'a> {
+    fn new(r: &'a BillRow, usage_id: i64, user_id: i64) -> Self {
+        Self {
+            amount: &r.amount,
+            cache_creation_tokens: r.cache_creation_tokens,
+            cache_read_tokens: r.cache_read_tokens,
+            created_at: &r.created_at,
+            input_tokens: r.input_tokens,
+            model: &r.model,
+            output_tokens: r.output_tokens,
+            request_id: &r.request_id,
+            row: r.row,
+            usage_id,
+            user_id,
+        }
+    }
+}
+#[derive(serde::Serialize)]
+struct UnmatchedBillRowRef<'a> {
+    amount: &'a str,
+    cache_creation_tokens: i64,
+    cache_read_tokens: i64,
+    created_at: &'a str,
+    input_tokens: i64,
+    model: &'a str,
+    output_tokens: i64,
+    reason: &'static str,
+    request_id: &'a str,
+    row: i64,
+}
+impl<'a> UnmatchedBillRowRef<'a> {
+    fn new(r: &'a BillRow, reason: &'static str) -> Self {
+        Self {
+            amount: &r.amount,
+            cache_creation_tokens: r.cache_creation_tokens,
+            cache_read_tokens: r.cache_read_tokens,
+            created_at: &r.created_at,
+            input_tokens: r.input_tokens,
+            model: &r.model,
+            output_tokens: r.output_tokens,
+            reason,
+            request_id: &r.request_id,
+            row: r.row,
+        }
+    }
+}
+struct SortedWeights<'a>(&'a [(String, String)]);
+impl serde::Serialize for SortedWeights<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (k, v) in self.0 {
+            map.serialize_entry(k, v)?;
+        }
+        map.end()
+    }
+}
+// Exact BTreeMap alphabetical order matching serde_json::Value + json::billing_digest.
+#[derive(serde::Serialize)]
+struct BillDigestRef<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allocation_mode: Option<&'a str>,
+    cost_fen: i64,
+    local_unmatched_count: usize,
+    matched: &'a [MatchedBillRowRef<'a>],
+    matched_amount: &'a str,
+    matched_count: usize,
+    outside: &'a [&'a BillRow],
+    outside_amount: &'a str,
+    outside_count: usize,
+    record_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rules_version: Option<i32>,
+    total: &'a str,
+    unmatched: &'a [UnmatchedBillRowRef<'a>],
+    unmatched_amount: &'a str,
+    unmatched_count: usize,
+    weights: SortedWeights<'a>,
+}
 pub fn reconcile(
     rows: &[BillRow],
     usage: &[UsageRow],
@@ -226,10 +328,31 @@ pub fn reconcile(
     end: &str,
     mode: &str,
 ) -> Result<Value> {
-    reconcile_inner(rows, usage, details, start, end, mode, false)
+    Ok(reconcile_core(rows, usage, details, start, end, mode, false, true, false)?.0)
+}
+pub(crate) fn reconcile_summary(
+    rows: &[BillRow],
+    usage: &[UsageRow],
+    details: &BTreeMap<i64, RequestDetail>,
+    start: &str,
+    end: &str,
+    mode: &str,
+) -> Result<Value> {
+    Ok(reconcile_core(rows, usage, details, start, end, mode, false, false, false)?.0)
+}
+pub(crate) fn reconcile_compact(
+    rows: &[BillRow],
+    usage: &[UsageRow],
+    details: &BTreeMap<i64, RequestDetail>,
+    start: &str,
+    end: &str,
+    mode: &str,
+) -> Result<(Value, Vec<MatchedUsage>)> {
+    reconcile_core(rows, usage, details, start, end, mode, false, false, true)
 }
 // Diagnostics are opt-in: legacy result serialization and billing digests stay unchanged.
-pub(crate) fn reconcile_inner(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_core(
     rows: &[BillRow],
     usage: &[UsageRow],
     details: &BTreeMap<i64, RequestDetail>,
@@ -237,21 +360,27 @@ pub(crate) fn reconcile_inner(
     end: &str,
     mode: &str,
     diagnostics: bool,
-) -> Result<Value> {
+    include_matched_json: bool,
+    collect_usages: bool,
+) -> Result<(Value, Vec<MatchedUsage>)> {
     if !["proportional", "matched_only"].contains(&mode) {
         return Err(Error::invalid("账单分摊方式无效"));
     }
-    let mut included: Vec<(&BillRow, Decimal)> = Vec::with_capacity(rows.len());
+    let mut included: Vec<&BillRow> = Vec::with_capacity(rows.len());
     let mut outside: Vec<&BillRow> = Vec::new();
     let mut outside_total = Decimal::zero();
+    let mut total = Decimal::zero();
     for r in rows {
-        let amt = Decimal::parse(&r.amount)?;
         if r.created_at.as_str() >= start && r.created_at.as_str() < end {
-            included.push((r, amt));
-        } else {
-            outside_total.add(&amt);
+            total.add_str(&r.amount)?;
             if !diagnostics {
-                outside_total = outside_total.rounded(60);
+                total.round_in_place(60);
+            }
+            included.push(r);
+        } else {
+            outside_total.add_str(&r.amount)?;
+            if !diagnostics {
+                outside_total.round_in_place(60);
             }
             outside.push(r);
         }
@@ -267,7 +396,7 @@ pub(crate) fn reconcile_inner(
     let mut identified: Vec<Option<&[usize]>> = Vec::with_capacity(included.len());
     let mut id_uses = vec![0_u32; usage.len()];
     let mut identified_count = 0_usize;
-    for (r, _) in &included {
+    for r in &included {
         if let Some(g) = by_id.get(r.request_id.as_str()) {
             identified.push(Some(g.as_slice()));
             identified_count += 1;
@@ -309,7 +438,7 @@ pub(crate) fn reconcile_inner(
         for group in by_tokens.values_mut() {
             group.sort_unstable();
         }
-        for (i, (r, _)) in included.iter().enumerate() {
+        for (i, r) in included.iter().enumerate() {
             if identified[i].is_some() {
                 continue;
             }
@@ -328,16 +457,16 @@ pub(crate) fn reconcile_inner(
             }
         }
     }
-    let mut matched = Vec::with_capacity(included.len());
-    let mut unmatched = Vec::new();
+    let mut matched_refs = Vec::with_capacity(included.len());
+    let mut matched_usages = if collect_usages {
+        Vec::with_capacity(included.len())
+    } else {
+        Vec::new()
+    };
+    let mut unmatched_refs = Vec::new();
     let mut ambiguous = std::collections::BTreeSet::new();
     let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
-    let mut total = Decimal::zero();
-    for (i, (r, amt)) in included.iter().enumerate() {
-        total.add(amt);
-        if !diagnostics {
-            total = total.rounded(60);
-        }
+    for (i, r) in included.into_iter().enumerate() {
         let (group, uses): (&[usize], &[u32]) = if let Some(g) = identified[i] {
             (g, &id_uses)
         } else {
@@ -345,22 +474,30 @@ pub(crate) fn reconcile_inner(
         };
         if group.len() == 1 && uses[group[0]] == 1 {
             let local = &usage[group[0]];
-            matched.push(merge(
-                serde_json::to_value(r)?,
-                json!({"usage_id":local.id,"user_id":local.user_id}),
-            ));
+            matched_refs.push(MatchedBillRowRef::new(r, local.id, local.user_id));
             let weight = weights.entry(local.user_id).or_insert_with(Decimal::zero);
-            weight.add(amt);
+            weight.add_str(&r.amount)?;
             if !diagnostics {
-                *weight = weight.rounded(60);
+                weight.round_in_place(60);
+            }
+            if collect_usages {
+                matched_usages.push(MatchedUsage {
+                    usage_id: local.id,
+                    user_id: local.user_id,
+                    amount: Decimal::parse(&r.amount)?,
+                });
             }
         } else {
             if diagnostics {
                 ambiguous.extend(group.iter().map(|i| usage[*i].id));
             }
-            unmatched.push(merge(
-                serde_json::to_value(r)?,
-                json!({"reason":if group.is_empty(){"missing"}else{"ambiguous"}}),
+            unmatched_refs.push(UnmatchedBillRowRef::new(
+                r,
+                if group.is_empty() {
+                    "missing"
+                } else {
+                    "ambiguous"
+                },
             ));
         }
     }
@@ -368,33 +505,77 @@ pub(crate) fn reconcile_inner(
     for v in weights.values() {
         matched_amount.add(v);
         if !diagnostics {
-            matched_amount = matched_amount.rounded(60);
+            matched_amount.round_in_place(60);
         }
     }
     let cost = total.fen_half_up()?;
     if cost > 999_999_999_999 {
         return Err(Error::invalid("账单总额超出金额上限"));
     }
-    let weight_values: serde_json::Map<_, _> = weights
+    let weight_pairs: Vec<(String, String)> = weights
         .iter()
-        .map(|(k, v)| (k.to_string(), json!(v.to_string())))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    let total_str = total.to_string();
+    let matched_amount_str = matched_amount.to_string();
     let unmatched_amount = total.subtract(&matched_amount).to_string();
-    let mut result = json!({"total":total.to_string(),"cost_fen":cost,"matched_amount":matched_amount.to_string(),"unmatched_amount":unmatched_amount,"matched_count":matched.len(),"unmatched_count":unmatched.len(),"outside_count":outside.len(),"outside_amount":outside_total.to_string(),"local_unmatched_count":usage.len()-matched.len(),"weights":weight_values,"outside":outside,"record_count":included.len()});
-    result["matched"] = Value::Array(matched);
-    result["unmatched"] = Value::Array(unmatched);
-    if mode == "matched_only" {
-        result["allocation_mode"] = json!(mode);
-        result["rules_version"] = json!(2);
+    let outside_amount_str = outside_total.to_string();
+    let matched_count = matched_refs.len();
+    let unmatched_count = unmatched_refs.len();
+    let outside_count = outside.len();
+    let record_count = matched_count + unmatched_count;
+    let local_unmatched_count = usage.len() - matched_count;
+    let is_matched_only = mode == "matched_only";
+    let bill_digest = digest(&BillDigestRef {
+        allocation_mode: is_matched_only.then_some(mode),
+        cost_fen: cost,
+        local_unmatched_count,
+        matched: &matched_refs,
+        matched_amount: &matched_amount_str,
+        matched_count,
+        outside: &outside,
+        outside_amount: &outside_amount_str,
+        outside_count,
+        record_count,
+        rules_version: is_matched_only.then_some(2),
+        total: &total_str,
+        unmatched: &unmatched_refs,
+        unmatched_amount: &unmatched_amount,
+        unmatched_count,
+        weights: SortedWeights(&weight_pairs),
+    });
+    let weight_values: serde_json::Map<_, _> = weight_pairs
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    let unmatched_value = serde_json::to_value(&unmatched_refs)?;
+    let mut result = json!({
+        "total": total_str,
+        "cost_fen": cost,
+        "matched_amount": matched_amount_str,
+        "unmatched_amount": unmatched_amount.clone(),
+        "matched_count": matched_count,
+        "unmatched_count": unmatched_count,
+        "outside_count": outside_count,
+        "outside_amount": outside_amount_str,
+        "local_unmatched_count": local_unmatched_count,
+        "weights": weight_values,
+        "outside": outside,
+        "record_count": record_count,
+        "unmatched": unmatched_value,
+        "digest": bill_digest,
+        "allocation_mode": mode,
+        "rules_version": if is_matched_only { 2 } else { 1 },
+        "billable_cost_fen": if is_matched_only { matched_amount.fen_half_up()? } else { cost },
+        "excluded_amount": if is_matched_only { unmatched_amount } else { "0".to_owned() },
+    });
+    if include_matched_json {
+        result["matched"] = serde_json::to_value(&matched_refs)?;
     }
-    result["digest"] = json!(billing_digest(&result));
     if diagnostics {
         result["ambiguous_usage_ids"] = json!(ambiguous);
     }
-    Ok(merge(
-        result,
-        json!({"allocation_mode":mode,"rules_version":if mode=="matched_only"{2}else{1},"billable_cost_fen":if mode=="matched_only"{matched_amount.fen_half_up()?}else{cost},"excluded_amount":if mode=="matched_only"{unmatched_amount}else{"0".to_owned()}}),
-    ))
+    Ok((result, matched_usages))
 }
 pub fn bill_allocations(result: &Value, creditor: i64) -> Result<Value> {
     if !result["manual_basis"].is_null() {
@@ -510,8 +691,18 @@ mod tests {
             bill(6, "", 40, "4.00"),
             bill(7, "", 40, "4.00"),
         ];
-        let res = reconcile_inner(&rows, &usage, &details, start, end, "matched_only", true)
-            .expect("reconcile mixed fallback cases");
+        let (res, _) = reconcile_core(
+            &rows,
+            &usage,
+            &details,
+            start,
+            end,
+            "matched_only",
+            true,
+            true,
+            true,
+        )
+        .expect("reconcile mixed fallback cases");
         assert_eq!(res["matched_count"], 2);
         assert_eq!(res["unmatched_count"], 4);
         assert_eq!(res["matched_amount"], "4.00");
@@ -528,5 +719,120 @@ mod tests {
         assert_eq!(unmatched[3]["row"], 7);
         assert_eq!(unmatched[3]["reason"], "ambiguous");
         assert_eq!(res["ambiguous_usage_ids"], json!([2, 3, 5]));
+    }
+
+    #[test]
+    fn streaming_digest_and_compact_reconcile_match_canonical_value_digest() {
+        let start = "2026-01-01T00:00:00.000000+00:00";
+        let end = "2026-01-02T00:00:00.000000+00:00";
+        let ts = "2026-01-01T12:00:00.000000+00:00";
+        let outside_ts = "2026-01-03T00:00:00.000000+00:00";
+        // Include multi-digit and single-digit user IDs ("2" vs "10" vs "100") so numeric key sort is exercised.
+        let usage = vec![
+            UsageRow {
+                id: 11,
+                account_id: 1,
+                root_id: 1,
+                user_id: 100,
+                amount: "1.25".into(),
+                created_at: ts.into(),
+            },
+            UsageRow {
+                id: 12,
+                account_id: 1,
+                root_id: 1,
+                user_id: 2,
+                amount: "2.50".into(),
+                created_at: ts.into(),
+            },
+            UsageRow {
+                id: 13,
+                account_id: 1,
+                root_id: 1,
+                user_id: 10,
+                amount: "0.75".into(),
+                created_at: ts.into(),
+            },
+        ];
+        let details = BTreeMap::from([
+            (
+                11,
+                RequestDetail {
+                    request_id: Some("r-11".into()),
+                    model: Some("gpt-4o".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                12,
+                RequestDetail {
+                    request_id: Some("r-12".into()),
+                    model: Some("gpt-4o".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                13,
+                RequestDetail {
+                    request_id: Some("r-13".into()),
+                    model: Some("gpt-4o".into()),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let row = |n: i64, rid: &str, amt: &str, at: &str| BillRow {
+            row: n,
+            request_id: rid.into(),
+            model: "gpt-4o".into(),
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: 1,
+            cache_creation_tokens: 0,
+            amount: amt.into(),
+            created_at: at.into(),
+        };
+        let rows = vec![
+            row(2, "r-11", "1.25", ts),
+            row(3, "r-12", "2.50", ts),
+            row(4, "r-missing", "0.40", ts),
+            row(5, "r-outside", "9.99", outside_ts),
+        ];
+        for mode in ["proportional", "matched_only"] {
+            let full = reconcile(&rows, &usage, &details, start, end, mode).unwrap();
+            let (compact, matched_usages) =
+                reconcile_compact(&rows, &usage, &details, start, end, mode).unwrap();
+            assert!(compact.get("matched").is_none());
+            assert_eq!(matched_usages.len(), 2);
+            assert_eq!(matched_usages[0].usage_id, 11);
+            assert_eq!(matched_usages[0].user_id, 100);
+            assert_eq!(matched_usages[1].usage_id, 12);
+            assert_eq!(matched_usages[1].user_id, 2);
+
+            let mut expected_pre_merge = crate::json::without(
+                full.clone(),
+                &[
+                    "digest",
+                    "billable_cost_fen",
+                    "excluded_amount",
+                    "allocation_mode",
+                    "rules_version",
+                ],
+            );
+            if mode == "matched_only" {
+                expected_pre_merge["allocation_mode"] = json!(mode);
+                expected_pre_merge["rules_version"] = json!(2);
+            }
+            assert_eq!(
+                full["digest"],
+                json!(crate::json::billing_digest(&expected_pre_merge)),
+                "mode={mode}"
+            );
+            assert_eq!(compact["digest"], full["digest"], "mode={mode}");
+            assert_eq!(
+                compact,
+                crate::json::without(full, &["matched"]),
+                "mode={mode}"
+            );
+        }
     }
 }

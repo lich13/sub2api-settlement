@@ -1,5 +1,5 @@
-import { ChevronDown } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import ChevronDown from "lucide-react/icons/chevron-down";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FormError } from "./Forms";
 import { Select } from "./Select";
 import { billedMoney, consumption, date, ratePattern } from "./api";
@@ -122,12 +122,37 @@ export function ManualBillingEditor({
   disabled?: boolean;
 }) {
   const [limit, setLimit] = useState(50);
-  const selectableIds = ambiguous
-    .filter((r) => manual.rates[r.account_id]?.trim())
-    .map((r) => r.usage_id);
+  const selectedSet = useMemo(() => new Set(manual.selected), [manual.selected]);
+  const summaryByAccount = useMemo(
+    () => new Map((summary?.accounts || []).map((s) => [s.account_id, s])),
+    [summary],
+  );
+  const accountNameById = useMemo(
+    () => new Map(accounts.map((a) => [a.account_id, a.name])),
+    [accounts],
+  );
+  const ambiguousIdsByAccount = useMemo(() => {
+    const map = new Map<number, number[]>();
+    for (const r of ambiguous) {
+      let list = map.get(r.account_id);
+      if (!list) {
+        list = [];
+        map.set(r.account_id, list);
+      }
+      list.push(r.usage_id);
+    }
+    return map;
+  }, [ambiguous]);
+  const selectableIds = useMemo(
+    () =>
+      ambiguous
+        .filter((r) => manual.rates[r.account_id]?.trim())
+        .map((r) => r.usage_id),
+    [ambiguous, manual.rates],
+  );
   const allAmbiguousSelected =
     selectableIds.length > 0 &&
-    selectableIds.every((id) => manual.selected.includes(id));
+    selectableIds.every((id) => selectedSet.has(id));
   return (
     <section className="manual-billing">
       <label>
@@ -147,9 +172,7 @@ export function ManualBillingEditor({
       </label>
       <div className="manual-rates">
         {accounts.map((a) => {
-          const accountSummary = summary?.accounts.find(
-            (s) => s.account_id === a.account_id,
-          );
+          const accountSummary = summaryByAccount.get(a.account_id);
           return (
             <div className="manual-rate" key={a.account_id}>
               <label>
@@ -165,9 +188,7 @@ export function ManualBillingEditor({
                       a.account_id,
                       e.target.value,
                       ambiguous.length > 0
-                        ? ambiguous
-                            .filter((r) => r.account_id === a.account_id)
-                            .map((r) => r.usage_id)
+                        ? ambiguousIdsByAccount.get(a.account_id) || []
                         : undefined,
                     );
                     changed();
@@ -237,14 +258,14 @@ export function ManualBillingEditor({
                 aria-label={`补计请求 ${r.usage_id}`}
                 type="checkbox"
                 disabled={disabled || !manual.rates[r.account_id]?.trim()}
-                checked={manual.selected.includes(r.usage_id)}
+                checked={selectedSet.has(r.usage_id)}
                 onChange={(e) => {
                   manual.select(r.usage_id, e.target.checked);
                   changed();
                 }}
               />
               <span>
-                {accounts.find((a) => a.account_id === r.account_id)?.name}
+                {accountNameById.get(r.account_id)}
                 <small>
                   {date(r.created_at)} · {r.model || "模型未记录"}
                 </small>

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    billing::{self, BillRow, RequestDetail, UsageRow},
-    json::{array, flag, merge, without},
+    billing::{self, BillRow, MatchedUsage, RequestDetail, UsageRow},
+    json::{BILL_DETAIL_KEYS, array, flag, merge, without},
     money::{Decimal, allocate},
     store::exec,
 };
@@ -15,6 +15,27 @@ pub fn vendor_allocations(
     members: &[Value],
     usage: &[UsageRow],
     matched: &Value,
+    manual: Option<&Value>,
+) -> Result<Value> {
+    let parsed = array(matched)
+        .iter()
+        .map(|r| {
+            Ok(MatchedUsage {
+                usage_id: int(r, "usage_id"),
+                user_id: int(r, "user_id"),
+                amount: Decimal::parse(text(r, "amount"))?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    vendor_allocations_compact(cost, creditor, members, usage, &parsed, manual)
+}
+
+fn vendor_allocations_compact(
+    cost: i64,
+    creditor: i64,
+    members: &[Value],
+    usage: &[UsageRow],
+    matched: &[MatchedUsage],
     manual: Option<&Value>,
 ) -> Result<Value> {
     let roots = usage
@@ -31,16 +52,14 @@ pub fn vendor_allocations(
             .add(&Decimal::parse(&u.amount)?);
     }
     let mut upstream = BTreeMap::<i64, BTreeMap<i64, Decimal>>::new();
-    for r in array(matched) {
-        let root = roots
-            .get(&int(r, "usage_id"))
-            .ok_or_else(Error::unavailable)?;
+    for r in matched {
+        let root = roots.get(&r.usage_id).ok_or_else(Error::unavailable)?;
         upstream
             .entry(*root)
             .or_default()
-            .entry(int(r, "user_id"))
+            .entry(r.user_id)
             .or_insert_with(Decimal::zero)
-            .add(&Decimal::parse(text(r, "amount"))?);
+            .add(&r.amount);
     }
     if let Some(manual) = manual {
         for r in array(&manual["local_unmatched"])
@@ -177,18 +196,71 @@ impl Service {
         let mut details = BTreeMap::<i64, RequestDetail>::new();
         let mut versions = Vec::with_capacity(members.len());
         let mut gaps = Vec::new();
-        for c in &members {
-            let aid = int(c, "account_id");
-            usage.extend(Self::usage(db, c, end).await?);
-            if need_details {
-                details.extend(Self::details(db, c, end).await?);
+        let uniform_start = members.first().and_then(|first| {
+            let s = text(first, "start");
+            (members.len() > 1 && members.iter().all(|c| text(c, "start") == s)).then_some(s)
+        });
+        if let Some(shared_start) = uniform_start {
+            use futures_util::TryStreamExt;
+            use sqlx::Row;
+            let roots_json = dumps(&root_ids);
+            {
+                let mut stream = sqlx::query(
+                    "SELECT account_id,amount,created_at,id,root_id,user_id FROM usage WHERE root_id IN (SELECT value FROM json_each(?)) AND created_at>=? AND created_at<?",
+                )
+                .bind(&roots_json)
+                .bind(shared_start)
+                .bind(end)
+                .fetch(&mut *db);
+                while let Some(r) = stream.try_next().await? {
+                    usage.push(UsageRow {
+                        account_id: r.try_get(0)?,
+                        amount: r.try_get(1)?,
+                        created_at: r.try_get(2)?,
+                        id: r.try_get(3)?,
+                        root_id: r.try_get(4)?,
+                        user_id: r.try_get(5)?,
+                    });
+                }
             }
-            versions.push(json!({"cycle_id":c["id"],"version":c["version"],"account_id":c["account_id"],"usage_version":root_revisions.get(&aid).copied().unwrap_or(0)}));
-            if let Some(gap) = Self::coverage_error_from(&coverage_from, &coverage_gaps, c, end) {
-                gaps.push(json!({"account_id":c["account_id"],"warning":gap}));
+            if need_details {
+                let mut stream = sqlx::query(
+                    "SELECT d.usage_id,d.payload FROM usage_details d JOIN usage u ON u.id=d.usage_id WHERE u.root_id IN (SELECT value FROM json_each(?)) AND u.created_at>=? AND u.created_at<?",
+                )
+                .bind(&roots_json)
+                .bind(shared_start)
+                .bind(end)
+                .fetch(&mut *db);
+                while let Some(r) = stream.try_next().await? {
+                    details.insert(
+                        r.try_get(0)?,
+                        serde_json::from_str(r.try_get::<&str, _>(1)?)?,
+                    );
+                }
+            }
+            for c in &members {
+                let aid = int(c, "account_id");
+                versions.push(json!({"cycle_id":c["id"],"version":c["version"],"account_id":c["account_id"],"usage_version":root_revisions.get(&aid).copied().unwrap_or(0)}));
+                if let Some(gap) = Self::coverage_error_from(&coverage_from, &coverage_gaps, c, end)
+                {
+                    gaps.push(json!({"account_id":c["account_id"],"warning":gap}));
+                }
+            }
+        } else {
+            for c in &members {
+                let aid = int(c, "account_id");
+                usage.extend(Self::usage(db, c, end).await?);
+                if need_details {
+                    details.extend(Self::details(db, c, end).await?);
+                }
+                versions.push(json!({"cycle_id":c["id"],"version":c["version"],"account_id":c["account_id"],"usage_version":root_revisions.get(&aid).copied().unwrap_or(0)}));
+                if let Some(gap) = Self::coverage_error_from(&coverage_from, &coverage_gaps, c, end)
+                {
+                    gaps.push(json!({"account_id":c["account_id"],"warning":gap}));
+                }
             }
         }
-        usage.sort_by_key(|u| u.id);
+        usage.sort_unstable_by_key(|u| u.id);
         let names = Self::names(db).await?;
         let end = end.to_owned();
         let permit = self
@@ -199,8 +271,16 @@ impl Service {
             .map_err(|_| Error::unavailable())?;
         tokio::task::spawn_blocking(move||{
             let _permit=permit;
-            let resolved = if let Some(config) = &manual {Some(crate::manual_billing::reconcile(rows.as_deref().unwrap_or(&[]),&usage,&details,text(&period,"start"),&end,"proportional",config,&members.iter().map(|c|int(c,"account_id")).collect::<Vec<_>>())?)}else{rows.as_ref().map(|r|billing::reconcile(r,&usage,&details,text(&period,"start"),&end,"proportional")).transpose()?};
-            let mut split=vendor_allocations(int(&period,"cost_fen"),int(&period,"creditor_id"),&members,&usage,&resolved.as_ref().map_or(json!([]),|r|r["matched"].clone()),manual.as_ref().and(resolved.as_ref()))?;
+            let (resolved, matched_usages) = if let Some(config) = &manual {
+                let (r, m) = crate::manual_billing::reconcile_compact(rows.as_deref().unwrap_or(&[]),&usage,&details,text(&period,"start"),&end,"proportional",config,&members.iter().map(|c|int(c,"account_id")).collect::<Vec<_>>())?;
+                (Some(r), m)
+            } else if let Some(r) = rows.as_ref() {
+                let (r, m) = billing::reconcile_compact(r,&usage,&details,text(&period,"start"),&end,"proportional")?;
+                (Some(r), m)
+            } else {
+                (None, Vec::new())
+            };
+            let mut split=vendor_allocations_compact(int(&period,"cost_fen"),int(&period,"creditor_id"),&members,&usage,&matched_usages,manual.as_ref().and(resolved.as_ref()))?;
             if let Some(r)=&resolved {
                 for account in split["accounts"]
                     .as_array_mut()
@@ -251,12 +331,13 @@ impl Service {
                     calc["bill"]=merge(without(r.clone(),&["matched","unmatched","outside","weights","local_unmatched","manual_weights","manual_basis"]),json!({"rules_version":rules,"billable_cost_fen":if valid{a["amount_fen"].clone()}else{Value::Null},"import_id":period["bill_import_id"],"file_hash":stored.as_ref().map(|b|&b["file_hash"]),"basis":split["basis"],"group_cost_fen":period["cost_fen"]}));
                 }
                 if include_records{calc["records"]=serde_json::to_value(own_records.get(&aid).map_or(&[][..], Vec::as_slice))?;
-                    if members.first().is_some_and(|m|m["id"]==c["id"]){calc["vendor_basis"]=json!({"bill":resolved,"split":split,"versions":versions});}
+                    if members.first().is_some_and(|m|m["id"]==c["id"]){calc["vendor_basis"]=json!({"bill":resolved.as_ref().map(|r|without(r.clone(),BILL_DETAIL_KEYS)),"split":split,"versions":versions});}
                 }
                 calculations.push(calc);
             }
             for a in split["accounts"].as_array_mut().ok_or_else(Error::unavailable)?{Self::apply_names(&mut a["allocations"],&names);}
-            let result=merge(resolved.clone().unwrap_or(json!({})),json!({"vendor_period":group,"version":period["version"],"digest":rules_digest,"rules_version":rules,"cost_fen":period["cost_fen"],"bill_total_fen":resolved.as_ref().map(|r|if manual.is_some(){r["upstream_total_fen"].clone()}else{r["cost_fen"].clone()}),"billable_cost_fen":period["cost_fen"],"accounts":split["accounts"],"basis":split["basis"],"can_confirm":eligible,"difference_required":difference,"difference_amount":bill_difference.map(|d|d.to_string()),"coverage_warnings":gaps,"end":end}));
+            let bill_total_fen = resolved.as_ref().map(|r|if manual.is_some(){r["upstream_total_fen"].clone()}else{r["cost_fen"].clone()});
+            let result=merge(resolved.unwrap_or(json!({})),json!({"vendor_period":group,"version":period["version"],"digest":rules_digest,"rules_version":rules,"cost_fen":period["cost_fen"],"bill_total_fen":bill_total_fen,"billable_cost_fen":period["cost_fen"],"accounts":split["accounts"],"basis":split["basis"],"can_confirm":eligible,"difference_required":difference,"difference_amount":bill_difference.map(|d|d.to_string()),"coverage_warnings":gaps,"end":end}));
             Ok(json!({"result":result,"versions":versions,"period":period,"calculations":calculations}))
         }).await.map_err(|_|Error::unavailable())?
     }
@@ -544,27 +625,16 @@ impl Service {
                 "上游扣费（元，原始精度）",
                 "未匹配原因",
             ],
-            array(&p["result"]["unmatched"])
-                .iter()
-                .map(|r| (r, false))
-                .chain(array(&p["result"]["outside"]).iter().map(|r| (r, true)))
-                .map(|(r, outside)| {
-                    vec![
-                        int(r, "row").to_string(),
-                        text(r, "created_at").to_owned(),
-                        text(r, "model").to_owned(),
-                        text(r, "request_id").to_owned(),
-                        text(r, "amount").to_owned(),
-                        if outside {
-                            "周期范围外"
-                        } else if r["reason"] == "ambiguous" {
-                            "存在歧义"
-                        } else {
-                            "未找到本地请求"
-                        }
-                        .to_owned(),
-                    ]
-                }),
+            super::operations::unmatched_and_outside(&p["result"]).map(|(r, outside)| {
+                vec![
+                    int(r, "row").to_string(),
+                    text(r, "created_at").to_owned(),
+                    text(r, "model").to_owned(),
+                    text(r, "request_id").to_owned(),
+                    text(r, "amount").to_owned(),
+                    super::operations::unmatched_csv_reason(r, outside).to_owned(),
+                ]
+            }),
         )
     }
 }

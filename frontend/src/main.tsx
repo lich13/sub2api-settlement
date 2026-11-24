@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  ArrowDownLeft,
-  Bell,
-  CircleCheck,
-  Layers3,
-  Plus,
-  Search,
-  Settings2,
-  Wallet,
-} from "lucide-react";
+import ArrowDownLeft from "lucide-react/icons/arrow-down-left";
+import Bell from "lucide-react/icons/bell";
+import CircleCheck from "lucide-react/icons/circle-check";
+import Layers3 from "lucide-react/icons/layers-3";
+import Plus from "lucide-react/icons/plus";
+import Search from "lucide-react/icons/search";
+import Settings2 from "lucide-react/icons/settings-2";
+import Wallet from "lucide-react/icons/wallet";
 import { api, ApiError, formatVersion, money, setCsrf } from "./api";
 import type {
   Account,
@@ -255,6 +253,7 @@ export function App() {
   }, []);
   useEffect(() => {
     const clear = () => {
+      setCsrf("");
       setMe(null);
       setOverview(null);
       setVendors([]);
@@ -279,7 +278,7 @@ export function App() {
     return () => window.removeEventListener("settlement:expired", clear);
   }, []);
   const refreshing = useRef(false);
-  async function refresh() {
+  async function refresh(background = false) {
     if (!me) return;
     refreshing.current = true;
     const sequence = ++refreshSequence.current;
@@ -289,13 +288,14 @@ export function App() {
     const needCatalog =
       !!isAdmin &&
       (!catalogSource ||
-        tab === "accounts" ||
-        (tab === "manage" && manageTab === "cycles") ||
         !!form ||
         !!vendorManager ||
-        !!settlement);
+        !!settlement ||
+        (!background &&
+          (tab === "accounts" ||
+            (tab === "manage" && manageTab === "cycles"))));
     const needVendors =
-      tab === "accounts" ||
+      (tab === "accounts" && (!background || costView === "accounts")) ||
       (!!isAdmin &&
         ((tab === "manage" && manageTab === "cycles") ||
           !!vendorManager ||
@@ -303,7 +303,11 @@ export function App() {
     const needOrders =
       tab === "bills" || (tab === "manage" && manageTab === "orders");
     const needReceivable = tab === "receivable";
-    const needExpenses = tab === "accounts";
+    const needExpenses =
+      (tab === "accounts" && (!background || costView === "expenses")) ||
+      !!form?.expense ||
+      !!form?.newExpense ||
+      !!settlement?.expenseIds.length;
     const needHistory = isAdmin && tab === "manage" && manageTab === "cycles";
     const needDeletions =
       isAdmin && tab === "manage" && manageTab === "deletions";
@@ -370,7 +374,7 @@ export function App() {
       if (past) setHistory(past);
       if (jobs) setDeletions(jobs.items);
     } catch (e) {
-      setError((e as Error).message);
+      if (sequence === refreshSequence.current) setError((e as Error).message);
     } finally {
       if (sequence === refreshSequence.current) refreshing.current = false;
     }
@@ -380,22 +384,23 @@ export function App() {
   useEffect(() => {
     if (!me) return;
     if (!(tab === "manage" && manageTab === "audit" && overviewSource)) {
-      void latestRefresh.current();
+      void latestRefresh.current(false);
     }
-    const poll = () => {
+    const poll = (background: boolean) => {
       if (!document.hidden && !refreshing.current) {
-        void latestRefresh.current();
+        void latestRefresh.current(background);
       }
     };
-    const timer = setInterval(poll, 10_000);
-    document.addEventListener("visibilitychange", poll);
+    const onVisible = () => poll(false);
+    const timer = setInterval(() => poll(true), 10_000);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       refreshing.current = false;
       ++refreshSequence.current;
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", poll);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [me, tab, manageTab]);
+  }, [me, tab, manageTab, costView]);
   const discoveredAccounts = useRef("");
   useEffect(() => {
     const canRefreshOverview =
@@ -429,21 +434,51 @@ export function App() {
     setFilter("all");
     setError("");
   }
-  function beginSettlement(ids: number[], renew = false) {
-    setSettlement({
-      ids: expandVendorSelection(
-        ids,
-        vendors.flatMap((v) => v.periods).filter((p) => p.status === "open"),
-      ),
-      expenseIds: [],
-      renew,
-    });
-  }
-  function toggle(id: number) {
+  const allVendorPeriods = useMemo(
+    () => vendors.flatMap((v) => v.periods),
+    [vendors],
+  );
+  const openVendorPeriods = useMemo(
+    () => allVendorPeriods.filter((p) => p.status === "open"),
+    [allVendorPeriods],
+  );
+  const beginSettlement = useCallback(
+    (ids: number[], renew = false) => {
+      setSettlement({
+        ids: expandVendorSelection(ids, openVendorPeriods),
+        expenseIds: [],
+        renew,
+      });
+    },
+    [openVendorPeriods],
+  );
+  const toggle = useCallback((id: number) => {
     setSelected((s) =>
       s.includes(id) ? s.filter((x) => x !== id) : [...s, id],
     );
-  }
+  }, []);
+  const toggleVendorGroup = useCallback((ids: number[]) => {
+    const groupSet = new Set(ids);
+    setSelected((prev) =>
+      prev.some((id) => groupSet.has(id))
+        ? prev.filter((id) => !groupSet.has(id))
+        : [...new Set([...prev, ...ids])],
+    );
+  }, []);
+  const handleManageVendor = useCallback(
+    (id?: number, action?: Exclude<GroupAction, "create">) =>
+      setVendorManager({ id, action }),
+    [],
+  );
+  const handleUpgradeAccount = useCallback(
+    (upgrade: Account) => setForm({ upgrade }),
+    [],
+  );
+  const handleEditAccountCycle = useCallback(
+    (account: Account, cycle?: Cycle) =>
+      setForm({ account, ...(cycle ? { cycle } : {}) }),
+    [],
+  );
   async function run(action: () => Promise<unknown>, message = "已保存") {
     setBusy(true);
     setError("");
@@ -464,6 +499,8 @@ export function App() {
       setBusy(false);
     }
   }
+  const latestRun = useRef(run);
+  latestRun.current = run;
   async function saved(message?: string) {
     setError("");
     setForm(null);
@@ -473,7 +510,7 @@ export function App() {
     await refreshAccountState();
     await refresh();
   }
-  async function showOrder(id: number) {
+  const showOrder = useCallback(async (id: number) => {
     const ticket = ++detailSequence.current;
     try {
       const value = await api<{
@@ -485,8 +522,8 @@ export function App() {
     } catch (e) {
       if (ticket === detailSequence.current) setError((e as Error).message);
     }
-  }
-  async function showCycle(id: number) {
+  }, []);
+  const showCycle = useCallback(async (id: number) => {
     const ticket = ++detailSequence.current;
     try {
       const snapshot = await api<Calculation>(`/cycles/${id}`);
@@ -494,25 +531,28 @@ export function App() {
     } catch (e) {
       if (ticket === detailSequence.current) setError((e as Error).message);
     }
-  }
-  function openConfirm(next: ConfirmState) {
+  }, []);
+  const openConfirm = useCallback((next: ConfirmState) => {
     setError("");
     setConfirm(next);
-  }
-  function orderAction(o: Order) {
-    const group = orders.filter((row) =>
-      o.batch_id ? row.batch_id === o.batch_id : row.id === o.id,
-    );
-    openConfirm({
-      text: `标记 ${group.length} 张历史待处理订单已结清 ${money(group.reduce((sum, row) => sum + row.amount_fen, 0))}`,
-      action: () =>
-        api(`/orders/${o.id}/actions`, "POST", {
-          action: "mark_paid",
-          version: o.version,
-        }),
-    });
-  }
-  async function showNetting(value: NetBalance | NetPayment) {
+  }, []);
+  const orderAction = useCallback(
+    (o: Order) => {
+      const group = orders.filter((row) =>
+        o.batch_id ? row.batch_id === o.batch_id : row.id === o.id,
+      );
+      openConfirm({
+        text: `标记 ${group.length} 张历史待处理订单已结清 ${money(group.reduce((sum, row) => sum + row.amount_fen, 0))}`,
+        action: () =>
+          api(`/orders/${o.id}/actions`, "POST", {
+            action: "mark_paid",
+            version: o.version,
+          }),
+      });
+    },
+    [orders, openConfirm],
+  );
+  const showNetting = useCallback(async (value: NetBalance | NetPayment) => {
     const ticket = ++detailSequence.current;
     try {
       const path =
@@ -524,27 +564,31 @@ export function App() {
     } catch (e) {
       if (ticket === detailSequence.current) setError((e as Error).message);
     }
-  }
-  function payNetting(value: NetBalance) {
-    const payerName =
-      value.payer_id === value.user_a ? value.name_a : value.name_b;
-    const creditorName =
-      value.creditor_id === value.user_a ? value.name_a : value.name_b;
-    const text = value.amount_fen
-      ? `${payerName} 向 ${creditorName} 转账 ${money(value.amount_fen)}，结清双方 ${value.order_count} 张订单`
-      : `确认 ${value.name_a} 与 ${value.name_b} 的 ${value.order_count} 张订单相互抵消，无需转账`;
-    const payload = {
-      user_a: value.user_a,
-      user_b: value.user_b,
-      digest: value.digest,
-    };
-    openConfirm({
-      text,
-      payment: true,
-      action: (memo) => api("/netting/payments", "POST", { ...payload, ...memo }),
-    });
-  }
-  async function retryDeletion(job: DeletionJob) {
+  }, []);
+  const payNetting = useCallback(
+    (value: NetBalance) => {
+      const payerName =
+        value.payer_id === value.user_a ? value.name_a : value.name_b;
+      const creditorName =
+        value.creditor_id === value.user_a ? value.name_a : value.name_b;
+      const text = value.amount_fen
+        ? `${payerName} 向 ${creditorName} 转账 ${money(value.amount_fen)}，结清双方 ${value.order_count} 张订单`
+        : `确认 ${value.name_a} 与 ${value.name_b} 的 ${value.order_count} 张订单相互抵消，无需转账`;
+      const payload = {
+        user_a: value.user_a,
+        user_b: value.user_b,
+        digest: value.digest,
+      };
+      openConfirm({
+        text,
+        payment: true,
+        action: (memo) =>
+          api("/netting/payments", "POST", { ...payload, ...memo }),
+      });
+    },
+    [openConfirm],
+  );
+  const retryDeletion = useCallback(async (job: DeletionJob) => {
     setBusy(true);
     setError("");
     try {
@@ -565,7 +609,56 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }
+  }, []);
+  const cancelDeletion = useCallback((job: DeletionJob) => {
+    void latestRun.current(
+      () =>
+        api(`/account-deletions/${job.id}/cancel`, "POST", {
+          version: job.version,
+        }),
+      "已取消删除任务",
+    );
+  }, []);
+  const showExpenseDetail = useCallback((item: ExpenseCalculation) => {
+    ++detailSequence.current;
+    setDetail({ snapshot: item });
+  }, []);
+  const voidExpense = useCallback(
+    (item: ExpenseCalculation) =>
+      openConfirm({
+        text: `作废「${item.expense.name}」本次结算？已报已付或结清的账目无法作废。`,
+        action: () =>
+          api(`/settlements/${item.expense.settlement_id}/void`, "POST", {}),
+      }),
+    [openConfirm],
+  );
+  const editExpense = useCallback(
+    (expense: ExpenseCalculation) => setForm({ expense }),
+    [],
+  );
+  const settleExpense = useCallback(
+    (expenseId: number) =>
+      setSettlement({
+        ids: [],
+        expenseIds: [expenseId],
+        renew: false,
+      }),
+    [],
+  );
+  const handleManageCycleEdit = useCallback(
+    (cycle: Cycle) => setForm({ cycle }),
+    [],
+  );
+  const voidCycle = useCallback(
+    (c: Cycle) =>
+      openConfirm({
+        text: `作废「${c.name}」本次结算，并恢复为待重算周期`,
+        action: () => api(`/settlements/${c.settlement_id}/void`, "POST"),
+      }),
+    [openConfirm],
+  );
+  const normalizedQuery = query.trim().toLowerCase();
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   const filteredAccounts = useMemo(
     () =>
       (overview?.accounts || []).filter(
@@ -573,14 +666,14 @@ export function App() {
           !a.deleted &&
           !a.vendor_id &&
           (isAdmin || a.kind === "paid") &&
-          (!query ||
-            `${a.name} ${a.id}`.toLowerCase().includes(query.toLowerCase())) &&
+          (!normalizedQuery ||
+            `${a.name} ${a.id}`.toLowerCase().includes(normalizedQuery)) &&
           (filter === "all" || filter === "open"
             ? filter === "all" ||
               (a.kind === "paid" && a.cycle?.status === "open")
             : a.kind === filter),
       ),
-    [overview, isAdmin, query, filter],
+    [overview, isAdmin, normalizedQuery, filter],
   );
   const visibleVendors = useMemo(
     () =>
@@ -607,17 +700,25 @@ export function App() {
   );
   const allVisibleSelected =
     selectableCycleIds.length > 0 &&
-    selectableCycleIds.every((id) => selected.includes(id));
+    selectableCycleIds.every((id) => selectedSet.has(id));
+  const toggleAllVisible = useCallback(() => {
+    const visibleSet = new Set(selectableCycleIds);
+    setSelected((prev) =>
+      allVisibleSelected
+        ? prev.filter((id) => !visibleSet.has(id))
+        : [...new Set([...prev, ...selectableCycleIds])],
+    );
+  }, [allVisibleSelected, selectableCycleIds]);
   const filteredExpenses = useMemo(
     () =>
       expenses.filter(
         (item) =>
-          !query ||
+          !normalizedQuery ||
           `${item.expense.name} ${item.expense.id} ${item.creditor_name || ""}`
             .toLowerCase()
-            .includes(query.toLowerCase()),
+            .includes(normalizedQuery),
       ),
-    [expenses, query],
+    [expenses, normalizedQuery],
   );
   const billPage =
     tab === "bills" || (tab === "manage" && manageTab === "orders");
@@ -635,13 +736,32 @@ export function App() {
             map.set(c.id, currentCycle(c));
     return map;
   }, [overview, history.cycles, vendors, currentCycle]);
-  const settleSelection = expandVendorSelection(
-    settlement?.ids || [],
-    vendors.flatMap((v) => v.periods).filter((p) => p.status === "open"),
+  const settleSelection = useMemo(
+    () => expandVendorSelection(settlement?.ids || [], openVendorPeriods),
+    [settlement?.ids, openVendorPeriods],
   );
-  const settleCycles = settleSelection
-    .map((id) => availableCycles.get(id))
-    .filter((cycle): cycle is Cycle => !!cycle);
+  const settleCycles = useMemo(
+    () =>
+      settleSelection
+        .map((id) => availableCycles.get(id))
+        .filter((cycle): cycle is Cycle => !!cycle),
+    [settleSelection, availableCycles],
+  );
+  const hasActiveVendors = useMemo(
+    () => vendors.some((v) => !v.archived_at),
+    [vendors],
+  );
+  const topAlerts = [
+    ...new Set(
+      [
+        !confirm ? error : "",
+        tab !== "manage" ? overview?.sync_error : "",
+        tab !== "manage"
+          ? accountState?.error || overview?.account_sync_error
+          : "",
+      ].filter((msg): msg is string => !!msg),
+    ),
+  ];
 
   return (
     <div className="app">
@@ -667,7 +787,12 @@ export function App() {
             aria-label="通知"
             onClick={() => {
               setShowInbox(true);
-              if (inbox.unread) void run(() => api("/inbox/read", "POST"), "");
+              if (inbox.unread > 0) {
+                setInbox((prev) => (prev.unread ? { ...prev, unread: 0 } : prev));
+                void api("/inbox/read", "POST").catch(() => {
+                  void latestRefresh.current(false);
+                });
+              }
             }}
           >
             <Bell size={19} />
@@ -695,16 +820,9 @@ export function App() {
         ))}
       </nav>
       <main>
-        {!confirm && <FormError error={error} />}
-        {tab !== "manage" && overview?.sync_error && (
-          <FormError error={overview.sync_error} />
-        )}
-        {tab !== "manage" &&
-          (accountState?.error || overview?.account_sync_error) && (
-            <FormError
-              error={accountState?.error || overview?.account_sync_error || ""}
-            />
-          )}
+        {topAlerts.map((msg) => (
+          <FormError key={msg} error={msg} />
+        ))}
         {!me ? (
           <Empty text={error ? "从 Sub2API 菜单重新进入" : "正在验证登录…"} />
         ) : !overview ? (
@@ -941,40 +1059,26 @@ export function App() {
                   admin={!!isAdmin}
                   totals={overview?.vendor_totals}
                   selected={selected}
-                  onToggle={(ids) =>
-                    setSelected((prev) =>
-                      ids.some((id) => prev.includes(id))
-                        ? prev.filter((id) => !ids.includes(id))
-                        : [...new Set([...prev, ...ids])],
-                    )
-                  }
+                  onToggle={toggleVendorGroup}
                   query={query}
                   filter={filter}
                   onSettle={beginSettlement}
-                  onManage={(id, action) => setVendorManager({ id, action })}
+                  onManage={handleManageVendor}
                   onDetail={showCycle}
                 />
                 <AccountsTable
                   accounts={filteredAccounts}
                   isAdmin={!!isAdmin}
                   syncError={overview.sync_error}
-                  hasActiveVendors={vendors.some((v) => !v.archived_at)}
+                  hasActiveVendors={hasActiveVendors}
                   selected={selected}
                   selectableCycleIds={selectableCycleIds}
                   allVisibleSelected={allVisibleSelected}
-                  onToggleAll={() =>
-                    setSelected((prev) =>
-                      allVisibleSelected
-                        ? prev.filter((id) => !selectableCycleIds.includes(id))
-                        : [...new Set([...prev, ...selectableCycleIds])],
-                    )
-                  }
+                  onToggleAll={toggleAllVisible}
                   onToggle={toggle}
                   onConfirmStart={setStartCycle}
-                  onUpgrade={(upgrade) => setForm({ upgrade })}
-                  onEditCycle={(account, cycle) =>
-                    setForm({ account, ...(cycle ? { cycle } : {}) })
-                  }
+                  onUpgrade={handleUpgradeAccount}
+                  onEditCycle={handleEditAccountCycle}
                   onSettle={beginSettlement}
                   onDetail={showCycle}
                 />
@@ -985,29 +1089,10 @@ export function App() {
                 items={filteredExpenses}
                 actorId={me.id}
                 isAdmin={!!isAdmin}
-                onDetail={(item) => {
-                  ++detailSequence.current;
-                  setDetail({ snapshot: item });
-                }}
-                onVoid={(item) =>
-                  openConfirm({
-                    text: `作废「${item.expense.name}」本次结算？已报已付或结清的账目无法作废。`,
-                    action: () =>
-                      api(
-                        `/settlements/${item.expense.settlement_id}/void`,
-                        "POST",
-                        {},
-                      ),
-                  })
-                }
-                onEdit={(expense) => setForm({ expense })}
-                onSettle={(expenseId) =>
-                  setSettlement({
-                    ids: [],
-                    expenseIds: [expenseId],
-                    renew: false,
-                  })
-                }
+                onDetail={showExpenseDetail}
+                onVoid={voidExpense}
+                onEdit={editExpense}
+                onSettle={settleExpense}
               />
             )}
             {receivablePage && (
@@ -1037,16 +1122,10 @@ export function App() {
               <ManageCyclesTable
                 cycles={history.cycles}
                 onDetail={showCycle}
-                onManageVendor={(id) => setVendorManager({ id })}
-                onEditCycle={(cycle) => setForm({ cycle })}
-                onSettle={(ids) => beginSettlement(ids)}
-                onVoid={(c) =>
-                  openConfirm({
-                    text: `作废「${c.name}」本次结算，并恢复为待重算周期`,
-                    action: () =>
-                      api(`/settlements/${c.settlement_id}/void`, "POST"),
-                  })
-                }
+                onManageVendor={handleManageVendor}
+                onEditCycle={handleManageCycleEdit}
+                onSettle={beginSettlement}
+                onVoid={voidCycle}
               />
             )}
             {tab === "manage" && manageTab === "deletions" && (
@@ -1054,15 +1133,7 @@ export function App() {
                 deletions={deletions}
                 busy={busy}
                 onRetry={retryDeletion}
-                onCancel={(job) =>
-                  void run(
-                    () =>
-                      api(`/account-deletions/${job.id}/cancel`, "POST", {
-                        version: job.version,
-                      }),
-                    "已取消删除任务",
-                  )
-                }
+                onCancel={cancelDeletion}
               />
             )}
             {tab === "manage" && manageTab === "audit" && <AuditLog />}
@@ -1132,7 +1203,7 @@ export function App() {
               : ""
           }
           cycles={settleCycles}
-          vendorPeriods={vendors.flatMap((v) => v.periods)}
+          vendorPeriods={allVendorPeriods}
           catalog={catalog}
           done={saved}
           close={() => setSettlement(null)}

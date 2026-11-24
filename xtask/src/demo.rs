@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get},
 };
 use clap::Args;
-use fs2::FileExt;
 use serde_json::{Value, json};
 use settlement::{
     config::Config,
@@ -108,7 +107,12 @@ impl Workspace {
             .read(true)
             .write(true)
             .open(path.join("qa-server.lock"))?;
-        FileExt::try_lock_exclusive(&lock).map_err(|_| "The demo directory is already in use")?;
+        lock.try_lock().map_err(|error| match error {
+            fs::TryLockError::WouldBlock => "The demo directory is already in use".into(),
+            fs::TryLockError::Error(io_error) => {
+                Box::<dyn std::error::Error + Send + Sync>::from(io_error)
+            }
+        })?;
         if marker.exists() {
             let state: Value = serde_json::from_slice(&fs::read(&marker)?)?;
             if state["kind"] != MARKER {

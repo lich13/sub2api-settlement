@@ -1,6 +1,6 @@
 //! Opt-in supplemental basis. Legacy billing never enters this rule version.
 use crate::{
-    billing::{self, BillRow, RequestDetail, UsageRow},
+    billing::{self, BillRow, MatchedUsage, RequestDetail, UsageRow},
     error::{Error, Result},
     json::{array, digest, int, text},
     money::{Decimal, from_ratio, largest_remainder, round_cents, valid_decimal_ascii},
@@ -76,9 +76,38 @@ pub fn reconcile(
     config: &Value,
     roots: &[i64],
 ) -> Result<Value> {
+    Ok(reconcile_core(rows, usage, details, start, end, mode, config, roots, true)?.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_compact(
+    rows: &[BillRow],
+    usage: &[UsageRow],
+    details: &BTreeMap<i64, RequestDetail>,
+    start: &str,
+    end: &str,
+    mode: &str,
+    config: &Value,
+    roots: &[i64],
+) -> Result<(Value, Vec<MatchedUsage>)> {
+    reconcile_core(rows, usage, details, start, end, mode, config, roots, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconcile_core(
+    rows: &[BillRow],
+    usage: &[UsageRow],
+    details: &BTreeMap<i64, RequestDetail>,
+    start: &str,
+    end: &str,
+    mode: &str,
+    config: &Value,
+    roots: &[i64],
+    include_matched_json: bool,
+) -> Result<(Value, Vec<MatchedUsage>)> {
     let config = normalize(config)?;
     let local_only = config["source"] == "local_only";
-    let mut result = billing::reconcile_inner(
+    let (mut result, matched_usages) = billing::reconcile_core(
         if local_only { &[] } else { rows },
         usage,
         details,
@@ -86,11 +115,10 @@ pub fn reconcile(
         end,
         mode,
         true,
+        include_matched_json,
+        true,
     )?;
-    let matched: BTreeSet<_> = array(&result["matched"])
-        .iter()
-        .map(|r| int(r, "usage_id"))
-        .collect();
+    let matched: BTreeSet<_> = matched_usages.iter().map(|r| r.usage_id).collect();
     let ambiguous: BTreeSet<_> = array(&result["ambiguous_usage_ids"])
         .iter()
         .filter_map(Value::as_i64)
@@ -203,7 +231,7 @@ pub fn reconcile(
     if local_only {
         result["total"] = Value::Null;
     }
-    Ok(result)
+    Ok((result, matched_usages))
 }
 
 pub fn allocations(result: &Value, creditor: i64) -> Result<Value> {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     billing::{self, BillRow, RequestDetail, UsageRow, bill_allocations},
-    json::{array, flag, merge, without},
+    json::{BILL_DETAIL_KEYS, array, flag, merge, without},
     money::{Decimal, allocate},
     service::cycles::{estimate, start_meta},
     store::{all, exec},
@@ -37,7 +37,7 @@ impl Service {
         let mut total = Decimal::zero();
         for weight in weights.values() {
             total.add(weight);
-            total = total.rounded(60);
+            total.round_in_place(60);
         }
         let mut shares = allocate(int(c, "cost_fen"), weights, int(c, "creditor_id"), 60)?;
         Self::apply_names(&mut shares, names);
@@ -51,21 +51,39 @@ impl Service {
         let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
         for (user_id, amount) in rows {
             let weight = weights.entry(user_id).or_insert_with(Decimal::zero);
-            weight.add(&Decimal::parse(amount)?);
-            *weight = weight.rounded(60);
+            weight.add_str(amount)?;
+            weight.round_in_place(60);
         }
         Self::finish_consumption_allocations(&weights, c, names)
     }
-    pub async fn overview_calculation(&self, db: &mut Db, c: &Value, end: &str) -> Result<Value> {
-        if !c["manual_basis_id"].is_null()
-            || !c["vendor_period_id"].is_null()
-            || (c["cost_source"] == "upstream_bill" && int(c, "bill_import_id") != 0)
+    pub(super) fn check_coverage_gap(c: &Value, gap: Option<&str>) -> Result<()> {
+        if let Some(gap) = gap
+            && !estimate(text(c, "start_mode"))
+            && c["cost_source"] != "upstream_bill"
+            && c["cost_kind"] != "estimated"
+            && c["vendor_period_id"].is_null()
         {
-            return self.preview_calculation(db, c, end).await;
+            return Err(Error::conflict(gap));
         }
-        let names = Self::names(db).await?;
-        self.overview_calculation_with_names(db, c, end, &names)
-            .await
+        Ok(())
+    }
+    pub(super) fn apply_coverage_gap(
+        c: &Value,
+        calc: &mut Value,
+        gap: Option<String>,
+        check_unconfirmed: bool,
+    ) {
+        if let Some(gap) = gap {
+            if c["cost_source"] != "upstream_bill" && c["vendor_period_id"].is_null() {
+                calc["data_quality"] = json!("incomplete");
+                calc["can_settle"] = json!(false);
+                calc["start_warning"] = json!(gap);
+            }
+        } else if check_unconfirmed && !flag(calc, "start_confirmed") {
+            calc["data_quality"] = json!("estimated");
+            calc["can_settle"] = json!(false);
+            calc["start_warning"] = json!("周期起点未确认");
+        }
     }
     pub(super) async fn overview_calculation_with_names(
         &self,
@@ -92,7 +110,30 @@ impl Service {
         use sqlx::Row;
         let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
         let mut record_count = 0_usize;
+        let mut high_precision = false;
         {
+            let mut stream = sqlx::query(
+                "SELECT user_id,amount FROM usage WHERE root_id=? AND created_at>=? AND created_at<?",
+            )
+            .bind(int(c, "account_id"))
+            .bind(text(c, "start"))
+            .bind(end)
+            .fetch(&mut *db);
+            while let Some(row) = stream.try_next().await? {
+                let user_id: i64 = row.try_get(0)?;
+                let amount: &str = row.try_get(1)?;
+                let weight = weights.entry(user_id).or_insert_with(Decimal::zero);
+                weight.add_str(amount)?;
+                if weight.coefficient.bits() > 180 {
+                    high_precision = true;
+                }
+                weight.round_in_place(60);
+                record_count += 1;
+            }
+        }
+        if high_precision {
+            weights.clear();
+            record_count = 0;
             let mut stream = sqlx::query(
                 "SELECT user_id,amount FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id",
             )
@@ -104,8 +145,8 @@ impl Service {
                 let user_id: i64 = row.try_get(0)?;
                 let amount: &str = row.try_get(1)?;
                 let weight = weights.entry(user_id).or_insert_with(Decimal::zero);
-                weight.add(&Decimal::parse(amount)?);
-                *weight = weight.rounded(60);
+                weight.add_str(amount)?;
+                weight.round_in_place(60);
                 record_count += 1;
             }
         }
@@ -131,7 +172,7 @@ impl Service {
     pub(super) async fn usage(db: &mut Db, c: &Value, end: &str) -> Result<Vec<UsageRow>> {
         use futures_util::TryStreamExt;
         use sqlx::Row;
-        let mut stream = sqlx::query("SELECT account_id,amount,created_at,id,root_id,user_id FROM usage WHERE root_id=? AND created_at>=? AND created_at<? ORDER BY id")
+        let mut stream = sqlx::query("SELECT account_id,amount,created_at,id,root_id,user_id FROM usage WHERE root_id=? AND created_at>=? AND created_at<?")
             .bind(int(c,"account_id")).bind(text(c,"start")).bind(end).fetch(db);
         let mut rows = Vec::new();
         while let Some(r) = stream.try_next().await? {
@@ -144,6 +185,7 @@ impl Service {
                 user_id: r.try_get(5)?,
             });
         }
+        rows.sort_unstable_by_key(|r| r.id);
         Ok(rows)
     }
     pub(super) async fn details(
@@ -226,7 +268,7 @@ impl Service {
                 let bill = bill.unwrap_or(json!({"rows":"[]"}));
                 let bill_rows:Vec<BillRow>=serde_json::from_str(text(&bill,"rows"))?;
                 let mode=c["bill_allocation_mode"].as_str().unwrap_or("proportional");
-                let resolved=if let Some(config)=&manual {crate::manual_billing::reconcile(&bill_rows,&rows,&details,text(&c,"start"),&end,mode,config,&[int(&c,"account_id")])?}else{billing::reconcile(&bill_rows,&rows,&details,text(&c,"start"),&end,mode)?};
+                let resolved=if let Some(config)=&manual {crate::manual_billing::reconcile_compact(&bill_rows,&rows,&details,text(&c,"start"),&end,mode,config,&[int(&c,"account_id")])?.0}else{billing::reconcile_summary(&bill_rows,&rows,&details,text(&c,"start"),&end,mode)?};
                 let mut allocations=bill_allocations(&resolved,int(&c,"creditor_id"))?;Self::apply_names(&mut allocations,&names);
                 result["allocations"]=allocations;result["digest"]=json!(digest(&json!([row_digest,resolved["digest"],bill["file_hash"]])));
                 let valid=c["bill_end"]==end&&c["bill_digest"]==resolved["digest"]&&c["cost_fen"]==resolved["cost_fen"];
@@ -235,7 +277,7 @@ impl Service {
                 if mode=="proportional"&&(int(&resolved,"unmatched_count")!=0||gap.is_some())&&!flag(&c,"bill_difference_confirmed"){result["can_settle"]=json!(false);result["cost_warning"]=json!("请确认上游账单与本地记录的差异");}
                 if gap.is_some()||int(&resolved,"unmatched_count")!=0{result["data_quality"]=json!("upstream_difference");}
                 if manual.is_some() && gap.is_some(){result["can_settle"]=json!(false);result["cost_warning"]=json!("补计不能绕过本地消费覆盖缺口");}
-                result["bill"]=merge(resolved,json!({"file_name":bill["file_name"],"file_hash":bill["file_hash"],"import_id":bill["id"]}));
+                result["bill"]=merge(without(resolved,BILL_DETAIL_KEYS),json!({"file_name":bill["file_name"],"file_hash":bill["file_hash"],"import_id":bill["id"]}));
             }
             if include_records { result["records"]=serde_json::to_value(rows)?; }
             Ok(result)
@@ -243,49 +285,38 @@ impl Service {
     }
     pub async fn expense_calculation(&self, db: &mut Db, e: &Value) -> Result<Value> {
         let names = Self::names(db).await?;
-        self.expense_calculation_with_names(e, &names).await
+        Self::expense_calculation_with_names(e, &names)
     }
-    pub(super) async fn expense_calculation_with_names(
-        &self,
+    pub(super) fn expense_calculation_with_names(
         e: &Value,
         names: &BTreeMap<i64, String>,
     ) -> Result<Value> {
-        let permit = self
-            .cpu
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| Error::unavailable())?;
         let mut e = e.clone();
         if let Some(s) = e["members"].as_str() {
             e["members"] = serde_json::from_str(s)?;
         }
         let creditor_name = Self::name_from(names, int(&e, "creditor_id"));
-        let names = names.clone();
-        tokio::task::spawn_blocking(move || {
-            let _permit = permit;
-            let weights = array(&e["members"])
-                .iter()
-                .map(|m| {
-                    Ok((
-                        int(m, "user_id"),
-                        Decimal::parse(&int(m, "weight").to_string())?,
-                    ))
-                })
-                .collect::<Result<BTreeMap<_, _>>>()?;
-            let mut shares = allocate(int(&e, "cost_fen"), &weights, int(&e, "creditor_id"), 28)?;
-            let items = shares.as_array_mut().ok_or_else(Error::unavailable)?;
-            for member in array(&e["members"]) {
-                if int(member, "weight") == 0 {
-                    items.push(json!({"user_id":member["user_id"],"consumption":"0","amount_fen":0,"share":"0","self_covered":member["user_id"]==e["creditor_id"]}));
-                }
+        let weights = array(&e["members"])
+            .iter()
+            .map(|m| {
+                Ok((
+                    int(m, "user_id"),
+                    Decimal::parse(&int(m, "weight").to_string())?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let mut shares = allocate(int(&e, "cost_fen"), &weights, int(&e, "creditor_id"), 28)?;
+        let items = shares.as_array_mut().ok_or_else(Error::unavailable)?;
+        for member in array(&e["members"]) {
+            if int(member, "weight") == 0 {
+                items.push(json!({"user_id":member["user_id"],"consumption":"0","amount_fen":0,"share":"0","self_covered":member["user_id"]==e["creditor_id"]}));
             }
-            items.sort_by_key(|a| int(a, "user_id"));
-            Self::apply_names(&mut shares, &names);
-            Ok(json!({"source_type":"fixed_expense","expense":e,"allocations":shares,"can_settle":true,"creditor_name":creditor_name,"digest":digest(&e)}))
-        })
-        .await
-        .map_err(|_| Error::unavailable())?
+        }
+        items.sort_by_key(|a| int(a, "user_id"));
+        Self::apply_names(&mut shares, names);
+        Ok(
+            json!({"source_type":"fixed_expense","expense":e,"allocations":shares,"can_settle":true,"creditor_name":creditor_name,"digest":digest(&e)}),
+        )
     }
     pub fn redact(mut result: Value, actor: &Value) -> Value {
         result = without(result, &["records"]);
@@ -339,33 +370,62 @@ impl Service {
             Self::fresh(&mut db).await?;
         }
         Self::complete_vendor_selection(&mut db, ids).await?;
-        let mut vendor_cache = BTreeMap::<i64, Value>::new();
-        let mut cycles = Vec::new();
-        let mut versions = Vec::new();
-        let mut expenses = Vec::new();
-        for cid in ids {
-            let c = one(
+        let expense_ids = array(&data["expense_ids"]);
+        let names = if !ids.is_empty() || !expense_ids.is_empty() {
+            Self::names(&mut db).await?
+        } else {
+            BTreeMap::new()
+        };
+        let (coverage_from, coverage_gaps) = if !ids.is_empty() {
+            Self::coverage_meta(&mut db).await?
+        } else {
+            (Value::Null, Value::Null)
+        };
+        let cycle_rows = if ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            all(
                 &mut db,
-                "SELECT * FROM cycles WHERE id=?",
-                std::slice::from_ref(cid),
+                "SELECT * FROM cycles WHERE id IN (SELECT value FROM json_each(?))",
+                &[Value::String(dumps(ids))],
             )
-            .await?;
+            .await?
+            .into_iter()
+            .map(|c| (int(&c, "id"), c))
+            .collect::<BTreeMap<_, _>>()
+        };
+        let root_ids: Vec<i64> = cycle_rows.values().map(|c| int(c, "account_id")).collect();
+        let root_revisions = if root_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            all(
+                &mut db,
+                "SELECT root_id,version FROM rust_root_versions WHERE root_id IN (SELECT value FROM json_each(?))",
+                &[Value::String(dumps(&root_ids))],
+            )
+            .await?
+            .into_iter()
+            .map(|r| (int(&r, "root_id"), int(&r, "version")))
+            .collect::<BTreeMap<_, _>>()
+        };
+        let mut vendor_cache = BTreeMap::<i64, Value>::new();
+        let mut cycles = Vec::with_capacity(ids.len());
+        let mut versions = Vec::with_capacity(ids.len());
+        let mut expenses = Vec::with_capacity(expense_ids.len());
+        for cid in ids {
+            let c = cid
+                .as_i64()
+                .and_then(|id| cycle_rows.get(&id))
+                .ok_or_else(|| Error::new(404, "记录不存在"))?;
             if c["status"] != "open" {
                 return Err(Error::conflict("所选周期已结算，请刷新"));
             }
             let actual_end = c["end"].as_str().unwrap_or(&end);
-            if actual_end <= text(&c, "start") {
+            if actual_end <= text(c, "start") {
                 return Err(Error::invalid("结束时间必须晚于开始时间"));
             }
-            let gap = Self::coverage_error(&mut db, &c, actual_end).await?;
-            if let Some(gap) = &gap
-                && !estimate(text(&c, "start_mode"))
-                && c["cost_source"] != "upstream_bill"
-                && c["cost_kind"] != "estimated"
-                && c["vendor_period_id"].is_null()
-            {
-                return Err(Error::conflict(gap));
-            }
+            let gap = Self::coverage_error_from(&coverage_from, &coverage_gaps, c, actual_end);
+            Self::check_coverage_gap(c, gap.as_deref())?;
             let mut calc = if let Some(pid) = c["vendor_period_id"].as_i64() {
                 if let std::collections::btree_map::Entry::Vacant(entry) = vendor_cache.entry(pid) {
                     entry.insert(
@@ -379,19 +439,9 @@ impl Service {
                     .cloned()
                     .ok_or_else(Error::unavailable)?
             } else {
-                self.preview_calculation(&mut db, &c, actual_end).await?
+                self.preview_calculation(&mut db, c, actual_end).await?
             };
-            if let Some(gap) = gap {
-                if c["cost_source"] != "upstream_bill" && c["vendor_period_id"].is_null() {
-                    calc["data_quality"] = json!("incomplete");
-                    calc["can_settle"] = json!(false);
-                    calc["start_warning"] = json!(gap);
-                }
-            } else if !flag(&calc, "start_confirmed") {
-                calc["data_quality"] = json!("estimated");
-                calc["can_settle"] = json!(false);
-                calc["start_warning"] = json!("周期起点未确认");
-            }
+            Self::apply_coverage_gap(c, &mut calc, gap, true);
             calc = without(calc, &["records"]);
             if let Some(pid) = c["vendor_period_id"].as_i64() {
                 let period = &vendor_cache[&pid]["period"];
@@ -400,16 +450,17 @@ impl Service {
                         json!(Self::manual_config(&mut db, period).await?);
                 }
             }
-            calc["creditor_name"] = json!(name(&mut db, int(&c, "creditor_id")).await?);
+            calc["creditor_name"] = json!(Self::name_from(&names, int(c, "creditor_id")));
+            let root = int(c, "account_id");
             versions.push((
-                int(&c, "id"),
-                int(&c, "version"),
-                int(&c, "account_id"),
-                store::revision(&mut db, int(&c, "account_id")).await?,
+                int(c, "id"),
+                int(c, "version"),
+                root,
+                root_revisions.get(&root).copied().unwrap_or(0),
             ));
             cycles.push(calc);
         }
-        for eid in array(&data["expense_ids"]) {
+        for eid in expense_ids {
             let e = one(
                 &mut db,
                 "SELECT * FROM expenses WHERE id=?",
@@ -419,20 +470,39 @@ impl Service {
             if e["status"] != "open" {
                 return Err(Error::conflict("固定费用已出单，请刷新"));
             }
-            expenses.push(self.expense_calculation(&mut db, &e).await?);
+            expenses.push(Self::expense_calculation_with_names(&e, &names)?);
         }
         db.commit().await?;
         let payload = dumps(&cycles.iter().chain(expenses.iter()).collect::<Vec<_>>());
         let mut write = self.store.write().await?;
-        for (cid, v, root, rev) in versions {
-            let c = one(
+        if !versions.is_empty() {
+            let check_cids: Vec<i64> = versions.iter().map(|(cid, _, _, _)| *cid).collect();
+            let check_roots: Vec<i64> = versions.iter().map(|(_, _, root, _)| *root).collect();
+            let current_cycles: BTreeMap<i64, i64> = all(
                 &mut write,
-                "SELECT version FROM cycles WHERE id=?",
-                &[json!(cid)],
+                "SELECT id,version FROM cycles WHERE id IN (SELECT value FROM json_each(?))",
+                &[Value::String(dumps(&check_cids))],
             )
-            .await?;
-            if int(&c, "version") != v || store::revision(&mut write, root).await? != rev {
-                return Err(Error::conflict("消费或周期已更新，请重新预览"));
+            .await?
+            .into_iter()
+            .map(|r| (int(&r, "id"), int(&r, "version")))
+            .collect();
+            let current_revs: BTreeMap<i64, i64> = all(
+                &mut write,
+                "SELECT root_id,version FROM rust_root_versions WHERE root_id IN (SELECT value FROM json_each(?))",
+                &[Value::String(dumps(&check_roots))],
+            )
+            .await?
+            .into_iter()
+            .map(|r| (int(&r, "root_id"), int(&r, "version")))
+            .collect();
+            for (cid, v, root, rev) in versions {
+                let Some(&cur_v) = current_cycles.get(&cid) else {
+                    return Err(Error::new(404, "记录不存在"));
+                };
+                if cur_v != v || current_revs.get(&root).copied().unwrap_or(0) != rev {
+                    return Err(Error::conflict("消费或周期已更新，请重新预览"));
+                }
             }
         }
         for calc in &expenses {
@@ -570,6 +640,18 @@ impl Service {
                 &[json!(cid), actor["id"].clone()],
             )
             .await?;
+        } else {
+            exec(
+                &mut db,
+                "DELETE FROM bill_previews WHERE cycle_id=? AND actor_id=? AND rowid NOT IN (SELECT rowid FROM bill_previews WHERE cycle_id=? AND actor_id=? ORDER BY expires_at DESC, rowid DESC LIMIT 3)",
+                &[
+                    json!(cid),
+                    actor["id"].clone(),
+                    json!(cid),
+                    actor["id"].clone(),
+                ],
+            )
+            .await?;
         }
         exec(
             &mut db,
@@ -609,7 +691,8 @@ impl Service {
         let creditor = int(c, "creditor_id");
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let mut result = billing::reconcile(&rows, &usage, &details, &start, &end, &mode)?;
+            let mut result =
+                billing::reconcile_summary(&rows, &usage, &details, &start, &end, &mode)?;
             let mut shares = bill_allocations(&result, creditor)?;
             Self::apply_names(&mut shares, &names);
             result["allocations"] = shares;
@@ -627,11 +710,14 @@ impl Service {
         let mut db = self.store.read().await?;
         let p = store::one(
             &mut db,
-            "SELECT payload FROM bill_previews WHERE id=? AND actor_id=? AND cycle_id=?",
+            "SELECT payload,expires_at FROM bill_previews WHERE id=? AND actor_id=? AND cycle_id=?",
             &[data["preview_id"].clone(), actor["id"].clone(), json!(cid)],
             "账单预览不存在",
         )
         .await?;
+        if text(&p, "expires_at") < time::now().as_str() {
+            return Err(Error::conflict("账单预览已过期"));
+        }
         let mut p: Value = serde_json::from_str(text(&p, "payload"))?;
         let end = text(&p["result"], "end").to_owned();
         drop(db);

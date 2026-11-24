@@ -1,6 +1,6 @@
 [package]
 name = "settlement"
-version = "0.13.2"
+version = "0.13.3"
 edition = "2024"
 license = "MIT"
 rust-version = "1.94"
@@ -12,7 +12,7 @@ resolver = "3"
 
 [dependencies]
 axum = { version = "0.8", features = ["json", "tokio", "http1"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tower-http = { version = "0.7", features = ["fs"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "sqlite", "sqlite-bundled", "postgres", "time", "json"] }
@@ -38,12 +38,12 @@ futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 mimalloc = { version = "0.1.52", features = ["secure"] }
-fs2 = "0.4"
 libsqlite3-sys = "0.39.1"
 
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"
+tokio = { version = "1", features = ["process"] }
 
 [profile.release]
 lto = "thin"

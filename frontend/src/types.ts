@@ -1,5 +1,5 @@
 export type StartMode = "exact" | "date_estimate" | "minute_estimate" | "earliest_usage";
-export type CostKind = "exact" | "estimated";
+type CostKind = "exact" | "estimated";
 export type BillMode = "proportional" | "matched_only";
 export type ManualBasis = {source:"upstream"|"local_only";rates:{account_id:number;rate:string}[];ambiguous_usage_ids:number[]};
 export type LocalUnmatched = {usage_id:number;account_id:number;user_id:number;created_at:string;model:string;local_amount:string;rate:string|null;amount:string;reason:"missing"|"ambiguous"};

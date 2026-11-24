@@ -1,10 +1,7 @@
 use super::*;
 use crate::{
     json::{array, flag, merge, without},
-    service::{
-        cycles::{estimate, start_meta},
-        ledger::authorize,
-    },
+    service::{cycles::start_meta, ledger::authorize},
     store::all,
 };
 impl Service {
@@ -42,15 +39,20 @@ impl Service {
         admin(actor)?;
         let (state, mut accounts) = self.inventory.active_snapshot().await;
         let mut db = self.store.read().await?;
-        let earliest = all(
-            &mut db,
-            "SELECT root_id,MIN(created_at) AS created_at FROM usage GROUP BY root_id",
-            &[],
-        )
-        .await?
-        .into_iter()
-        .map(|r| (int(&r, "root_id"), r["created_at"].clone()))
-        .collect::<BTreeMap<_, _>>();
+        let active_ids: Vec<i64> = accounts.iter().map(|a| int(a, "id")).collect();
+        let earliest = if active_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            all(
+                &mut db,
+                "SELECT value AS root_id, (SELECT created_at FROM usage WHERE root_id=j.value ORDER BY created_at LIMIT 1) AS created_at FROM json_each(?) j",
+                &[Value::String(dumps(&active_ids))],
+            )
+            .await?
+            .into_iter()
+            .map(|r| (int(&r, "root_id"), r["created_at"].clone()))
+            .collect::<BTreeMap<_, _>>()
+        };
         for a in &mut accounts {
             a["earliest_usage_at"] = earliest.get(&int(a, "id")).cloned().unwrap_or(Value::Null);
         }
@@ -83,15 +85,35 @@ impl Service {
         .into_iter()
         .map(|p| (int(&p, "account_id"), p))
         .collect::<BTreeMap<_, _>>();
+        let is_admin = text(actor, "role") == "admin";
         let mut latest_cycles = BTreeMap::<i64, Value>::new();
         for c in all(
             &mut db,
-            "SELECT * FROM cycles WHERE status!='cancelled' ORDER BY (status='open') DESC,start DESC,id DESC",
+            "SELECT * FROM cycles WHERE status='open' ORDER BY start DESC,id DESC",
             &[],
         )
         .await?
         {
             latest_cycles.entry(int(&c, "account_id")).or_insert(c);
+        }
+        let missing_ids: Vec<i64> = accounts
+            .iter()
+            .map(|a| int(a, "id"))
+            .filter(|aid| {
+                !latest_cycles.contains_key(aid)
+                    && (is_admin || profiles.get(aid).is_some_and(|p| p["kind"] == "paid"))
+            })
+            .collect();
+        if !missing_ids.is_empty() {
+            for c in all(
+                &mut db,
+                "SELECT c.* FROM json_each(?) j JOIN cycles c ON c.id=(SELECT id FROM cycles WHERE account_id=j.value AND status!='cancelled' ORDER BY start DESC,id DESC LIMIT 1)",
+                &[Value::String(dumps(&missing_ids))],
+            )
+            .await?
+            {
+                latest_cycles.entry(int(&c, "account_id")).or_insert(c);
+            }
         }
         let settled_ids: Vec<i64> = latest_cycles
             .values()
@@ -111,7 +133,6 @@ impl Service {
             .map(|s| (int(&s, "id"), s))
             .collect::<BTreeMap<_, _>>()
         };
-        let is_admin = text(actor, "role") == "admin";
         let default_profile = json!({"kind":null,"profile_version":null});
         let now = time::now();
         for a in accounts {
@@ -183,10 +204,7 @@ impl Service {
                     .cloned()
                     .unwrap_or(Value::Null);
                 if !c["vendor_period_id"].is_null() {
-                    row["display"] = self
-                        .present_calculation(calc.clone(), c["status"] == "settled")
-                        .await["display"]
-                        .clone();
+                    row["display"] = Self::display_meta(&calc, c["status"] == "settled");
                 }
                 row["total_consumption"] = calc["total_consumption"].clone();
                 row["creditor_name"] = json!(Self::name_from(&names, int(&c, "creditor_id")));
@@ -247,9 +265,7 @@ impl Service {
             vendor_totals.push(json!({"id":pid,"members":members}));
         }
         for expense in all(&mut db, "SELECT * FROM expenses WHERE status='open'", &[]).await? {
-            let calc = self
-                .expense_calculation_with_names(&expense, &names)
-                .await?;
+            let calc = Self::expense_calculation_with_names(&expense, &names)?;
             estimated += array(&calc["allocations"])
                 .iter()
                 .filter(|s| s["user_id"] == actor["id"] && !flag(s, "self_covered"))
@@ -302,8 +318,7 @@ impl Service {
                 if names.is_none() {
                     names = Some(Self::names(&mut db).await?);
                 }
-                self.expense_calculation_with_names(&e, names.as_ref().unwrap())
-                    .await?
+                Self::expense_calculation_with_names(&e, names.as_ref().unwrap())?
             } else {
                 let s = snap.as_str().ok_or_else(|| Error::new(404, "记录不存在"))?;
                 let mut result: Value = serde_json::from_str(s)?;
@@ -462,23 +477,9 @@ impl Service {
             let now = time::now();
             let end = c["bill_end"].as_str().or(c["end"].as_str()).unwrap_or(&now);
             let gap = Self::coverage_error(&mut db, &c, end).await?;
-            if let Some(gap) = &gap
-                && !estimate(text(&c, "start_mode"))
-                && c["cost_source"] != "upstream_bill"
-                && c["cost_kind"] != "estimated"
-                && c["vendor_period_id"].is_null()
-            {
-                return Err(Error::conflict(gap));
-            }
+            Self::check_coverage_gap(&c, gap.as_deref())?;
             let mut r = self.preview_calculation(&mut db, &c, end).await?;
-            if let Some(gap) = gap
-                && c["cost_source"] != "upstream_bill"
-                && c["vendor_period_id"].is_null()
-            {
-                r["data_quality"] = json!("incomplete");
-                r["can_settle"] = json!(false);
-                r["start_warning"] = json!(gap);
-            }
+            Self::apply_coverage_gap(&c, &mut r, gap, false);
             r
         };
         Ok(self
@@ -487,14 +488,23 @@ impl Service {
     }
     pub async fn inbox(&self, actor: &Value) -> Result<Value> {
         let mut db = self.store.read().await?;
-        let count = one(
+        let items = all(
             &mut db,
-            "SELECT count(*) AS count FROM notifications WHERE user_id=? AND read=0",
+            "SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 100",
             &[actor["id"].clone()],
         )
         .await?;
-        Ok(
-            json!({"items":all(&mut db,"SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 100",&[actor["id"].clone()]).await?,"unread":count["count"]}),
-        )
+        let unread = if items.len() < 100 {
+            json!(items.iter().filter(|n| int(n, "read") == 0).count() as i64)
+        } else {
+            one(
+                &mut db,
+                "SELECT count(*) AS count FROM notifications WHERE user_id=? AND read=0",
+                &[actor["id"].clone()],
+            )
+            .await?["count"]
+                .clone()
+        };
+        Ok(json!({"items":items,"unread":unread}))
     }
 }

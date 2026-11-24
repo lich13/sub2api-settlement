@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import ChevronDown from "lucide-react/icons/chevron-down";
 import {
   api,
   exportUnmatchedCsv,
@@ -93,12 +93,15 @@ function BillImportPanel({
     effectiveCycle.bill_allocation_mode || "proportional",
   );
   function invalidate() {
+    if (confirming.current) return;
     ++requestVersion.current;
     setPreview(null);
     setBusy(false);
   }
   const requestVersion = useRef(0);
   const fileRead = useRef(0);
+  const confirming = useRef(false);
+  const mounted = useRef(true);
   const csvInput = useRef<HTMLInputElement>(null);
   const draftCallback = useRef(onDraftChange);
   draftCallback.current = onDraftChange;
@@ -128,20 +131,23 @@ function BillImportPanel({
   ]);
 
   useEffect(() => {
+    if (confirming.current) return;
     ++requestVersion.current;
     setPreview(null);
     setBusy(false);
     setError("");
   }, [end, effectiveCycle.id, effectiveCycle.version]);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       ++requestVersion.current;
       ++fileRead.current;
-    },
-    [],
-  );
+    };
+  }, []);
 
   async function inspect(useExisting = false, selectedMode = mode) {
+    if (confirming.current) return;
     if (!startConfirmed) {
       setError("请先确认周期起点后再匹配账单");
       return;
@@ -181,7 +187,9 @@ function BillImportPanel({
     }
   }
   async function confirm() {
-    if (!preview || !preview.can_confirm) return;
+    if (!preview || !preview.can_confirm || confirming.current) return;
+    ++requestVersion.current;
+    confirming.current = true;
     setBusy(true);
     setError("");
     try {
@@ -189,6 +197,7 @@ function BillImportPanel({
         version: effectiveCycle.version,
         preview_id: preview.id,
       });
+      if (!mounted.current) return;
       setCommittedMode(mode);
       setCsv("");
       setFileName("");
@@ -196,12 +205,14 @@ function BillImportPanel({
       setPreview(null);
       await onConfirmed();
     } catch (e) {
-      setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      setBusy(false);
+      confirming.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
   async function useLocalConsumption() {
+    if (confirming.current) return;
     invalidate();
     ++fileRead.current;
     if (
@@ -215,7 +226,8 @@ function BillImportPanel({
       setError("");
       return;
     }
-    const token = requestVersion.current;
+    ++requestVersion.current;
+    confirming.current = true;
     setBusy(true);
     setError("");
     try {
@@ -230,7 +242,7 @@ function BillImportPanel({
         cost_kind: "exact",
         cost_source: "manual",
       });
-      if (token !== requestVersion.current) return;
+      if (!mounted.current) return;
       setCsv("");
       setFileName("");
       if (csvInput.current) csvInput.current.value = "";
@@ -238,9 +250,10 @@ function BillImportPanel({
       setCommittedMode("proportional");
       await onConfirmed();
     } catch (e) {
-      if (token === requestVersion.current) setError((e as Error).message);
+      if (mounted.current) setError((e as Error).message);
     } finally {
-      if (token === requestVersion.current) setBusy(false);
+      confirming.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -460,13 +473,15 @@ export function SettleForm({
   close: () => void;
   renewByDefault?: boolean;
 }) {
+  const idSet = useMemo(() => new Set(ids), [ids]);
   const [end, setEnd] = useState(() => {
+    const initialIds = new Set(ids);
     const confirmedEnds = new Set<string>();
     for (const c of cycles) {
       if (!c.vendor_period_id && c.bill_end) confirmedEnds.add(c.bill_end);
     }
     for (const p of vendorPeriods) {
-      if (p.members?.some((m) => ids.includes(m.id)) && p.bill_end) {
+      if (p.members?.some((m) => initialIds.has(m.id)) && p.bill_end) {
         confirmedEnds.add(p.bill_end);
       }
     }
@@ -563,6 +578,11 @@ export function SettleForm({
   } catch {
     /* Date input may be incomplete. */
   }
+  const deleteIdSet = useMemo(() => new Set(deleteIds), [deleteIds]);
+  const catalogNameById = useMemo(
+    () => new Map(catalog.accounts.map((a) => [a.id, a.name])),
+    [catalog.accounts],
+  );
   const cycleMap = new Map<number, Cycle>();
   for (const cycle of cycles) cycleMap.set(cycle.id, cycle);
   for (const calculation of displayPreview?.cycles || []) {
@@ -571,13 +591,25 @@ export function SettleForm({
       cycleMap.set(calculation.cycle.id, calculation.cycle);
   }
   for (const [id, cycle] of cycleMap) {
-    const name = catalog.accounts.find((a) => a.id === cycle.account_id)?.name;
+    const name = catalogNameById.get(cycle.account_id);
     if (name) cycleMap.set(id, { ...cycle, name });
   }
-  const billCycles = [...cycleMap.values()].filter((c) => !c.vendor_period_id);
+  const allCycles = [...cycleMap.values()];
+  const billCycles = allCycles.filter((c) => !c.vendor_period_id);
+  const cyclesByVendorPeriod = new Map<number, Cycle[]>();
+  for (const c of allCycles) {
+    if (c.vendor_period_id) {
+      let bucket = cyclesByVendorPeriod.get(c.vendor_period_id);
+      if (!bucket) {
+        bucket = [];
+        cyclesByVendorPeriod.set(c.vendor_period_id, bucket);
+      }
+      bucket.push(c);
+    }
+  }
   const groupMap = new Map(
     vendorPeriods
-      .filter((p) => p.members?.some((c) => ids.includes(c.id)))
+      .filter((p) => p.members?.some((c) => idSet.has(c.id)))
       .map((p) => [p.id, p]),
   );
   for (const c of displayPreview?.cycles || [])
@@ -643,11 +675,8 @@ export function SettleForm({
       groups.some(
         (g) =>
           vendorRenew[g.id] &&
-          ![...cycleMap.values()].some(
-            (c) =>
-              c.vendor_period_id === g.id &&
-              !c.account_deleted &&
-              !deleteIds.includes(c.id),
+          !(cyclesByVendorPeriod.get(g.id) || []).some(
+            (c) => !c.account_deleted && !deleteIdSet.has(c.id),
           ),
       )
     ) {
@@ -765,21 +794,17 @@ export function SettleForm({
               />
             </div>
           ))}
-          {groups.map((g) => (
+          {groups.map((g) => {
+            const groupCycles = cyclesByVendorPeriod.get(g.id) || [];
+            return (
             <div key={g.id}>
               <VendorBillPanel
                 onDraftChange={(dirty) =>
                   setBillDrafts((prev) => ({ ...prev, [`group-${g.id}`]: dirty }))
                 }
                 period={g}
-                cycles={[...cycleMap.values()].filter(
-                  (c) => c.vendor_period_id === g.id,
-                )}
-                end={
-                  [...cycleMap.values()].find(
-                    (c) => c.vendor_period_id === g.id && c.end,
-                  )?.end || cutoff
-                }
+                cycles={groupCycles}
+                end={groupCycles.find((c) => c.end)?.end || cutoff}
                 onConfirmed={() => inspect()}
               />
               <label className="checkline renewal">
@@ -862,7 +887,8 @@ export function SettleForm({
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           {!!billCycles.length && (
             <div className="bill-import-list">
               {billCycles.map((cycle) => (
@@ -903,7 +929,7 @@ export function SettleForm({
                     type="checkbox"
                     checked={!!renew[c.cycle.id]}
                     disabled={
-                      deleteIds.includes(c.cycle.id) || !!c.cycle.account_deleted
+                      deleteIdSet.has(c.cycle.id) || !!c.cycle.account_deleted
                     }
                     onChange={(e) => {
                       setTouched(true);
@@ -925,7 +951,7 @@ export function SettleForm({
               <label className="checkline deletion-option">
                 <input
                   type="checkbox"
-                  checked={deleteIds.includes(c.cycle.id)}
+                  checked={deleteIdSet.has(c.cycle.id)}
                   disabled={!!renew[c.cycle.id] || !!c.cycle.account_deleted}
                   onChange={(e) => {
                     setTouched(true);
@@ -938,7 +964,7 @@ export function SettleForm({
                 />
                 出单后删除账号
               </label>
-              {deleteIds.includes(c.cycle.id) && (
+              {deleteIdSet.has(c.cycle.id) && (
                 <DeletionScope
                   accountId={c.cycle.account_id}
                   onConfirmed={(value) =>

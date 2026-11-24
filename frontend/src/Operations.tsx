@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import ChevronDown from "lucide-react/icons/chevron-down";
 import { Empty, FormError } from "./Forms";
 import { Select } from "./Select";
 import { useEffect, useRef, useState } from "react";

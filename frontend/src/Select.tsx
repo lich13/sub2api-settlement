@@ -1,5 +1,5 @@
 import type { SelectHTMLAttributes } from "react";
-import { ChevronDown } from "lucide-react";
+import ChevronDown from "lucide-react/icons/chevron-down";
 
 export function Select({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return <span className={`select-control${className === "filter" ? " select-filter" : ""}`}>

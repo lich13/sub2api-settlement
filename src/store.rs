@@ -32,17 +32,21 @@ impl Store {
                 std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
             }
         }
-        let options = SqliteConnectOptions::new()
+        let base = SqliteConnectOptions::new()
             .filename(path)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(15))
+            .pragma("temp_store", "MEMORY");
+        let write_options = base
+            .clone()
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Full)
-            .foreign_keys(true)
-            .busy_timeout(Duration::from_secs(15));
+            .pragma("journal_size_limit", "16777216");
         let writes = SqlitePoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_secs(15))
-            .connect_with(options.clone())
+            .connect_with(write_options)
             .await?;
         let mut conn = writes.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
@@ -62,9 +66,10 @@ impl Store {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         }
         let reads = SqlitePoolOptions::new()
-            .max_connections(8)
+            .max_connections(4)
+            .idle_timeout(Duration::from_secs(60))
             .acquire_timeout(Duration::from_secs(15))
-            .connect_with(options.create_if_missing(false).read_only(true))
+            .connect_with(base.create_if_missing(false).read_only(true))
             .await?;
         Ok(Self {
             reads,
@@ -179,7 +184,7 @@ pub async fn meta(db: &mut SqliteConnection, key: &str) -> Result<Value> {
 pub async fn put(db: &mut SqliteConnection, key: &str, value: &Value) -> Result<()> {
     exec(
         db,
-        "INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE meta.value IS NOT excluded.value",
         &[json!(key), json!(dumps(value))],
     )
     .await?;

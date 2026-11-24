@@ -5,6 +5,20 @@ use num_rational::BigRational;
 use num_traits::{One, Zero};
 
 impl Service {
+    pub(super) fn display_meta(value: &Value, settled: bool) -> Value {
+        let cost = value["bill"]["billable_cost_fen"]
+            .as_i64()
+            .unwrap_or_else(|| int(&value["cycle"], "cost_fen"));
+        json!({
+            "cost_multiplier": if crate::json::flag(value, "allocation_pending") {
+                None
+            } else {
+                multiplier(cost, value["total_consumption"].as_str())
+            },
+            "settled": settled,
+        })
+    }
+
     /// Decorate response copies only: display metadata never enters the ledger or its digests.
     pub(super) async fn present_calculation(&self, mut value: Value, settled: bool) -> Value {
         if value.get("cycle").is_none() {
@@ -13,13 +27,7 @@ impl Service {
         if !settled {
             self.present_cycle(&mut value["cycle"]).await;
         }
-        let cost = value["bill"]["billable_cost_fen"]
-            .as_i64()
-            .unwrap_or_else(|| int(&value["cycle"], "cost_fen"));
-        value["display"] = json!({
-            "cost_multiplier": if crate::json::flag(&value,"allocation_pending"){None}else{multiplier(cost, value["total_consumption"].as_str())},
-            "settled": settled,
-        });
+        value["display"] = Self::display_meta(&value, settled);
         value
     }
 

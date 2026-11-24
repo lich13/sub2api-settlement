@@ -803,4 +803,130 @@ describe("App account visibility", () => {
     expect(overviewCalls).toBe(beforeDeletions.overviewCalls);
     expect(inboxCalls).toBe(inboxBeforeDiscovery);
   });
+
+  it("preserves checked accounts without global busy reload when opening unread notifications, and scopes 10-second background polls by costView", async () => {
+    vi.useFakeTimers();
+    const accounts = rosterAccounts();
+    const markReadDeferred = deferred<Response>();
+    let overviewCalls = 0;
+    let catalogCalls = 0;
+    let vendorCalls = 0;
+    let expenseCalls = 0;
+    let inboxCalls = 0;
+    let inboxReadPosts = 0;
+
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith("/me")) return response(actor);
+      if (path.endsWith("/accounts/state")) {
+        return response(stateSnapshot(namesFor(accounts)));
+      }
+      if (path.endsWith("/overview")) {
+        overviewCalls += 1;
+        return response(overviewFor(accounts));
+      }
+      if (path.endsWith("/catalog")) {
+        catalogCalls += 1;
+        return response(catalogFor(accounts));
+      }
+      if (path.endsWith("/vendors")) {
+        vendorCalls += 1;
+        return response({ vendors: [] });
+      }
+      if (path.endsWith("/expenses")) {
+        expenseCalls += 1;
+        return response({ expenses: [] });
+      }
+      if (path.endsWith("/inbox")) {
+        inboxCalls += 1;
+        return response({
+          items: [
+            {
+              id: 11,
+              title: "账单待确认",
+              body: "请核对本月账单",
+              created_at: "2026-10-01T00:00:00Z",
+              read: inboxReadPosts > 0,
+            },
+          ],
+          unread: inboxReadPosts > 0 ? 0 : 2,
+        });
+      }
+      if (path.endsWith("/inbox/read") && init?.method === "POST") {
+        inboxReadPosts += 1;
+        return markReadDeferred.promise;
+      }
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await renderApp();
+    await flush();
+
+    const paidRow = rowFor("Paid Alpha");
+    const paidCheckbox = paidRow.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
+    await act(async () => {
+      paidCheckbox.click();
+      await Promise.resolve();
+    });
+    expect(paidCheckbox.checked).toBe(true);
+    const batchBtn = () =>
+      Array.from(dom.host!.querySelectorAll<HTMLButtonElement>(".toolbar-actions button")).find(
+        (btn) => btn.textContent?.trim().startsWith("批量结算"),
+      );
+    expect(batchBtn()?.disabled).toBe(false);
+
+    const bell = dom.host!.querySelector<HTMLButtonElement>(
+      'button[aria-label="通知"]',
+    )!;
+    expect(bell.querySelector("span")?.textContent).toBe("2");
+    const overviewBeforeBell = overviewCalls;
+
+    await click(bell);
+    // While POST /inbox/read is still in flight: badge is optimistically cleared,
+    // selected checkbox remains checked, toolbar actions are not locked by busy, and /overview is not re-fetched.
+    expect(bell.querySelector("span")).toBeNull();
+    expect(inboxReadPosts).toBe(1);
+    expect(paidCheckbox.checked).toBe(true);
+    expect(batchBtn()?.disabled).toBe(false);
+    expect(overviewCalls).toBe(overviewBeforeBell);
+    const inboxDialog = dom.host!.querySelector<HTMLDialogElement>("dialog[open]")!;
+    expect(inboxDialog.textContent).toContain("账单待确认");
+
+    await act(async () => {
+      markReadDeferred.resolve(response({ ok: true }));
+      await Promise.resolve();
+    });
+    await click(
+      inboxDialog.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')!,
+    );
+    expect(paidCheckbox.checked).toBe(true);
+
+    // Switching costView to "固定费用" foreground-refreshes /expenses immediately
+    const expensesBeforeSwitch = expenseCalls;
+    await click(topButton("固定费用"));
+    await flush();
+    expect(expenseCalls).toBeGreaterThan(expensesBeforeSwitch);
+
+    // A 10-second background poll on "固定费用" refreshes /overview, /inbox, and /expenses,
+    // while skipping /catalog and /vendors when no modal requires them.
+    const beforeIdleTick = {
+      overviewCalls,
+      catalogCalls,
+      vendorCalls,
+      expenseCalls,
+      inboxCalls,
+    };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await flush();
+    expect(overviewCalls).toBe(beforeIdleTick.overviewCalls + 1);
+    expect(expenseCalls).toBe(beforeIdleTick.expenseCalls + 1);
+    expect(inboxCalls).toBe(beforeIdleTick.inboxCalls + 1);
+    expect(catalogCalls).toBe(beforeIdleTick.catalogCalls);
+    expect(vendorCalls).toBe(beforeIdleTick.vendorCalls);
+  });
 });

@@ -99,9 +99,26 @@ impl App {
     pub async fn deletion_list(&self, actor: &Value, ids: Option<&[i64]>) -> Result<Value> {
         admin(actor)?;
         let mut db = self.service.store.read().await?;
-        Ok(
-            json!({"items":all(&mut db,"SELECT * FROM account_deletions ORDER BY id DESC",&[]).await?.into_iter().filter(|r|ids.is_none_or(|ids|ids.contains(&int(r,"id")))).map(public_job).collect::<Vec<_>>()}),
-        )
+        let rows = if let Some(ids) = ids {
+            if ids.is_empty() {
+                Vec::new()
+            } else {
+                all(
+                    &mut db,
+                    "SELECT * FROM account_deletions WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id DESC",
+                    &[Value::String(dumps(&ids))],
+                )
+                .await?
+            }
+        } else {
+            all(
+                &mut db,
+                "SELECT * FROM account_deletions ORDER BY id DESC",
+                &[],
+            )
+            .await?
+        };
+        Ok(json!({"items": rows.into_iter().map(public_job).collect::<Vec<_>>()}))
     }
     pub async fn recover_deletions(&self) -> Result<()> {
         let mut db = self.service.store.write().await?;
@@ -128,12 +145,19 @@ impl App {
     }
     async fn finish_deletion(&self, job: &Value, status: &str, error: Option<&str>) -> Result<()> {
         let mut db = self.service.store.write().await?;
-        self.service.inventory.persist(&mut db).await?;
+        let persisted_seq = if self.service.inventory.needs_persist().await {
+            Some(self.service.inventory.persist_seq(&mut db).await?)
+        } else {
+            None
+        };
         let changed=exec(&mut db,"UPDATE account_deletions SET status=?,error=?,version=version+1,updated_at=? WHERE id=? AND status='running'",&[json!(status),json!(error),json!(time::now()),job["id"].clone()]).await?.rows_affected();
         if changed != 0 {
             audit(&mut db,&json!({"id":job["actor_id"]}),&format!("account_deletion_{status}"),job["account_id"].clone(),&json!({"deletion_id":job["id"],"settlement_id":job["settlement_id"],"error":error})).await?;
         }
         db.commit().await?;
+        if let Some(seq) = persisted_seq {
+            self.service.inventory.mark_persisted(seq).await;
+        }
         Ok(())
     }
     async fn probe_deletion(&self, job: &Value) -> &'static str {
