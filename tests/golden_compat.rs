@@ -220,7 +220,8 @@ fn csv_parsing_and_validation_match_python() {
         compare_result(
             &mut failures,
             case,
-            billing::parse_csv(case["input"].as_str().unwrap()),
+            billing::parse_csv_rows(case["input"].as_str().unwrap())
+                .map(|rows| serde_json::to_value(rows).unwrap()),
         );
     }
     finish(failures);
@@ -231,18 +232,25 @@ fn reconciliation_matching_modes_and_digest_match_python() {
     let data = fixture("reconcile");
     let mut failures = vec![];
     for case in cases(&data, "cases") {
+        let rows: Vec<billing::BillRow> = serde_json::from_value(case["rows"].clone()).unwrap();
+        let usage: Vec<billing::UsageRow> = serde_json::from_value(case["usage"].clone()).unwrap();
         let details = case["details"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|entry| (entry[0].as_i64().unwrap(), entry[1].clone()))
+            .map(|entry| {
+                (
+                    entry[0].as_i64().unwrap(),
+                    serde_json::from_value::<billing::RequestDetail>(entry[1].clone()).unwrap(),
+                )
+            })
             .collect();
         compare_result(
             &mut failures,
             case,
             billing::reconcile(
-                case["rows"].as_array().unwrap(),
-                case["usage"].as_array().unwrap(),
+                &rows,
+                &usage,
                 &details,
                 case["start"].as_str().unwrap(),
                 case["end"].as_str().unwrap(),

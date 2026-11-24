@@ -557,59 +557,6 @@ impl Service {
         }
         Ok(())
     }
-    pub async fn merge(&self, db: &mut Db, actor: &Value, data: &Value) -> Result<Value> {
-        let ids = if data.is_array() {
-            array(data)
-        } else {
-            array(&data["ids"])
-        };
-        let mut rows = Vec::new();
-        for id in ids {
-            rows.push(
-                one(
-                    db,
-                    "SELECT * FROM orders WHERE id=?",
-                    std::slice::from_ref(id),
-                )
-                .await?,
-            );
-        }
-        let first = rows.first().ok_or_else(|| Error::invalid("请选择订单"))?;
-        if text(actor, "role") != "admin" && actor["id"] != first["payer_id"] {
-            return Err(Error::new(403, "仅付款人可合并订单"));
-        }
-        if rows.iter().any(|r| {
-            r["status"] != "pending"
-                || !r["batch_id"].is_null()
-                || r["payer_id"] != first["payer_id"]
-                || r["creditor_id"] != first["creditor_id"]
-        }) {
-            return Err(Error::conflict(
-                "只能合并同一付款人、同一收款人的未合并待付款订单",
-            ));
-        }
-        let bid = exec(
-            db,
-            "INSERT INTO batches(payer_id,creditor_id,created_at) VALUES(?,?,?)",
-            &[
-                first["payer_id"].clone(),
-                first["creditor_id"].clone(),
-                json!(time::now()),
-            ],
-        )
-        .await?
-        .last_insert_rowid();
-        for r in rows {
-            exec(
-                db,
-                "UPDATE orders SET batch_id=?,version=version+1 WHERE id=?",
-                &[json!(bid), r["id"].clone()],
-            )
-            .await?;
-        }
-        audit(db, actor, "merge", json!(bid), &json!({"orders":ids})).await?;
-        Ok(json!({"id":bid}))
-    }
     pub async fn transition(
         &self,
         db: &mut Db,
@@ -618,20 +565,10 @@ impl Service {
         requested: &str,
         version: i64,
     ) -> Result<Value> {
-        let action = if requested == "confirm" {
-            if text(actor, "role") != "admin" {
-                return Err(Error::new(403, "收款方无需确认，请由管理员处理"));
-            }
-            "mark_paid"
-        } else {
-            requested
-        };
-        if action == "reject" {
-            return Err(Error::conflict("收款方无需退回订单"));
-        }
-        if !["submit", "mark_paid", "split"].contains(&action) {
+        if requested != "mark_paid" {
             return Err(Error::invalid("订单操作无效"));
         }
+        admin(actor)?;
         let o = one(db, "SELECT * FROM orders WHERE id=?", &[json!(oid)]).await?;
         if int(&o, "version") != version {
             return Err(Error::conflict("订单已更新，请刷新"));
@@ -646,62 +583,27 @@ impl Service {
             )
             .await?
         };
-        if text(actor, "role") != "admin" {
-            if action == "mark_paid" {
-                return Err(Error::new(403, "仅管理员可标记订单结清"));
-            }
-            if actor["id"] != o["payer_id"] {
-                return Err(Error::new(403, "无权操作此订单"));
-            }
+        if rows.iter().any(|r| r["status"] == "pending") {
+            return Err(Error::conflict(
+                "付款方式已升级，请刷新账单，按双方对冲后的净额确认",
+            ));
         }
-        if action == "split" {
-            if rows.iter().any(|r| r["status"] != "pending") {
-                return Err(Error::conflict("订单状态已改变"));
-            }
-            if o["batch_id"].is_null() {
-                return Err(Error::conflict("此订单未合并"));
-            }
-            exec(
+        if rows.iter().any(|r| r["status"] != "submitted") {
+            return Err(Error::conflict("只能标记待付款或待处理订单"));
+        }
+        let stamp = time::now();
+        for r in &rows {
+            let submitted = r["submitted_at"].as_str().unwrap_or(&stamp);
+            exec(db,"UPDATE orders SET status='paid',version=version+1,submitted_at=?,paid_at=? WHERE id=?",&[json!(submitted),json!(stamp),r["id"].clone()]).await?;
+            notify(
                 db,
-                "UPDATE batches SET status='split' WHERE id=?",
-                &[o["batch_id"].clone()],
+                int(r, "payer_id"),
+                "管理员已将订单标记为已结清",
+                r["id"].clone(),
             )
             .await?;
-            exec(
-                db,
-                "UPDATE orders SET batch_id=NULL,version=version+1 WHERE batch_id=?",
-                &[o["batch_id"].clone()],
-            )
-            .await?;
-        } else {
-            if rows.iter().any(|r| r["status"] == "pending") {
-                return Err(Error::conflict(
-                    "付款方式已升级，请刷新账单，按双方对冲后的净额确认",
-                ));
-            }
-            if action == "submit" {
-                return Err(Error::conflict("订单状态已改变"));
-            }
-            if rows
-                .iter()
-                .any(|r| r["status"] != "pending" && r["status"] != "submitted")
-            {
-                return Err(Error::conflict("只能标记待付款或待处理订单"));
-            }
-            let stamp = time::now();
-            for r in &rows {
-                let submitted = r["submitted_at"].as_str().unwrap_or(&stamp);
-                exec(db,"UPDATE orders SET status='paid',version=version+1,submitted_at=?,paid_at=? WHERE id=?",&[json!(submitted),json!(stamp),r["id"].clone()]).await?;
-                notify(
-                    db,
-                    int(r, "payer_id"),
-                    "管理员已将订单标记为已结清",
-                    r["id"].clone(),
-                )
-                .await?;
-            }
         }
-        audit(db,actor,action,json!(oid),&json!({"orders":rows.iter().map(|r|r["id"].clone()).collect::<Vec<_>>(),"batch_id":o["batch_id"],"requested_action":requested})).await?;
+        audit(db,actor,"mark_paid",json!(oid),&json!({"orders":rows.iter().map(|r|r["id"].clone()).collect::<Vec<_>>(),"batch_id":o["batch_id"],"requested_action":requested})).await?;
         Ok(json!({"ok":true}))
     }
     pub async fn void(&self, db: &mut Db, actor: &Value, sid: i64) -> Result<Value> {

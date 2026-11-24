@@ -441,17 +441,10 @@ impl Service {
         {
             return Err(Error::invalid("账单截止时间无效"));
         }
-        let manual = data
-            .get("manual_basis")
-            .map(crate::manual_billing::normalize)
-            .transpose()?;
-        let local_only = manual.as_ref().is_some_and(|m| m["source"] == "local_only");
-        if local_only && (!text(data, "csv").is_empty() || int(data, "import_id") != 0) {
-            return Err(Error::invalid("仅用本地记录时不能同时上传或沿用账单"));
+        if data.get("manual_basis").is_some() {
+            return Err(Error::invalid("独立账号不支持人工补计依据"));
         }
-        let (rows, file_name, file_hash) = if local_only {
-            (Vec::new(), String::new(), String::new())
-        } else if int(data, "import_id") != 0 {
+        let (rows, file_name, file_hash) = if int(data, "import_id") != 0 {
             let b = one(
                 &mut db,
                 "SELECT * FROM bill_imports WHERE id=? AND cycle_id=?",
@@ -500,14 +493,14 @@ impl Service {
                 &c,
                 &end,
                 rows.clone(),
-                manual.clone(),
+                None,
                 data["allocation_mode"]
                     .as_str()
                     .unwrap_or(c["bill_allocation_mode"].as_str().unwrap_or("proportional")),
             )
             .await?;
         let gap = Self::coverage_error(&mut db, &c, &end).await?;
-        let metadata = json!({"file_name":file_name,"file_hash":file_hash,"end":end,"version":c["version"],"difference_required":result["allocation_mode"]=="proportional"&&(int(&result,"unmatched_count")!=0||gap.is_some()),"coverage_warning":gap,"can_confirm":if manual.is_some(){flag(&result,"can_confirm") && gap.is_none() && flag(&c,"start_confirmed")}else{Decimal::parse(text(&result,"matched_amount"))?.positive()}});
+        let metadata = json!({"file_name":file_name,"file_hash":file_hash,"end":end,"version":c["version"],"difference_required":result["allocation_mode"]=="proportional"&&(int(&result,"unmatched_count")!=0||gap.is_some()),"coverage_warning":gap,"can_confirm":Decimal::parse(text(&result,"matched_amount"))?.positive()});
         result = merge(result, metadata);
         db.commit().await?;
         #[derive(serde::Serialize)]
@@ -538,8 +531,7 @@ impl Service {
             &[json!(time::now())],
         )
         .await?;
-        if manual.is_some()
-            || !c["manual_basis_id"].is_null()
+        if !c["manual_basis_id"].is_null()
             || Self::has_manual_draft(&mut db, Some(cid), None).await?
         {
             exec(

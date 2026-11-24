@@ -123,8 +123,8 @@ async fn count_external_delete(State(calls): State<Arc<AtomicUsize>>) -> StatusC
 
 #[test]
 fn csv_enforces_ten_mib_byte_limit() {
-    assert!(billing::parse_csv(&csv_with_size(CSV_LIMIT)).is_ok());
-    assert!(billing::parse_csv(&csv_with_size(CSV_LIMIT + 1)).is_err());
+    assert!(billing::parse_csv_rows(&csv_with_size(CSV_LIMIT)).is_ok());
+    assert!(billing::parse_csv_rows(&csv_with_size(CSV_LIMIT + 1)).is_err());
 }
 
 #[test]
@@ -134,11 +134,11 @@ fn csv_accepts_fifty_thousand_rows_and_rejects_the_next_row() {
         "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens\n{}",
         row.repeat(50_000)
     );
-    let parsed = billing::parse_csv(&input).unwrap();
-    assert_eq!(parsed.as_array().unwrap().len(), 50_000);
+    let parsed = billing::parse_csv_rows(&input).unwrap();
+    assert_eq!(parsed.len(), 50_000);
 
     let over_limit = format!("{input}{row}");
-    assert!(billing::parse_csv(&over_limit).is_err());
+    assert!(billing::parse_csv_rows(&over_limit).is_err());
 }
 
 #[tokio::test]

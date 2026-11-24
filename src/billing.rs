@@ -30,9 +30,6 @@ const CSV_TOKENS: [&str; 4] = [
     "Cache Read Tokens",
     "Cache Creation Tokens",
 ];
-pub fn parse_csv(input: &str) -> Result<Value> {
-    Ok(serde_json::to_value(parse_csv_rows(input)?)?)
-}
 pub fn parse_csv_rows(input: &str) -> Result<Vec<BillRow>> {
     if input.len() > 10 * 1024 * 1024 {
         return Err(Error::invalid("CSV 不能超过 10 MB"));
@@ -120,7 +117,7 @@ pub fn parse_csv_rows(input: &str) -> Result<Vec<BillRow>> {
     Ok(rows)
 }
 // Field order preserves Python's canonical sorted-key serialization.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BillRow {
     pub amount: String,
     pub cache_creation_tokens: i64,
@@ -132,7 +129,7 @@ pub struct BillRow {
     pub request_id: String,
     pub row: i64,
 }
-#[derive(serde::Deserialize, Default)]
+#[derive(Clone, serde::Deserialize, Default)]
 #[serde(default)]
 pub struct RequestDetail {
     pub request_id: Option<String>,
@@ -146,17 +143,9 @@ pub struct RequestDetail {
     pub cache_read_tokens: Option<i64>,
     pub cache_creation_tokens: Option<i64>,
 }
-pub trait MatchFields {
+trait MatchFields {
     fn field(&self, key: &str) -> &str;
     fn number(&self, key: &str) -> Option<i64>;
-}
-impl MatchFields for Value {
-    fn field(&self, key: &str) -> &str {
-        text(self, key)
-    }
-    fn number(&self, key: &str) -> Option<i64> {
-        (!self[key].is_null()).then(|| int(self, key))
-    }
 }
 impl MatchFields for BillRow {
     fn field(&self, key: &str) -> &str {
@@ -213,46 +202,23 @@ fn signature<T: MatchFields>(r: &T, model: &str) -> Signature {
         tokens: TOKEN_FIELDS.map(|k| r.number(k).unwrap_or(0)),
     }
 }
-#[derive(serde::Serialize)]
+// Field order preserves canonical sorted-key serialization.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct UsageRow {
+    #[serde(default)]
     pub account_id: i64,
+    #[serde(default)]
     pub amount: String,
     pub created_at: String,
     pub id: i64,
+    #[serde(default)]
     pub root_id: i64,
     pub user_id: i64,
 }
-pub trait UsageRecord {
-    fn id(&self) -> i64;
-    fn user_id(&self) -> i64;
-    fn created_at(&self) -> &str;
-}
-impl UsageRecord for UsageRow {
-    fn id(&self) -> i64 {
-        self.id
-    }
-    fn user_id(&self) -> i64 {
-        self.user_id
-    }
-    fn created_at(&self) -> &str {
-        &self.created_at
-    }
-}
-impl UsageRecord for Value {
-    fn id(&self) -> i64 {
-        int(self, "id")
-    }
-    fn user_id(&self) -> i64 {
-        int(self, "user_id")
-    }
-    fn created_at(&self) -> &str {
-        text(self, "created_at")
-    }
-}
-pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFields>(
-    rows: &[B],
-    usage: &[U],
-    details: &BTreeMap<i64, D>,
+pub fn reconcile(
+    rows: &[BillRow],
+    usage: &[UsageRow],
+    details: &BTreeMap<i64, RequestDetail>,
     start: &str,
     end: &str,
     mode: &str,
@@ -260,11 +226,10 @@ pub fn reconcile<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFiel
     reconcile_inner(rows, usage, details, start, end, mode, false)
 }
 // Diagnostics are opt-in: legacy result serialization and billing digests stay unchanged.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord, D: MatchFields>(
-    rows: &[B],
-    usage: &[U],
-    details: &BTreeMap<i64, D>,
+pub(crate) fn reconcile_inner(
+    rows: &[BillRow],
+    usage: &[UsageRow],
+    details: &BTreeMap<i64, RequestDetail>,
     start: &str,
     end: &str,
     mode: &str,
@@ -275,11 +240,11 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
     }
     let (included, outside): (Vec<_>, Vec<_>) = rows
         .iter()
-        .partition(|r| r.field("created_at") >= start && r.field("created_at") < end);
+        .partition(|r| r.created_at.as_str() >= start && r.created_at.as_str() < end);
     let mut by_id: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut by_tokens: HashMap<Signature, Vec<(i64, usize)>> = HashMap::new();
     for (idx, local) in usage.iter().enumerate() {
-        let Some(detail) = details.get(&local.id()) else {
+        let Some(detail) = details.get(&local.id) else {
             continue;
         };
         for rid in [
@@ -295,7 +260,7 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
         if TOKEN_FIELDS.iter().any(|k| detail.number(k).is_none()) {
             continue;
         }
-        let stamp = time::timestamp_micros(time::parse(local.created_at())?);
+        let stamp = time::timestamp_micros(time::parse(&local.created_at)?);
         for model in [
             "model",
             "requested_model",
@@ -319,8 +284,8 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
     let mut identified: HashMap<i64, Vec<usize>> = HashMap::new();
     let mut id_uses: HashMap<usize, usize> = HashMap::new();
     for r in &included {
-        if let Some(g) = by_id.get(r.field("request_id")) {
-            identified.insert(r.number("row").unwrap_or(0), g.clone());
+        if let Some(g) = by_id.get(r.request_id.as_str()) {
+            identified.insert(r.row, g.clone());
             for u in g {
                 *id_uses.entry(*u).or_default() += 1;
             }
@@ -334,12 +299,12 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
     let mut fallback: HashMap<i64, Vec<usize>> = HashMap::new();
     let mut fallback_uses: HashMap<usize, usize> = HashMap::new();
     for r in &included {
-        if identified.contains_key(&r.number("row").unwrap_or(0)) {
+        if identified.contains_key(&r.row) {
             continue;
         }
-        let stamp = time::timestamp_micros(time::parse(r.field("created_at"))?);
+        let stamp = time::timestamp_micros(time::parse(&r.created_at)?);
         let mut found = Vec::new();
-        if let Some(group) = by_tokens.get(&signature(*r, r.field("model"))) {
+        if let Some(group) = by_tokens.get(&signature(*r, &r.model)) {
             let lo = group.partition_point(|(t, _)| *t < stamp - 5_000_000);
             let hi = group.partition_point(|(t, _)| *t <= stamp + 5_000_000);
             for (_, u) in &group[lo..hi] {
@@ -349,32 +314,32 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
                 }
             }
         }
-        fallback.insert(r.number("row").unwrap_or(0), found);
+        fallback.insert(r.row, found);
     }
     let mut matched = Vec::new();
     let mut unmatched = Vec::new();
     let mut ambiguous = std::collections::BTreeSet::new();
     let mut weights: BTreeMap<i64, Decimal> = BTreeMap::new();
     for r in &included {
-        let (group, uses) = if let Some(g) = identified.get(&r.number("row").unwrap_or(0)) {
+        let (group, uses) = if let Some(g) = identified.get(&r.row) {
             (g, &id_uses)
         } else {
-            (&fallback[&r.number("row").unwrap_or(0)], &fallback_uses)
+            (&fallback[&r.row], &fallback_uses)
         };
         if group.len() == 1 && uses[&group[0]] == 1 {
             let local = &usage[group[0]];
             matched.push(merge(
                 serde_json::to_value(r)?,
-                json!({"usage_id":local.id(),"user_id":local.user_id()}),
+                json!({"usage_id":local.id,"user_id":local.user_id}),
             ));
-            let weight = weights.entry(local.user_id()).or_insert_with(Decimal::zero);
-            weight.add(&Decimal::parse(r.field("amount"))?);
+            let weight = weights.entry(local.user_id).or_insert_with(Decimal::zero);
+            weight.add(&Decimal::parse(&r.amount)?);
             if !diagnostics {
                 *weight = weight.rounded(60);
             }
         } else {
             if diagnostics {
-                ambiguous.extend(group.iter().map(|i| usage[*i].id()));
+                ambiguous.extend(group.iter().map(|i| usage[*i].id));
             }
             unmatched.push(merge(
                 serde_json::to_value(r)?,
@@ -382,10 +347,10 @@ pub(crate) fn reconcile_inner<B: MatchFields + serde::Serialize, U: UsageRecord,
             ));
         }
     }
-    let sum = |records: &Vec<&B>| -> Result<Decimal> {
+    let sum = |records: &Vec<&BillRow>| -> Result<Decimal> {
         let mut n = Decimal::zero();
         for r in records {
-            n.add(&Decimal::parse(r.field("amount"))?);
+            n.add(&Decimal::parse(&r.amount)?);
             if !diagnostics {
                 n = n.rounded(60);
             }

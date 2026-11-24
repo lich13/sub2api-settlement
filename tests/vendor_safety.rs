@@ -260,11 +260,9 @@ async fn vendor_routes_are_connected_before_authentication() {
     let routes = [
         (Method::GET, Method::PATCH, "vendors"),
         (Method::POST, Method::DELETE, "vendors"),
-        (Method::PATCH, Method::GET, "vendors/1"),
         (Method::POST, Method::GET, "vendors/1/archive"),
         (Method::POST, Method::GET, "vendors/1/members"),
         (Method::POST, Method::GET, "vendors/1/renew"),
-        (Method::POST, Method::GET, "vendors/1/periods"),
         (Method::PATCH, Method::GET, "vendor-periods/1"),
         (Method::POST, Method::GET, "vendor-periods/1/start-confirm"),
         (Method::POST, Method::GET, "vendor-periods/1/bill-previews"),
@@ -286,6 +284,16 @@ async fn vendor_routes_are_connected_before_authentication() {
             server.request(wrong_method.clone(), path).await,
             StatusCode::METHOD_NOT_ALLOWED,
             "expected {wrong_method} {path} to be rejected as an unsupported method"
+        );
+    }
+    for (method, retired_path) in [
+        (Method::PATCH, "vendors/1"),
+        (Method::POST, "vendors/1/periods"),
+        (Method::POST, "batches"),
+    ] {
+        assert_eq!(
+            server.request(method, retired_path).await,
+            StatusCode::NOT_FOUND
         );
     }
 }
@@ -368,8 +376,7 @@ async fn vendor_bill_preview_rejects_cost_and_member_drift_without_import() {
             "members":[
                 {"cycle_id":first,"version":first_row["version"]},
                 {"cycle_id":second,"version":second_row["version"]}
-            ],
-            "detached":[]
+            ]
         }),
     )
     .await

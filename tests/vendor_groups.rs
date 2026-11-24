@@ -663,8 +663,8 @@ async fn settlement_keeps_vendor_membership_and_renews_as_one_group() {
                 None,
             )
             .await,
-        409,
-        "整组",
+        422,
+        "不支持指定成员列表",
     );
     settle_group(
         &harness,
@@ -979,43 +979,18 @@ async fn independent_create_and_free_cannot_bypass_group_membership() {
 }
 
 #[tokio::test]
-async fn definition_only_vendor_configures_first_period_and_archive_releases_profiles() {
+async fn empty_vendor_create_is_rejected_and_settled_append_then_archive_releases_profiles() {
     let harness = Harness::new().await;
-    let vendor = mutate(
-        &harness,
-        "definition-only-create",
-        "create-vendor",
-        &json!({"name":"Definition only","cost":"6.00","creditor_id":2}),
-    )
-    .await
-    .expect("create definition-only vendor");
-    assert!(vendor.get("period").is_none());
-    assert_error(
-        mutate(
-            &harness,
-            "definition-only-empty-append",
-            &format!("add-vendor-members:{}", vendor["id"].as_i64().unwrap()),
-            &json!({"version":vendor["version"],"period_version":null,"account_ids":[100]}),
+    assert!(
+        input_contract::normalize(
+            "create-vendor",
+            json!({"name":"Definition only","cost":"6.00","creditor_id":2}),
         )
-        .await,
-        409,
-        "首期",
+        .is_err(),
+        "empty definition-only vendor creation must be rejected"
     );
-    let history_period = mutate(
-        &harness,
-        "definition-only-first-period",
-        &format!("create-vendor-period:{}", vendor["id"].as_i64().unwrap()),
-        &json!({
-            "version":vendor["version"],
-            "cost":"6.00",
-            "creditor_id":2,
-            "start":START,
-            "start_mode":"exact",
-            "account_ids":[100,200]
-        }),
-    )
-    .await
-    .expect("create first period for definition-only vendor");
+    let vendor = create_group(&harness, &[100, 200], "settled-append-create").await;
+    let history_period = period_from_vendor(&vendor);
     let first = cycle_for_account(&harness, 100).await;
     let second = cycle_for_account(&harness, 200).await;
     confirm_vendor_bill(&harness, &history_period).await;
@@ -1023,7 +998,7 @@ async fn definition_only_vendor_configures_first_period_and_archive_releases_pro
         &harness,
         &[first, second],
         json!([]),
-        "definition-only-history-settle",
+        "settled-append-history-settle",
     )
     .await
     .expect("settle history before null period append");
@@ -1036,7 +1011,7 @@ async fn definition_only_vendor_configures_first_period_and_archive_releases_pro
         .unwrap();
     let added = mutate(
         &harness,
-        "definition-only-append",
+        "settled-append-member",
         &format!("add-vendor-members:{}", vendor["id"].as_i64().unwrap()),
         &json!({"version":current_vendor["version"],"period_version":null,"account_ids":[400]}),
     )
@@ -1053,12 +1028,12 @@ async fn definition_only_vendor_configures_first_period_and_archive_releases_pro
     assert_eq!(harness.rows("profiles").await.len(), 3);
     mutate(
         &harness,
-        "definition-only-archive",
+        "settled-append-archive",
         &format!("archive-vendor:{}", vendor["id"].as_i64().unwrap()),
         &json!({"version":added["version"]}),
     )
     .await
-    .expect("archive definition-only vendor");
+    .expect("archive vendor");
     assert!(harness.rows("profiles").await.is_empty());
     let view = harness.app.service.vendors(&admin()).await.unwrap();
     let archived = view["vendors"].as_array().unwrap().first().unwrap();

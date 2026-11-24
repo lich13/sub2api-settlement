@@ -33,9 +33,6 @@
 .vendor-members > div > div { flex: 1; min-width: 0; }
 .vendor-actions { padding: 12px 18px; }
 .vendor-period-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
-.vendor-member-edit { padding: 10px 0; }
-.vendor-member-edit .checkline { flex-wrap: wrap; }
-.vendor-member-edit small { color: var(--muted); }
 .vendor-renewal { padding: 12px 0; }
 @media (max-width: 640px) {
   .vendor-groups { margin: 0 12px 12px; }
@@ -427,9 +424,7 @@ td small {
 }
 .primary-text { color: var(--accent); }
 .start-confirm { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--hover); }
-.inline-action { display: flex; align-items: flex-end; }
 .start-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.start-actions select { min-height: 38px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; }
 .cost-tabs { margin-bottom: 18px; }
 .cost-kind { display: block; font-size: 11px; font-weight: 500; color: var(--muted); margin-bottom: 4px; }
 .valid-hint { color: var(--accent); }
@@ -695,10 +690,6 @@ td small {
 .end-picker label {
   flex: 1;
 }
-.end-picker button {
-  margin-bottom: 18px;
-  height: 41px;
-}
 .allocation {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -835,16 +826,6 @@ td small {
   gap: 11px;
   min-width: 0;
 }
-.receivable-icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  border-radius: 8px;
-  color: var(--accent);
-  background: var(--soft);
-}
 .receivable-source > div:last-child {
   min-width: 0;
 }
@@ -882,16 +863,6 @@ td small {
   align-items: center;
   padding: 20px;
 }
-.bill-icon {
-  display: grid;
-  place-items: center;
-  background: var(--hover);
-  color: var(--muted);
-  width: 39px;
-  height: 43px;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
 .bill-title {
   flex: 1;
   min-width: 0;
@@ -910,12 +881,6 @@ td small {
   font-size: 11px;
   color: var(--muted);
 }
-.bill-title i {
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: var(--muted);
-}
 .bill-amount {
   display: flex;
   align-items: flex-end;
@@ -926,36 +891,6 @@ td small {
 .bill-amount > strong {
   font-size: 20px;
   font-variant-numeric: tabular-nums;
-}
-.bill-lines {
-  margin: 0 20px;
-  border-top: 1px solid var(--line);
-}
-.bill-lines button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: space-between;
-  padding: 13px 0;
-  font-size: 11px;
-  color: var(--muted);
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  background: none;
-  text-align: left;
-}
-.bill-lines button:last-child {
-  border-bottom: 0;
-}
-.bill-lines button span {
-  flex: 1;
-  overflow-wrap: anywhere;
-}
-.bill-lines button b {
-  font-variant-numeric: tabular-nums;
-  font-weight: 500;
-  color: var(--ink);
 }
 .bill-actions {
   display: flex;
@@ -1375,17 +1310,11 @@ td small {
     border-top: 1px solid var(--line);
     font-size: 18px;
   }
-  .bill-icon {
-    display: none;
-  }
   .bill-amount > strong {
     font-size: 19px;
   }
   .bill-title strong {
     font-size: 13px;
-  }
-  .bill-lines {
-    margin: 0 15px;
   }
   .bill-actions {
     margin-left: 15px;
@@ -1441,8 +1370,7 @@ td small {
   .expense-meta {
     gap: 8px 18px;
   }
-  .start-actions > .button,
-  .start-actions > select {
+  .start-actions > .button {
     min-height: 40px;
   }
   .bill-import {
@@ -1461,9 +1389,6 @@ td small {
   }
   .end-picker {
     display: block;
-  }
-  .end-picker button {
-    margin-top: -5px;
   }
   .allocation-head {
     gap: 12px;

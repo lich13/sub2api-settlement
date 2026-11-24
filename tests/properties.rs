@@ -64,26 +64,29 @@ fn row(
     request_id: &str,
     model: &str,
     tokens: [i64; 4],
-) -> Value {
-    json!({
-        "row": row_id,
-        "created_at": created_at,
-        "amount": amount,
-        "request_id": request_id,
-        "model": model,
-        "input_tokens": tokens[0],
-        "output_tokens": tokens[1],
-        "cache_read_tokens": tokens[2],
-        "cache_creation_tokens": tokens[3],
-    })
+) -> billing::BillRow {
+    billing::BillRow {
+        row: row_id,
+        created_at: created_at.to_owned(),
+        amount: amount.to_owned(),
+        request_id: request_id.to_owned(),
+        model: model.to_owned(),
+        input_tokens: tokens[0],
+        output_tokens: tokens[1],
+        cache_read_tokens: tokens[2],
+        cache_creation_tokens: tokens[3],
+    }
 }
 
-fn usage(id: i64, user_id: i64, created_at: &str) -> Value {
-    json!({
-        "id": id,
-        "user_id": user_id,
-        "created_at": created_at,
-    })
+fn usage(id: i64, user_id: i64, created_at: &str) -> billing::UsageRow {
+    billing::UsageRow {
+        account_id: 0,
+        amount: String::new(),
+        created_at: created_at.to_owned(),
+        id,
+        root_id: 0,
+        user_id,
+    }
 }
 
 fn detail(
@@ -91,19 +94,19 @@ fn detail(
     upstream_request_id: Option<&str>,
     model: &str,
     tokens: [i64; 4],
-) -> Value {
-    json!({
-        "request_id": request_id,
-        "upstream_request_id": upstream_request_id,
-        "model": model,
-        "requested_model": null,
-        "upstream_model": null,
-        "upstream_response_model": null,
-        "input_tokens": tokens[0],
-        "output_tokens": tokens[1],
-        "cache_read_tokens": tokens[2],
-        "cache_creation_tokens": tokens[3],
-    })
+) -> billing::RequestDetail {
+    billing::RequestDetail {
+        request_id: request_id.map(str::to_owned),
+        upstream_request_id: upstream_request_id.map(str::to_owned),
+        model: Some(model.to_owned()),
+        requested_model: None,
+        upstream_model: None,
+        upstream_response_model: None,
+        input_tokens: Some(tokens[0]),
+        output_tokens: Some(tokens[1]),
+        cache_read_tokens: Some(tokens[2]),
+        cache_creation_tokens: Some(tokens[3]),
+    }
 }
 
 fn matched_by_row(result: &Value) -> BTreeMap<i64, (i64, i64)> {

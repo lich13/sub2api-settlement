@@ -140,14 +140,11 @@ impl Service {
         }
         Ok(json!({"vendors":vendors,"account_revision":state["revision"]}))
     }
-    pub async fn save_vendor(
-        &self,
-        db: &mut Db,
-        actor: &Value,
-        id: Option<i64>,
-        data: &Value,
-    ) -> Result<Value> {
+    pub async fn save_vendor(&self, db: &mut Db, actor: &Value, data: &Value) -> Result<Value> {
         admin(actor)?;
+        if data.get("account_ids").is_none() {
+            return Err(Error::invalid("请选择待配置账号"));
+        }
         one(
             db,
             "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
@@ -159,43 +156,21 @@ impl Service {
         if title.is_empty() {
             return Err(Error::invalid("请填写账号组名称"));
         }
-        let creating = id.is_none();
-        let id = if let Some(id) = id {
-            let old = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
-            if old["version"] != data["version"] || !old["archived_at"].is_null() {
-                return Err(Error::conflict("账号组设置已变化，请刷新"));
-            }
-            exec(
-                db,
-                "UPDATE vendors SET name=?,cost_fen=?,creditor_id=?,version=version+1 WHERE id=?",
-                &[
-                    json!(title),
-                    json!(cost),
-                    data["creditor_id"].clone(),
-                    json!(id),
-                ],
-            )
-            .await?;
-            id
-        } else {
-            exec(
-                db,
-                "INSERT INTO vendors(name,cost_fen,creditor_id,created_at) VALUES(?,?,?,?)",
-                &[
-                    json!(title),
-                    json!(cost),
-                    data["creditor_id"].clone(),
-                    json!(time::now()),
-                ],
-            )
-            .await?
-            .last_insert_rowid()
-        };
+        let id = exec(
+            db,
+            "INSERT INTO vendors(name,cost_fen,creditor_id,created_at) VALUES(?,?,?,?)",
+            &[
+                json!(title),
+                json!(cost),
+                data["creditor_id"].clone(),
+                json!(time::now()),
+            ],
+        )
+        .await?
+        .last_insert_rowid();
         audit(db, actor, "save_vendor", json!(id), data).await?;
         let mut v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
-        if creating && data.get("account_ids").is_some() {
-            v["period"] = self.create_vendor_group_period(db, &v, data).await?;
-        }
+        v["period"] = self.create_vendor_group_period(db, &v, data).await?;
         Ok(v)
     }
     pub async fn archive_vendor(
@@ -258,34 +233,10 @@ impl Service {
         actor: &Value,
         id: i64,
         data: &Value,
-        editing: bool,
     ) -> Result<Value> {
         admin(actor)?;
-        if !editing {
-            let v = one(db, "SELECT * FROM vendors WHERE id=?", &[json!(id)]).await?;
-            if v["version"] != data["version"] || !v["archived_at"].is_null() {
-                return Err(Error::conflict("账号组已变化，请刷新"));
-            }
-            if data.get("account_ids").is_none() {
-                return Err(Error::conflict(
-                    "请直接选择待配置账号建组，已配置账号不能入组",
-                ));
-            }
-            one(
-                db,
-                "SELECT id FROM users WHERE id=? AND deleted=0 AND status='active'",
-                &[data["creditor_id"].clone()],
-            )
-            .await?;
-            let p = self.create_vendor_group_period(db, &v, data).await?;
-            exec(
-                db,
-                "UPDATE vendors SET version=version+1 WHERE id=?",
-                &[json!(id)],
-            )
-            .await?;
-            audit(db, actor, "save_vendor_period", p["id"].clone(), data).await?;
-            return Ok(p);
+        if data.get("detached").is_some() {
+            return Err(Error::invalid("当前账期不能移出或替换成员"));
         }
         let old = one(db, "SELECT * FROM vendor_periods WHERE id=?", &[json!(id)]).await?;
         let vid = int(&old, "vendor_id");
@@ -314,11 +265,7 @@ impl Service {
             .iter()
             .map(|c| int(c, "id"))
             .collect::<BTreeSet<_>>();
-        if ids.is_empty()
-            || ids.len() != requested.len()
-            || ids != previous_ids
-            || !array(&data["detached"]).is_empty()
-        {
+        if ids.is_empty() || ids.len() != requested.len() || ids != previous_ids {
             return Err(Error::conflict(
                 "当前账期不能移出或替换成员；请使用添加账号入口追加待配置账号",
             ));

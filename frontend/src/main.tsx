@@ -30,9 +30,6 @@ import {
   fromInput,
   amountPattern,
   billedMoney,
-  canImportBill,
-  canUpgradePaid,
-  isOperationalAccount,
 } from "./api";
 import type {
   Actor,
@@ -163,7 +160,7 @@ function CycleForm({
   const [aid] = useState(
     account?.id ||
       cycle?.account_id ||
-      catalog.accounts.find(isOperationalAccount)?.id ||
+      catalog.accounts.find((a) => !a.deleted)?.id ||
       0,
   );
   const name = catalog.accounts.find(a => a.id === aid)?.name || account?.name || cycle?.name || "";
@@ -873,7 +870,7 @@ export function SettleForm({
     const name = catalog.accounts.find(a => a.id === cycle.account_id)?.name;
     if (name) cycleMap.set(id, { ...cycle, name });
   }
-  const billCycles = [...cycleMap.values()].filter(canImportBill);
+  const billCycles = [...cycleMap.values()].filter((c) => !c.vendor_period_id);
   const groupMap=new Map(vendorPeriods.filter(p=>p.members?.some(c=>ids.includes(c.id))).map(p=>[p.id,p]));
   for(const c of displayPreview?.cycles||[])if(c.vendor_period&&(!groupMap.has(c.vendor_period.id)||groupMap.get(c.vendor_period.id)!.version<=c.vendor_period.version))groupMap.set(c.vendor_period.id,c.vendor_period);
   const groups=[...groupMap.values()];
@@ -1315,7 +1312,7 @@ export function App() {
   }
   const filteredAccounts = (overview?.accounts || []).filter(
     (a) =>
-      isOperationalAccount(a) &&
+      !a.deleted &&
       !a.vendor_id &&
       (isAdmin || a.kind === "paid") &&
       (!query ||
@@ -1628,7 +1625,7 @@ export function App() {
                           {isAdmin && (
                             <div className="row-actions">
                               {a.cycle?.status === "open" && !a.start_confirmed && <button className="text-button" onClick={() => setStartCycle(a.cycle)}>确认起点</button>}
-                              {canUpgradePaid(a) ? (
+                              {a.kind === "free" ? (
                                 <button className="text-button primary-text" onClick={() => setForm({ upgrade: a })}>升级付费</button>
                               ) : (
                                 <button className="text-button" onClick={() => setForm({ account: a, ...(a.cycle?.status === "open" ? { cycle: a.cycle } : {}) })}>

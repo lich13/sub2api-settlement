@@ -280,8 +280,7 @@ impl App {
             ["netting", "balances"] => &[("scope", &["mine", "receivable", "all"])],
             ["orders"] => &[
                 ("scope", &["mine", "receivable", "all"]),
-                ("view", &["full", "compact"]),
-                ("status", &["pending", "submitted", "paid", "void"]),
+                ("view", &["full"]),
             ],
             _ => &[],
         };
@@ -315,19 +314,7 @@ impl App {
                 ["netting", "balances", _, _] => s.netting_balance(actor, id(2)?, id(3)?).await,
                 ["netting", "payments"] => s.netting_payments(actor, scope, None).await,
                 ["netting", "payments", _] => s.netting_payments(actor, "mine", Some(id(2)?)).await,
-                ["orders"] => {
-                    let view = query.get("view").map(String::as_str).unwrap_or("full");
-                    if !["full", "compact"].contains(&view) {
-                        return Err(Error::invalid("订单视图无效"));
-                    }
-                    let status = query.get("status").map(String::as_str);
-                    if status
-                        .is_some_and(|s| !["pending", "submitted", "paid", "void"].contains(&s))
-                    {
-                        return Err(Error::invalid("订单状态无效"));
-                    }
-                    s.orders(actor, scope, view, status).await
-                }
+                ["orders"] => s.orders(actor, scope).await,
                 ["orders", _] => s.detail(actor, id(1)?).await,
                 ["history"] => s.history(actor).await,
                 ["inbox"] => s.inbox(actor).await,
@@ -336,17 +323,15 @@ impl App {
         }
         let (kind, entity) = match (method, parts.as_slice()) {
             ("POST", ["vendors"]) => ("create-vendor", None),
-            ("PATCH", ["vendors", _]) => ("edit-vendor", Some(id(1)?)),
             ("POST", ["vendors", _, "members"]) => ("add-vendor-members", Some(id(1)?)),
             ("POST", ["vendors", _, "renew"]) => ("renew-vendor", Some(id(1)?)),
             ("POST", ["vendors", _, "archive"]) => ("archive-vendor", Some(id(1)?)),
-            ("POST", ["vendors", _, "periods"]) => ("create-vendor-period", Some(id(1)?)),
             ("PATCH", ["vendor-periods", _]) => ("edit-vendor-period", Some(id(1)?)),
             ("POST", ["vendor-periods", _, "start-confirm"]) => {
                 ("vendor-start-confirm", Some(id(1)?))
             }
             ("POST", ["vendor-periods", _, "bill-previews"]) => {
-                let payload = crate::input::normalize("bill-preview", body)?;
+                let payload = crate::input::normalize("vendor-bill-preview", body)?;
                 return s.vendor_bill_preview(actor, id(1)?, &payload).await;
             }
             ("POST", ["vendor-periods", _, "bill-confirm"]) => {
@@ -373,7 +358,6 @@ impl App {
             ("POST", ["settlements", _, "void"]) => ("void", Some(id(1)?)),
             ("POST", ["netting", "payments"]) => ("netting-payment", None),
             ("POST", ["orders", _, "actions"]) => ("transition", Some(id(1)?)),
-            ("POST", ["batches"]) => ("merge", None),
             ("POST", ["inbox", "read"]) => ("inbox_read", None),
             ("POST", ["account-deletions", _, "retry"]) => ("delete-retry", Some(id(1)?)),
             ("POST", ["account-deletions", _, "cancel"]) => ("delete-cancel", Some(id(1)?)),
@@ -516,17 +500,17 @@ fn route_methods(path: &str) -> Option<&'static [&'static str]> {
         | ["orders"]
         | ["orders", _] => Some(&["GET"]),
         ["cycles", _] => Some(&["PATCH", "GET"]),
-        ["vendors" | "vendor-periods", _] => Some(&["PATCH"]),
+        ["vendor-periods", _] => Some(&["PATCH"]),
         ["vendors"] | ["expenses"] | ["netting", "payments"] => Some(&["GET", "POST"]),
         ["expenses", _] => Some(&["GET", "PATCH"]),
         ["accounts", _, "free"] => Some(&["PUT"]),
-        ["cycles" | "previews" | "settlements" | "batches"]
+        ["cycles" | "previews" | "settlements"]
         | [
             "cycles",
             _,
             "start-confirm" | "bill-previews" | "bill-confirm",
         ]
-        | ["vendors", _, "periods" | "archive" | "members" | "renew"]
+        | ["vendors", _, "archive" | "members" | "renew"]
         | [
             "vendor-periods",
             _,

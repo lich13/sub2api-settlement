@@ -248,23 +248,51 @@ async fn independent_cycle_can_clear_manual_draft_and_settle_through_http() {
     let preview_payload = json!({"ids": [id], "end": end});
     let initial = write(reqwest::Method::POST, "previews", preview_payload.clone()).await;
     let version = &initial["cycles"][0]["cycle"]["version"];
-    write(
-        reqwest::Method::POST,
-        &format!("cycles/{id}/bill-previews"),
-        json!({
+    let rejected = server
+        .client
+        .post(server.api_url(&format!("cycles/{id}/bill-previews")))
+        .header(header::COOKIE, &cookie)
+        .header(header::ORIGIN, &server.app.config.origin)
+        .header("X-CSRF-Token", me["csrf"].as_str().unwrap())
+        .json(&json!({
             "version": version, "end": end, "allocation_mode": "matched_only",
             "manual_basis": {
                 "source": "local_only",
                 "rates": [{"account_id": 100, "rate": "2"}],
                 "ambiguous_usage_ids": [],
             },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let bill = write(
+        reqwest::Method::POST,
+        &format!("cycles/{id}/bill-previews"),
+        json!({
+            "version": version,
+            "end": "2025-01-15T00:00:00Z",
+            "allocation_mode": "matched_only",
+            "csv": "Time,Billed Cost,Model,Input Tokens,Output Tokens,Cache Read Tokens,Cache Creation Tokens,Request ID\n2025-01-01T00:00:00+00:00,5.00,fixture-model,10,20,0,0,fixture-1\n",
+        }),
+    )
+    .await;
+    let confirmed = write(
+        reqwest::Method::POST,
+        &format!("cycles/{id}/bill-confirm"),
+        json!({
+            "version": version,
+            "preview_id": bill["id"],
+            "accept_difference": false,
+            "accept_outside": false,
         }),
     )
     .await;
     let blocked = write(reqwest::Method::POST, "previews", preview_payload.clone()).await;
     assert_eq!(blocked["cycles"][0]["can_settle"], false);
 
-    edit["version"] = version.clone();
+    edit["version"] = confirmed["version"].clone();
     edit["cost_source"] = json!("manual");
     write(reqwest::Method::PATCH, &format!("cycles/{id}"), edit).await;
     let preview = write(reqwest::Method::POST, "previews", preview_payload).await;

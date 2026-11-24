@@ -72,7 +72,13 @@ impl Service {
             sync_error = json!("消费记录同步已中断，请稍后重试");
         }
         for a in accounts {
-            let p=store::optional(&mut db,"SELECT name AS public_name,kind,vendor_id,version AS profile_version FROM profiles WHERE account_id=?",&[a["id"].clone()]).await?.unwrap_or(json!({"public_name":null,"kind":null,"profile_version":null}));
+            let p = store::optional(
+                &mut db,
+                "SELECT kind,vendor_id,version AS profile_version FROM profiles WHERE account_id=?",
+                &[a["id"].clone()],
+            )
+            .await?
+            .unwrap_or(json!({"kind":null,"profile_version":null}));
             if p["kind"] != "paid" && text(actor, "role") != "admin" {
                 continue;
             }
@@ -185,17 +191,13 @@ impl Service {
                 );
             }
             let mut members = Vec::new();
-            let mut mine_fen = 0;
-            let mut group_pending = false;
             for calc in array(&vendor_cache[&pid]["calculations"]) {
                 let pending = flag(calc, "allocation_pending") || !sync_error.is_null();
                 vendor_pending |= pending;
-                group_pending |= pending;
                 let own = array(&calc["allocations"])
                     .iter()
                     .find(|a| a["user_id"] == actor["id"]);
                 let amount = own.map_or(0, |a| int(a, "amount_fen"));
-                mine_fen += amount;
                 if !rows.iter().any(|r| r["cycle"]["id"] == calc["cycle"]["id"])
                     && own.is_some_and(|a| !flag(a, "self_covered"))
                 {
@@ -203,7 +205,7 @@ impl Service {
                 }
                 members.push(json!({"cycle_id":calc["cycle"]["id"],"amount_fen":if pending{Value::Null}else{json!(amount)},"allocation_pending":pending}));
             }
-            vendor_totals.push(json!({"id":pid,"mine_fen":if group_pending{Value::Null}else{json!(mine_fen)},"members":members}));
+            vendor_totals.push(json!({"id":pid,"members":members}));
         }
         for expense in all(&mut db, "SELECT * FROM expenses WHERE status='open'", &[]).await? {
             let calc = self.expense_calculation(&mut db, &expense).await?;
@@ -265,13 +267,7 @@ impl Service {
             Ok(json!({"expenses":items}))
         }
     }
-    pub async fn orders(
-        &self,
-        actor: &Value,
-        scope: &str,
-        view: &str,
-        status: Option<&str>,
-    ) -> Result<Value> {
+    pub async fn orders(&self, actor: &Value, scope: &str) -> Result<Value> {
         let (where_, args) = match scope {
             "all" => {
                 admin(actor)?;
@@ -281,21 +277,9 @@ impl Service {
             _ => ("o.payer_id=?", vec![actor["id"].clone()]),
         };
         let mut db = self.store.read().await?;
-        let sql = if view == "compact" {
-            if scope != "receivable" {
-                return Err(Error::invalid("紧凑订单视图仅适用于收款列表"));
-            }
-            if status.is_some_and(|s| s != "pending") {
-                return Err(Error::invalid("收款列表仅支持待付款订单"));
-            }
-            format!(
-                "SELECT o.id,o.batch_id,o.account_name AS source_name,o.payer_name,o.amount_fen,o.status FROM orders o WHERE {where_} AND o.status='pending' ORDER BY o.id DESC"
-            )
-        } else {
-            format!(
-                "SELECT o.*,c.start,c.end,e.incurred_on,s.drift,CASE WHEN o.expense_id IS NULL THEN 'account_cycle' ELSE 'fixed_expense' END AS source_type FROM orders o LEFT JOIN cycles c ON c.id=o.cycle_id LEFT JOIN expenses e ON e.id=o.expense_id JOIN settlements s ON s.id=o.settlement_id WHERE {where_} ORDER BY o.id DESC"
-            )
-        };
+        let sql = format!(
+            "SELECT o.*,c.start,c.end,e.incurred_on,s.drift,CASE WHEN o.expense_id IS NULL THEN 'account_cycle' ELSE 'fixed_expense' END AS source_type FROM orders o LEFT JOIN cycles c ON c.id=o.cycle_id LEFT JOIN expenses e ON e.id=o.expense_id JOIN settlements s ON s.id=o.settlement_id WHERE {where_} ORDER BY o.id DESC"
+        );
         Ok(json!({"orders":all(&mut db,&sql,&args).await?}))
     }
     pub async fn detail(&self, actor: &Value, oid: i64) -> Result<Value> {

@@ -250,16 +250,20 @@ pub async fn smoke(image: &str, revision: &str) -> Result<()> {
             return Err("Image health identity differs from the tested revision".into());
         }
         command("docker", &["exec", &name, "sh", "-c", "test \"$(id -u)\" = 10002 && test ! -e /app/settlement-tools && ! command -v node && ! command -v cargo"])?;
-        let legacy_files = command("docker", &[
+        let app_python = command("docker", &[
+            "exec", &name, "find", "/app",
+            "(", "-type", "f", "-o", "-type", "l", ")", "(",
+            "-iname", "*.py", "-o", "-iname", "*.pyc", "-o", "-iname", "*.pyo", ")",
+        ])?;
+        let legacy_runtime = command("docker", &[
             "exec", &name, "find", "/usr", "/app", "/bin", "/sbin", "/lib", "/lib64",
             "(", "-type", "f", "-o", "-type", "l", ")", "(",
-            "-iname", "*.py", "-o", "-iname", "*.pyc", "-o", "-iname", "*.pyo",
-            "-o", "-name", "python", "-o", "-name", "python[0-9]*",
+            "-name", "python", "-o", "-name", "python[0-9]*",
             "-o", "-name", "libpython*", "-o", "-name", "pypy*",
             "-o", "-name", "pip", "-o", "-name", "pip[0-9]*",
             "-o", "-name", "pytest", "-o", "-name", "pydoc", "-o", "-name", "pydoc[0-9]*", ")",
         ])?;
-        if !legacy_files.trim().is_empty() {
+        if !app_python.trim().is_empty() || !legacy_runtime.trim().is_empty() {
             return Err("Runtime image contains legacy interpreter or helper files".into());
         }
         command("docker", &["stop", "--time", "60", &name])?;

@@ -253,22 +253,10 @@ impl Service {
         data: &Value,
         deletes: &Value,
     ) -> Result<()> {
-        let eligible = Self::renewable_vendor_members(db, p, deletes).await?;
-        if let Some(ids) = data.get("cycle_ids") {
-            let old = Self::vendor_members(db, int(p, "id")).await?;
-            let wanted = old
-                .iter()
-                .filter(|c| eligible.iter().any(|a| a["account_id"] == c["account_id"]))
-                .map(|c| int(c, "id"))
-                .collect::<BTreeSet<_>>();
-            let provided = array(ids)
-                .iter()
-                .filter_map(Value::as_i64)
-                .collect::<BTreeSet<_>>();
-            if provided != wanted {
-                return Err(Error::conflict("账号组必须整组续费，不支持选择部分成员"));
-            }
+        if data.get("cycle_ids").is_some() {
+            return Err(Error::invalid("账号组续费不支持指定成员列表"));
         }
+        Self::renewable_vendor_members(db, p, deletes).await?;
         Ok(())
     }
 

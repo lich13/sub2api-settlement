@@ -212,7 +212,7 @@ fn vendor_allocations_use_account_then_user_largest_remainder() {
         usage(3, 200, 4, "1"),
         usage(4, 200, 5, "1"),
     ];
-    let split = vendor_allocations(101, 9, &members, &records, &json!([])).unwrap();
+    let split = vendor_allocations(101, 9, &members, &records, &json!([]), None).unwrap();
     assert_eq!(split["basis"], "local_consumption");
     assert_eq!(amount(&split["accounts"], 100), 61);
     assert_eq!(amount(&split["accounts"], 200), 40);
@@ -232,6 +232,7 @@ fn vendor_allocations_use_account_then_user_largest_remainder() {
             usage(1, 100, 2, "1"),
         ],
         &json!([]),
+        None,
     )
     .unwrap();
     assert_eq!(reversed["basis"], "local_consumption");
@@ -249,7 +250,7 @@ fn vendor_allocations_use_matched_upstream_and_reject_zero_basis() {
         {"usage_id":1,"user_id":3,"amount":"7"},
         {"usage_id":2,"user_id":4,"amount":"3"}
     ]);
-    let split = vendor_allocations(100, 2, &members, &records, &matched).unwrap();
+    let split = vendor_allocations(100, 2, &members, &records, &matched, None).unwrap();
     assert_eq!(split["basis"], "matched_upstream");
     assert_eq!(amount(&split["accounts"], 100), 70);
     assert_eq!(amount(&split["accounts"], 200), 30);
@@ -260,6 +261,7 @@ fn vendor_allocations_use_matched_upstream_and_reject_zero_basis() {
         &members,
         &[usage(1, 100, 3, "0"), usage(2, 200, 4, "0")],
         &json!([]),
+        None,
     )
     .unwrap();
     assert_eq!(zero["basis"], "local_consumption");
@@ -291,8 +293,7 @@ async fn vendor_group_edit_requires_complete_original_members() {
                 "creditor_id":2,
                 "start":START,
                 "start_mode":"exact",
-                "members":[{"cycle_id":first,"version":first_row["version"]}],
-                "detached":[]
+                "members":[{"cycle_id":first,"version":first_row["version"]}]
             }),
         )
         .await,
@@ -336,8 +337,7 @@ async fn vendor_group_edit_requires_complete_original_members() {
                     {"cycle_id":first,"version":first_row["version"]},
                     {"cycle_id":second,"version":second_row["version"]},
                     {"cycle_id":third,"version":third_row["version"]}
-                ],
-                "detached":[]
+                ]
             }),
         )
         .await,
@@ -374,7 +374,7 @@ async fn vendor_group_period_edit_rejects_detached_payload() {
             }),
         )
         .await,
-        409,
+        422,
         "不能移出或替换成员",
     );
 }
@@ -678,10 +678,18 @@ async fn vendor_group_payment_blocks_group_void() {
         &harness,
         "vendor-paid-submit",
         &format!("transition:{}", order["id"].as_i64().unwrap()),
-        &json!({"action":"confirm","version":order["version"]}),
+        &json!({"action":"mark_paid","version":order["version"]}),
     )
     .await;
     assert_error(paid, 409, "付款方式已升级");
+    let legacy_confirm = mutate(
+        &harness,
+        "vendor-paid-retired-confirm",
+        &format!("transition:{}", order["id"].as_i64().unwrap()),
+        &json!({"action":"confirm","version":order["version"]}),
+    )
+    .await;
+    assert_error(legacy_confirm, 422, "订单操作无效");
 
     let mut db = harness.app.service.store.write().await.unwrap();
     sqlx::query("UPDATE orders SET status='submitted' WHERE id=?")
@@ -694,7 +702,7 @@ async fn vendor_group_payment_blocks_group_void() {
         &harness,
         "vendor-paid-confirm",
         &format!("transition:{}", order["id"].as_i64().unwrap()),
-        &json!({"action":"confirm","version":order["version"]}),
+        &json!({"action":"mark_paid","version":order["version"]}),
     )
     .await
     .expect("mark group order paid");
@@ -747,8 +755,7 @@ async fn deleted_vendor_member_cannot_be_removed_from_open_group() {
                 "creditor_id":2,
                 "start":START,
                 "start_mode":"exact",
-                "members":[{"cycle_id":first,"version":first_row["version"]}],
-                "detached":[]
+                "members":[{"cycle_id":first,"version":first_row["version"]}]
             }),
         )
         .await,

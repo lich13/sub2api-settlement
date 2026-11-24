@@ -186,18 +186,7 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
         ],
         "add-vendor-members" => &["version", "period_version", "account_ids"],
         "renew-vendor" => &["version", "period_version", "cost", "creditor_id"],
-        "edit-vendor" => &["name", "cost", "creditor_id", "version"],
         "archive-vendor" | "void-vendor" => &["version"],
-        "create-vendor-period" => &[
-            "version",
-            "cost",
-            "creditor_id",
-            "start",
-            "start_mode",
-            "members",
-            "detached",
-            "account_ids",
-        ],
         "edit-vendor-period" => &[
             "version",
             "cost",
@@ -205,12 +194,10 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
             "start",
             "start_mode",
             "members",
-            "detached",
         ],
         "vendor-start-confirm" => &["version", "start", "members"],
         "vendor-member" => &["cycle_id", "version"],
-        "vendor-detached" => &["cycle_id", "version", "cost", "creditor_id"],
-        "vendor-renewal" => &["period_id", "version", "cost", "creditor_id", "cycle_ids"],
+        "vendor-renewal" => &["period_id", "version", "cost", "creditor_id"],
         _ => return Err(Error::invalid("账号组操作无效")),
     };
     let obj = v
@@ -227,22 +214,11 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
             ));
         }
     }
-    let definition_only = kind == "create-vendor" && v.get("account_ids").is_none();
-    if definition_only && (v.get("start").is_some() || v.get("start_mode").is_some()) {
-        return Err(Error::invalid("建组起点必须同时提供待配置账号"));
-    }
-    if fields.contains(&"start_mode") && !definition_only && v.get("start_mode").is_none() {
+    if fields.contains(&"start_mode") && v.get("start_mode").is_none() {
         v["start_mode"] = json!("exact");
     }
-    if fields.contains(&"detached") && v.get("detached").is_none() {
-        v["detached"] = json!([]);
-    }
     for k in fields {
-        let optional = (definition_only && ["account_ids", "start", "start_mode"].contains(k))
-            || (kind == "vendor-renewal" && *k == "cycle_ids")
-            || (kind == "create-vendor-period"
-                && (*k == "account_ids" || (*k == "members" && v.get("account_ids").is_some())))
-            || (kind == "add-vendor-members" && *k == "period_version");
+        let optional = kind == "add-vendor-members" && *k == "period_version";
         if !optional {
             required(&v, k)?;
         }
@@ -264,11 +240,11 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
     if fields.contains(&"cost") {
         cost(&v, "cost", &COST)?;
     }
-    if fields.contains(&"start") && !definition_only {
+    if fields.contains(&"start") {
         string(&v, "start", 1, 100)?;
         v["start"] = json!(date_time(text(&v, "start"))?);
     }
-    if fields.contains(&"start_mode") && !definition_only {
+    if fields.contains(&"start_mode") {
         choice(
             &v,
             "start_mode",
@@ -276,21 +252,15 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
             false,
         )?;
     }
-    for (key, sub, min) in [
-        ("members", "vendor-member", 1),
-        ("detached", "vendor-detached", 0),
-    ] {
-        if !fields.contains(&key) || v.get(key).is_none() {
-            continue;
-        }
-        let rows = v[key]
+    if fields.contains(&"members") && v.get("members").is_some() {
+        let rows = v["members"]
             .as_array()
-            .filter(|a| a.len() >= min && a.len() <= 100)
+            .filter(|a| !a.is_empty() && a.len() <= 100)
             .ok_or_else(|| Error::invalid("成员数量无效"))?;
         let rows = rows
             .iter()
             .cloned()
-            .map(|r| normalize_vendor(sub, r))
+            .map(|r| normalize_vendor("vendor-member", r))
             .collect::<Result<Vec<_>>>()?;
         if rows
             .iter()
@@ -301,10 +271,7 @@ fn normalize_vendor(kind: &str, mut v: Value) -> Result<Value> {
         {
             return Err(Error::invalid("成员重复"));
         }
-        v[key] = json!(rows);
-    }
-    if fields.contains(&"cycle_ids") && v.get("cycle_ids").is_some() {
-        ids(&v, "cycle_ids", 1)?;
+        v["members"] = json!(rows);
     }
     if v.get("account_ids").is_some() {
         ids(&v, "account_ids", 1)?;
@@ -315,7 +282,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
     if kind == "vendor-bill-confirm" {
         return normalize("bill-confirm", v);
     }
-    if kind.contains("vendor") {
+    if kind != "vendor-bill-preview" && kind.contains("vendor") {
         return normalize_vendor(kind, v);
     }
     if !v.is_object() {
@@ -392,6 +359,17 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 "file_name",
                 "import_id",
                 "allocation_mode",
+            ],
+            json!({"csv":null,"file_name":"usage.csv","import_id":null,"allocation_mode":null}),
+        ),
+        "vendor-bill-preview" => (
+            &[
+                "version",
+                "end",
+                "csv",
+                "file_name",
+                "import_id",
+                "allocation_mode",
                 "manual_basis",
             ],
             json!({"csv":null,"file_name":"usage.csv","import_id":null,"allocation_mode":null}),
@@ -420,7 +398,6 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             &["user_a", "user_b", "digest", "note", "reference"],
             json!({}),
         ),
-        "merge" => (&["ids"], json!({})),
         "delete-retry" => (&["version", "scope_digest"], json!({})),
         "delete-cancel" => (&["version"], json!({})),
         "renewal" => (
@@ -458,7 +435,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
             ("netting-payment", "note" | "reference")
                 | ("settle", "delete_scopes" | "vendor_renewals")
                 | ("delete-retry", "scope_digest")
-                | ("bill-preview", "manual_basis")
+                | ("vendor-bill-preview", "manual_basis")
                 | ("edit", "cost_source")
         ) {
             required(&v, k)?;
@@ -566,7 +543,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 cost(&v, "percent", &PERCENT)?;
             }
         }
-        "bill-preview" => {
+        "bill-preview" | "vendor-bill-preview" => {
             choice(
                 &v,
                 "allocation_mode",
@@ -658,12 +635,7 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                     .remove("delete_cycle_ids");
             }
         }
-        "transition" => choice(
-            &v,
-            "action",
-            &["submit", "mark_paid", "confirm", "reject", "split"],
-            false,
-        )?,
+        "transition" => choice(&v, "action", &["mark_paid"], false)?,
         "netting-payment" => {
             cost(&v, "digest", &DIGEST)?;
             for (key, max) in [("note", 500), ("reference", 128)] {
@@ -677,16 +649,8 @@ fn normalize_inner(kind: &str, mut v: Value) -> Result<Value> {
                 }
             }
         }
-        "delete-retry" => {
-            if v.get("scope_digest").is_some() {
-                cost(&v, "scope_digest", &DIGEST)?;
-            }
-        }
-        "merge" => {
-            ids(&v, "ids", 1)?;
-            if array(&v["ids"]).len() < 2 {
-                return Err(Error::invalid("至少选择两张订单"));
-            }
+        "delete-retry" if v.get("scope_digest").is_some() => {
+            cost(&v, "scope_digest", &DIGEST)?;
         }
         _ => {}
     }

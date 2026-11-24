@@ -107,18 +107,10 @@ impl Service {
         let result = match kind {
             "add-vendor-members" => self.add_vendor_members(&mut db, actor, id, payload).await?,
             "renew-vendor" => self.renew_vendor(&mut db, actor, id, payload).await?,
-            "create-vendor" => self.save_vendor(&mut db, actor, None, payload).await?,
-            "edit-vendor" => self.save_vendor(&mut db, actor, Some(id), payload).await?,
+            "create-vendor" => self.save_vendor(&mut db, actor, payload).await?,
             "void-vendor" => self.void_vendor(&mut db, actor, id, payload).await?,
             "archive-vendor" => self.archive_vendor(&mut db, actor, id, payload).await?,
-            "create-vendor-period" => {
-                self.save_vendor_period(&mut db, actor, id, payload, false)
-                    .await?
-            }
-            "edit-vendor-period" => {
-                self.save_vendor_period(&mut db, actor, id, payload, true)
-                    .await?
-            }
+            "edit-vendor-period" => self.save_vendor_period(&mut db, actor, id, payload).await?,
             "vendor-start-confirm" => {
                 self.confirm_vendor_start(&mut db, actor, id, payload)
                     .await?
@@ -144,7 +136,6 @@ impl Service {
             }
             "void" => self.void(&mut db, actor, id).await?,
             "netting-payment" => self.pay_netting(&mut db, actor, payload).await?,
-            "merge" => self.merge(&mut db, actor, payload).await?,
             "transition" => {
                 self.transition(
                     &mut db,

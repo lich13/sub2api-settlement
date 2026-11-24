@@ -473,7 +473,6 @@ describe("vendor manager", () => {
         { cycle_id: 11, version: 3 },
         { cycle_id: 12, version: 3 },
       ],
-      detached: [],
     });
   });
 });

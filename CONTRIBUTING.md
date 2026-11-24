@@ -26,7 +26,7 @@ Playwright starts a separate Rust demo service and temporary ledger for each sce
 
 - Preserve integer cents, arbitrary-precision source values and largest-remainder allocation, with user ID ascending as the tie-breaker.
 - Preserve idempotency signatures, concurrency/version checks, `[start,end)` windows and pairwise netting.
-- Keep `tests/golden/` byte-for-byte unchanged. HTTP contracts, legacy SQL ledgers and synthetic session vectors in `tests/fixtures/` are immutable references; new behavior needs explicit tests rather than silent fixture replacement.
+- Keep `tests/golden/` byte-for-byte unchanged. Legacy SQL ledgers and synthetic session vectors in `tests/fixtures/` are immutable references; new behavior needs explicit tests rather than silent fixture replacement.
 - Schema migrations may only add compatible columns, auxiliary tables or indexes. Never recalculate frozen historical amounts.
 
 ## Dependency maintenance
@@ -37,7 +37,7 @@ Cargo version updates maintain direct and transitive dependencies within the exi
 
 Once a month, review the audit and signing tools, CI service images and deferred major releases. Rust, Node.js (LTS channel only, never a Current or alpha build) and pnpm follow their stable channels locally, in CI and in Docker; the runtime image and GitHub Actions keep their digest and commit pins. If a new pnpm major changes the lockfile format, regenerate `frontend/pnpm-lock.yaml` in a separate commit before merging anything else. Apply security patches sooner. Refresh the existing lockfiles with `cargo update` and `pnpm --dir frontend update` without `--latest`, then run frozen-lockfile installation, the existing tests and the dependency checks from CI. Keep lockfile changes separate from unrelated features.
 
-The sha2/hmac (digest 0.11 family), rand 0.10, tower-http 0.7, toml 1, base64 0.23, jsdom 31 and lucide-react 1.x migrations are done; sha2 and hmac always move together because they share the digest API (`use hmac::KeyInit` is required for `new_from_slice`). `num-bigint` stays at 0.4 until `num-rational` publishes a release that depends on 0.5: `Ratio<BigInt>` must use the same `BigInt` type, and money arithmetic must not be converted between two big-integer crates. A security fix that requires changing constraints takes priority and needs an explicit compatibility review; never silence it with a new advisory ignore. Preserve the documented RSA exception only while the compiled feature graph excludes both `rsa` and `sqlx-mysql`.
+The sqlx 0.9, libsqlite3-sys 0.39, time 0.3, sha2/hmac (digest 0.11 family), rand 0.10, tower-http 0.7, toml 1, base64 0.23, jsdom 31 and lucide-react 1.x migrations are done; sha2 and hmac always move together because they share the digest API (`use hmac::KeyInit` is required for `new_from_slice`). `num-bigint` stays at 0.4 until `num-rational` publishes a release that depends on 0.5: `Ratio<BigInt>` must use the same `BigInt` type, and money arithmetic must not be converted between two big-integer crates. A security fix that requires changing constraints takes priority and needs an explicit compatibility review; never silence it with a new advisory ignore.
 
 For a failing dependency PR, read all failed checks once. Address shared security failures before retrying unrelated updates; retry infrastructure failures only when their cause has changed. Split a failing group when necessary to isolate its cause. Do not bypass checks, increase test timeouts without a reproduced cause, or repeatedly rerun unchanged failures. Close superseded or deliberately deferred proposals only after confirming their changes are accounted for; remove only bot-owned branches without additional commits.
 
@@ -48,5 +48,3 @@ Explain the concrete problem, changed behavior, compatibility implications and r
 Run `gitleaks git --config .gitleaks.toml` before publishing a branch. Allowlisting is limited to exact, public synthetic fixture values. Do not add broad exclusions.
 
 Report suspected security vulnerabilities privately through the repository's GitHub Security Advisory feature. Do not put credentials or exploit details in a public issue.
-
-Temporary advisory waiver: RUSTSEC-2026-0459 (`libsqlite3-sys` 0.30.1, uninitialized memory read in WAL mode, local attack vector) is ignored in `deny.toml` and in the `cargo audit` flag in `ci.yml` until 2027-01-11, because the fixed `libsqlite3-sys` (>= 0.39) is rejected by sqlx 0.8 and 0.9.0. Remove it when a sqlx release allowing it ships (launchbadge/sqlx#4516, PR #4517): migrate to sqlx 0.9 (wrap dynamic SQL in `sqlx::AssertSqlSafe`, enable `runtime-tokio` + `tls-rustls`) and bump `libsqlite3-sys` to 0.39. The `security` job fails after the review date so the waiver cannot linger silently.

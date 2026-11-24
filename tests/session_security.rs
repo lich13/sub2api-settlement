@@ -585,6 +585,318 @@ async fn sso_route_uses_limiter_and_sets_retry_after_for_429() {
     app.service.store.close().await;
 }
 
+#[derive(Clone, Default)]
+struct UpstreamAuth {
+    outage: bool,
+    tokens: std::collections::HashMap<String, Value>,
+}
+
+fn sso_cookie_raw(response: &reqwest::Response) -> String {
+    response
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .split_once('=')
+        .unwrap()
+        .1
+        .to_owned()
+}
+
+#[tokio::test]
+async fn identity_errors_and_session_boundaries_enforce_live_verification_csrf_and_user_binding() {
+    let auth_state = Arc::new(std::sync::Mutex::new(UpstreamAuth {
+        outage: false,
+        tokens: std::collections::HashMap::from([
+            (
+                "token-admin".to_owned(),
+                json!({"id": 1, "username": "Admin", "role": "admin", "status": "active"}),
+            ),
+            (
+                "token-user-3".to_owned(),
+                json!({"id": 3, "username": "Payer", "role": "user", "status": "active"}),
+            ),
+            (
+                "token-user-4".to_owned(),
+                json!({"id": 4, "username": "Other", "role": "user", "status": "active"}),
+            ),
+        ]),
+    }));
+    let verify_state = auth_state.clone();
+    let verify_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let verify_address = verify_listener.local_addr().unwrap();
+    let verify_task = tokio::spawn(async move {
+        axum::serve(
+            verify_listener,
+            Router::new().route(
+                "/api/v1/auth/me",
+                get(move |headers: HeaderMap| {
+                    let state = verify_state.clone();
+                    async move {
+                        let guard = state.lock().unwrap();
+                        if guard.outage {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"code": 500})),
+                            );
+                        }
+                        let token = headers
+                            .get("Authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.strip_prefix("Bearer "))
+                            .unwrap_or("");
+                        if let Some(user) = guard.tokens.get(token) {
+                            (StatusCode::OK, Json(json!({"code": 0, "data": user})))
+                        } else {
+                            (StatusCode::UNAUTHORIZED, Json(json!({"code": 1})))
+                        }
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+
+    let temporary = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let origin = format!("http://{address}");
+    let mut cfg = app_config(temporary.path(), format!("http://{verify_address}"));
+    cfg.origin = origin.clone();
+    cfg.read_only = false;
+    let mut app = App::new(cfg).await.unwrap();
+    app.service.sync(true).await.unwrap();
+    app.limiter = Arc::new(Limiter::new(128, 128, vec![]));
+    let router = app
+        .router()
+        .into_make_service_with_connect_info::<SocketAddr>();
+    let app_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    // Anonymous, invalid token, and SSO user_id mismatch.
+    let anon = client
+        .get(format!("{origin}/settlement/api/v1/me"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    let bad_token = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token=invalid&user_id=1"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_token.status(), StatusCode::UNAUTHORIZED);
+    let mismatch = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token=token-user-3&user_id=1"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(mismatch.status(), StatusCode::FORBIDDEN);
+
+    // Same-user SSO reopen preserves cookie & CSRF so old tab write still succeeds.
+    let sso1 = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token=token-admin&user_id=1&theme=dark"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sso1.status(), StatusCode::SEE_OTHER);
+    let admin_cookie = sso_cookie_raw(&sso1);
+    let me1: Value = client
+        .get(format!("{origin}/settlement/api/v1/me"))
+        .header("Cookie", format!("settlement_session={admin_cookie}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let admin_csrf = me1["csrf"].as_str().unwrap().to_owned();
+    let sso_reopen = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token=token-admin&user_id=1"
+        ))
+        .header("Cookie", format!("settlement_session={admin_cookie}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sso_cookie_raw(&sso_reopen), admin_cookie);
+
+    // CSRF missing, wrong Origin, missing Idempotency-Key, replay & mismatch.
+    let no_csrf = client
+        .post(format!("{origin}/settlement/api/v1/inbox/read"))
+        .header("Cookie", format!("settlement_session={admin_cookie}"))
+        .header("Origin", &origin)
+        .header("Idempotency-Key", "k-no-csrf")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_csrf.status(), StatusCode::FORBIDDEN);
+
+    let wrong_origin = client
+        .post(format!("{origin}/settlement/api/v1/inbox/read"))
+        .header("Cookie", format!("settlement_session={admin_cookie}"))
+        .header("Origin", "https://evil.example.invalid")
+        .header("X-CSRF-Token", &admin_csrf)
+        .header("Idempotency-Key", "k-wrong-origin")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_origin.status(), StatusCode::FORBIDDEN);
+
+    let no_key = client
+        .post(format!("{origin}/settlement/api/v1/inbox/read"))
+        .header("Cookie", format!("settlement_session={admin_cookie}"))
+        .header("Origin", &origin)
+        .header("X-CSRF-Token", &admin_csrf)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(no_key.status(), StatusCode::BAD_REQUEST);
+
+    // Regular user role checks & X-Settlement-User tab switch protection.
+    let sso_user = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token=token-user-3&user_id=3"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let user_cookie = sso_cookie_raw(&sso_user);
+    let user_me: Value = client
+        .get(format!("{origin}/settlement/api/v1/me"))
+        .header("Cookie", format!("settlement_session={user_cookie}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let user_csrf = user_me["csrf"].as_str().unwrap().to_owned();
+    for admin_path in ["catalog", "history"] {
+        let denied = client
+            .get(format!("{origin}/settlement/api/v1/{admin_path}"))
+            .header("Cookie", format!("settlement_session={user_cookie}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+    let user_write_denied = client
+        .post(format!("{origin}/settlement/api/v1/cycles"))
+        .header("Cookie", format!("settlement_session={user_cookie}"))
+        .header("Origin", &origin)
+        .header("X-CSRF-Token", &user_csrf)
+        .header("Idempotency-Key", "user-create-denied")
+        .json(&json!({"account_id": 100, "name": "Denied", "cost": "10.00", "creditor_id": 2, "start": "2025-01-01T00:00:00Z"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(user_write_denied.status(), StatusCode::FORBIDDEN);
+
+    let switched = client
+        .get(format!("{origin}/settlement/api/v1/me"))
+        .header("Cookie", format!("settlement_session={user_cookie}"))
+        .header("X-Settlement-User", "4")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(switched.status(), StatusCode::UNAUTHORIZED);
+
+    // Live upstream revoke, disable, role demotion, verifier outage (503), and recovery.
+    auth_state.lock().unwrap().tokens.remove("token-admin");
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/me"))
+            .header("Cookie", format!("settlement_session={admin_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    auth_state.lock().unwrap().tokens.insert(
+        "token-admin".to_owned(),
+        json!({"id": 1, "username": "Admin", "role": "admin", "status": "disabled"}),
+    );
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/me"))
+            .header("Cookie", format!("settlement_session={admin_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    auth_state.lock().unwrap().tokens.insert(
+        "token-admin".to_owned(),
+        json!({"id": 1, "username": "Admin", "role": "user", "status": "active"}),
+    );
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/catalog"))
+            .header("Cookie", format!("settlement_session={admin_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    auth_state.lock().unwrap().outage = true;
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/overview"))
+            .header("Cookie", format!("settlement_session={admin_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    {
+        let mut guard = auth_state.lock().unwrap();
+        guard.outage = false;
+        guard.tokens.insert(
+            "token-admin".to_owned(),
+            json!({"id": 1, "username": "Admin", "role": "admin", "status": "active"}),
+        );
+    }
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/overview"))
+            .header("Cookie", format!("settlement_session={admin_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+
+    app_task.abort();
+    let _ = app_task.await;
+    verify_task.abort();
+    let _ = verify_task.await;
+    app.service.source.close().await;
+    app.service.store.close().await;
+}
+
 #[tokio::test]
 async fn sso_session_expiry_respects_a_validated_jwt_claim_and_eight_hour_cap() {
     let verify_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -680,6 +992,152 @@ async fn sso_session_expiry_respects_a_validated_jwt_claim_and_eight_hour_cap() 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(response.headers().get(header::SET_COOKIE).is_none());
     assert_eq!(session_count(&app.service.store).await, sessions_before);
+
+    app_task.abort();
+    let _ = app_task.await;
+    verify_task.abort();
+    let _ = verify_task.await;
+    app.service.source.close().await;
+    app.service.store.close().await;
+}
+
+#[tokio::test]
+async fn tampered_session_ciphertext_cookie_and_expired_refresh_fail_closed() {
+    let verify_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let verify_address = verify_listener.local_addr().unwrap();
+    let verify_task = tokio::spawn(async move {
+        axum::serve(
+            verify_listener,
+            Router::new().route("/api/v1/auth/me", get(fake_jwt_auth)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let temporary = TempDir::new().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let origin = format!("http://{address}");
+    let mut cfg = app_config(temporary.path(), format!("http://{verify_address}"));
+    cfg.origin = origin.clone();
+    cfg.read_only = false;
+    let mut app = App::new(cfg).await.unwrap();
+    app.service.sync(true).await.unwrap();
+    app.limiter = Arc::new(Limiter::new(64, 64, vec![]));
+    let router = app
+        .router()
+        .into_make_service_with_connect_info::<SocketAddr>();
+    let app_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    // 1. Expired session refresh rotates cookie & CSRF; old cookie and old CSRF fail closed.
+    let token = synthetic_jwt("{}", true);
+    let initial = request_sso(&client, address, &token).await;
+    let old_cookie = sso_cookie_raw(&initial);
+    let old_sid = hash(old_cookie.as_bytes());
+    let old_me: Value = client
+        .get(format!("{origin}/settlement/api/v1/me"))
+        .header("Cookie", format!("settlement_session={old_cookie}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let old_csrf = old_me["csrf"].as_str().unwrap().to_owned();
+
+    let mut db = app.service.store.write().await.unwrap();
+    store::exec(
+        &mut db,
+        "UPDATE sessions SET expires_at=1 WHERE id=?",
+        &[json!(old_sid)],
+    )
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/me"))
+            .header("Cookie", format!("settlement_session={old_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let refreshed_exp = unix_now() as i64 + 1200;
+    let refreshed_token = synthetic_jwt(&format!(r#"{{"exp":{refreshed_exp}}}"#), true);
+    let refreshed = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token={refreshed_token}&user_id=7"
+        ))
+        .header("Cookie", format!("settlement_session={old_cookie}"))
+        .send()
+        .await
+        .unwrap();
+    let new_cookie = sso_cookie_raw(&refreshed);
+    assert_ne!(new_cookie, old_cookie);
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/me"))
+            .header("Cookie", format!("settlement_session={old_cookie}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(format!("{origin}/settlement/api/v1/inbox/read"))
+            .header("Cookie", format!("settlement_session={new_cookie}"))
+            .header("Origin", &origin)
+            .header("X-CSRF-Token", &old_csrf)
+            .header("Idempotency-Key", "old-csrf-rejected")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // 2. Tampered cookie fails closed (401); tampered DB ciphertext fails closed (401).
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/me"))
+            .header("Cookie", "settlement_session=tampered-cookie-value")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let new_sid = hash(new_cookie.as_bytes());
+    let mut db = app.service.store.write().await.unwrap();
+    store::exec(
+        &mut db,
+        "UPDATE sessions SET token='tampered-ciphertext' WHERE id=?",
+        &[json!(new_sid)],
+    )
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+    let tampered_resp = client
+        .get(format!("{origin}/settlement/api/v1/me"))
+        .header("Cookie", format!("settlement_session={new_cookie}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(tampered_resp.status(), StatusCode::UNAUTHORIZED);
+    let tampered_body: Value = tampered_resp.json().await.unwrap();
+    assert_eq!(tampered_body["detail"], "登录已失效");
 
     app_task.abort();
     let _ = app_task.await;

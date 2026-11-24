@@ -4,9 +4,6 @@ import {
   money,
   consumption,
   billedMoney,
-  canImportBill,
-  canUpgradePaid,
-  isOperationalAccount,
   setCsrf,
   amountPattern,
   fromInput,
@@ -43,31 +40,6 @@ describe("amount presentation", () => {
     expect(input).toBe("2026-09-30T00:00");
     expect(fromInput(input)).toBe("2026-09-29T16:00:00.000Z");
     expect(date(fromInput(input), "minute")).toBe("2026/09/30 00:00");
-  });
-});
-
-describe("upstream bill entry", () => {
-  it("shows the entry for every independent cycle and hides it for vendor periods", () => {
-    expect(canImportBill({ cost_kind: "exact", cost_source: "manual" })).toBe(true);
-    expect(canImportBill({ cost_kind: "estimated", cost_source: "manual" })).toBe(true);
-    expect(canImportBill({ cost_kind: "exact", cost_source: "upstream_bill" })).toBe(true);
-    expect(canImportBill({ cost_kind: "exact", cost_source: "manual", vendor_period_id: 9 })).toBe(false);
-    expect(canImportBill({ cost_kind: "exact", cost_source: "manual", vendor_period_id: null })).toBe(true);
-  });
-});
-
-describe("paid upgrade entry", () => {
-  it("is available only for free accounts", () => {
-    expect(canUpgradePaid({ kind: "free" })).toBe(true);
-    expect(canUpgradePaid({ kind: "paid" })).toBe(false);
-    expect(canUpgradePaid({ kind: "unconfigured" })).toBe(false);
-  });
-});
-
-describe("account visibility", () => {
-  it("keeps deleted historical accounts out of operational lists", () => {
-    expect(isOperationalAccount({ deleted: false })).toBe(true);
-    expect(isOperationalAccount({ deleted: true })).toBe(false);
   });
 });
 

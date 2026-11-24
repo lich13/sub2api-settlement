@@ -62,8 +62,8 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
       if(action==="edit"&&!period) throw new Error("当前没有开放账期，请使用整组续费入口");
       if(action==="add" && v) await api(`/vendors/${v.id}/members`,"POST",{version:v.version,period_version:period?.end?null:period?.version??null,account_ids:selected});
       else if(action==="renew" && v) await api(`/vendors/${v.id}/renew`,"POST",{version:v.version,period_version:v.periods[0]?.version,cost,creditor_id:creditor});
-      else if(action==="edit" && period) await api(`/vendor-periods/${period.id}`,"PATCH",{version:period.version,cost,creditor_id:creditor,start:originalStart&&start===inputDate(originalStart)?originalStart:fromInput(start),start_mode:mode,members:period.members?.map(c=>({cycle_id:c.id,version:c.version})),detached:[]});
-      else await api(v?`/vendors/${v.id}/periods`:"/vendors","POST",{...(v?{version:v.version}:{name}),cost,creditor_id:creditor,start:fromInput(start),start_mode:mode,account_ids:selected});
+      else if(action==="edit" && period) await api(`/vendor-periods/${period.id}`,"PATCH",{version:period.version,cost,creditor_id:creditor,start:originalStart&&start===inputDate(originalStart)?originalStart:fromInput(start),start_mode:mode,members:period.members?.map(c=>({cycle_id:c.id,version:c.version}))});
+      else await api("/vendors","POST",{name,cost,creditor_id:creditor,start:fromInput(start),start_mode:mode,account_ids:selected});
       await refresh();close();
     }catch(e){setError((e as Error).message);}finally{setBusy(false);}
   }

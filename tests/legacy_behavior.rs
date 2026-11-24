@@ -253,14 +253,32 @@ fn assert_error<T: std::fmt::Debug>(result: Result<T>, status: u16, message: &st
     );
 }
 
-async fn merge_orders(harness: &Harness, actor: &Value, ids: Vec<i64>, key: &str) -> Value {
-    let payload = json!({"ids":ids});
-    harness
-        .app
-        .service
-        .mutate(actor, key, "merge", &payload, Prepared::default(), None)
-        .await
-        .expect("merge compatible pending orders")
+async fn inject_legacy_batch(
+    harness: &Harness,
+    payer_id: i64,
+    creditor_id: i64,
+    ids: &[i64],
+) -> i64 {
+    let mut db = harness.app.service.store.write().await.unwrap();
+    let batch_id =
+        sqlx::query("INSERT INTO batches(payer_id,creditor_id,created_at) VALUES(?,?,?)")
+            .bind(payer_id)
+            .bind(creditor_id)
+            .bind(START)
+            .execute(&mut *db)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    for id in ids {
+        sqlx::query("UPDATE orders SET batch_id=?,version=version+1 WHERE id=?")
+            .bind(batch_id)
+            .bind(*id)
+            .execute(&mut *db)
+            .await
+            .unwrap();
+    }
+    db.commit().await.unwrap();
+    batch_id
 }
 
 async fn transition(
@@ -615,25 +633,25 @@ async fn periodic_and_fixed_expense_orders_merge_and_net_without_losing_source_r
         .iter()
         .map(|row| row["id"].as_i64().unwrap())
         .collect::<Vec<_>>();
-    let batch = merge_orders(&harness, &payer(), ids, "cycle-expense-merge").await;
+    let batch_id = inject_legacy_batch(&harness, 3, 2, &ids).await;
     let merged = harness.rows("orders").await;
     assert!(
         merged
             .iter()
             .filter(|row| row["payer_id"] == 3)
-            .all(|row| row["batch_id"] == batch["id"])
+            .all(|row| row["batch_id"] == batch_id)
     );
     let merged_payer_order = merged
         .iter()
         .find(|row| row["payer_id"] == 3)
-        .expect("payer order remains visible after merge");
+        .expect("payer order remains visible after legacy batch");
     assert_error(
         transition(
             &harness,
-            &payer(),
+            &admin(),
             merged_payer_order,
-            "submit",
-            "cycle-expense-submit",
+            "mark_paid",
+            "cycle-expense-mark-paid",
         )
         .await,
         409,
@@ -651,11 +669,7 @@ async fn periodic_and_fixed_expense_orders_merge_and_net_without_losing_source_r
         .collect::<Vec<_>>();
     assert_eq!(payer_orders.len(), 2);
     assert!(payer_orders.iter().all(|row| row["status"] == "paid"));
-    assert!(
-        payer_orders
-            .iter()
-            .all(|row| row["batch_id"] == batch["id"])
-    );
+    assert!(payer_orders.iter().all(|row| row["batch_id"] == batch_id));
     assert_eq!(harness.rows("batches").await[0]["status"], "paid");
 }
 
@@ -698,39 +712,16 @@ async fn fixed_expense_void_splits_batch_but_preserves_cycle_order_and_reopens_e
         .find(|row| row["payer_id"] == 3 && row["expense_id"] == expense_id)
         .unwrap()
         .clone();
-    merge_orders(
+    inject_legacy_batch(
         &harness,
-        &payer(),
-        vec![
+        3,
+        2,
+        &[
             cycle_order["id"].as_i64().unwrap(),
             expense_order["id"].as_i64().unwrap(),
         ],
-        "void-merge",
     )
     .await;
-    let merged_cycle_order = harness
-        .rows("orders")
-        .await
-        .into_iter()
-        .find(|row| row["id"] == cycle_order["id"])
-        .unwrap();
-    transition(
-        &harness,
-        &payer(),
-        &merged_cycle_order,
-        "split",
-        "void-split",
-    )
-    .await
-    .unwrap();
-    assert_eq!(harness.rows("batches").await[0]["status"], "split");
-    assert!(
-        harness
-            .rows("orders")
-            .await
-            .iter()
-            .all(|row| row["batch_id"].is_null())
-    );
 
     let expense_settlement = harness
         .rows("settlements")
@@ -776,6 +767,8 @@ async fn fixed_expense_void_splits_batch_but_preserves_cycle_order_and_reopens_e
             .unwrap()["status"],
         "pending"
     );
+    assert_eq!(harness.rows("batches").await[0]["status"], "split");
+    assert!(orders.iter().all(|row| row["batch_id"].is_null()));
     assert_eq!(cycle_row(&harness, cycle_id).await["status"], "settled");
 }
 
@@ -832,23 +825,13 @@ async fn regular_user_views_redact_expense_members_and_scope_orders() {
     )
     .await
     .unwrap();
-    let mine = harness
-        .app
-        .service
-        .orders(&payer(), "mine", "full", None)
-        .await
-        .unwrap()["orders"]
+    let mine = harness.app.service.orders(&payer(), "mine").await.unwrap()["orders"]
         .as_array()
         .unwrap()
         .clone();
     assert_eq!(mine.len(), 1);
     assert!(mine.iter().all(|row| row["payer_id"] == 3));
-    let other_orders = harness
-        .app
-        .service
-        .orders(&other(), "mine", "full", None)
-        .await
-        .unwrap()["orders"]
+    let other_orders = harness.app.service.orders(&other(), "mine").await.unwrap()["orders"]
         .as_array()
         .unwrap()
         .clone();
@@ -858,7 +841,7 @@ async fn regular_user_views_redact_expense_members_and_scope_orders() {
         harness
             .app
             .service
-            .orders(&payer(), "receivable", "full", None)
+            .orders(&payer(), "receivable")
             .await
             .unwrap()["orders"]
             .as_array()
@@ -868,47 +851,15 @@ async fn regular_user_views_redact_expense_members_and_scope_orders() {
     let receivable = harness
         .app
         .service
-        .orders(&creditor(), "receivable", "full", None)
+        .orders(&creditor(), "receivable")
         .await
         .unwrap()["orders"]
         .as_array()
         .unwrap()
         .clone();
     assert_eq!(receivable.len(), 2);
-    let compact = harness
-        .app
-        .service
-        .orders(&creditor(), "receivable", "compact", Some("pending"))
-        .await
-        .unwrap()["orders"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert_eq!(compact.len(), 2);
-    let compact_fields = compact[0]
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
-        compact_fields,
-        std::collections::BTreeSet::from([
-            "id",
-            "batch_id",
-            "source_name",
-            "payer_name",
-            "amount_fen",
-            "status",
-        ])
-    );
-    assert_eq!(
-        harness
-            .app
-            .service
-            .orders(&admin(), "all", "full", None)
-            .await
-            .unwrap()["orders"]
+        harness.app.service.orders(&admin(), "all").await.unwrap()["orders"]
             .as_array()
             .unwrap()
             .len(),
@@ -918,7 +869,7 @@ async fn regular_user_views_redact_expense_members_and_scope_orders() {
         harness
             .app
             .service
-            .orders(&stranger(), "mine", "full", None)
+            .orders(&stranger(), "mine")
             .await
             .unwrap()["orders"]
             .as_array()
@@ -926,11 +877,7 @@ async fn regular_user_views_redact_expense_members_and_scope_orders() {
             .is_empty()
     );
     assert_error(
-        harness
-            .app
-            .service
-            .orders(&payer(), "all", "full", None)
-            .await,
+        harness.app.service.orders(&payer(), "all").await,
         403,
         "管理员",
     );
@@ -2231,4 +2178,337 @@ async fn bill_import_outside_confirmation_duplicate_history_and_stale_preview() 
         409,
         "修改",
     );
+}
+
+#[tokio::test]
+async fn route_boundaries_enforce_404_405_307_422_and_security_headers() {
+    use axum::{Json, Router, http::StatusCode, routing::get};
+    use std::net::SocketAddr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::net::TcpListener;
+
+    let auth_calls = Arc::new(AtomicUsize::new(0));
+    let auth_counter = auth_calls.clone();
+    let verify_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let verify_addr = verify_listener.local_addr().unwrap();
+    let verify_task = tokio::spawn(async move {
+        axum::serve(
+            verify_listener,
+            Router::new().route(
+                "/api/v1/auth/me",
+                get(move || {
+                    let counter = auth_counter.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "code": 0,
+                                "data": {"id": 1, "username": "Admin", "role": "admin", "status": "active"}
+                            })),
+                        )
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+
+    let temp = tempfile::TempDir::new().unwrap();
+    let fixture_path = temp.path().join("source.json");
+    std::fs::write(&fixture_path, serde_json::to_vec(&fixture_data()).unwrap()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let origin = format!("http://{addr}");
+    let mut cfg = support::legacy::config(temp.path(), fixture_path);
+    cfg.origin = origin.clone();
+    cfg.verify_url = format!("http://{verify_addr}");
+    let app = App::new(cfg).await.unwrap();
+    app.service.sync(true).await.unwrap();
+    let router = app
+        .router()
+        .into_make_service_with_connect_info::<SocketAddr>();
+    let app_task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+
+    // 1. Unknown and retired routes fail 404 before touching upstream auth, with all 5 security headers.
+    for (method, path) in [
+        ("GET", "unknown-route"),
+        ("POST", "batches"),
+        ("PATCH", "vendors/1"),
+        ("POST", "vendors/1/periods"),
+    ] {
+        let resp = client
+            .request(
+                method.parse().unwrap(),
+                format!("{origin}/settlement/api/v1/{path}"),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{method} {path}");
+        for header in [
+            "Cache-Control",
+            "Referrer-Policy",
+            "X-Content-Type-Options",
+            "X-Frame-Options",
+            "Content-Security-Policy",
+        ] {
+            assert!(resp.headers().contains_key(header), "missing {header}");
+        }
+    }
+    assert_eq!(auth_calls.load(Ordering::SeqCst), 0);
+
+    // 2. Unsupported methods on /me return 405 with Allow: GET without upstream calls.
+    for method in ["POST", "HEAD"] {
+        let resp = client
+            .request(
+                method.parse().unwrap(),
+                format!("{origin}/settlement/api/v1/me"),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(resp.headers()["Allow"], "GET");
+    }
+    assert_eq!(auth_calls.load(Ordering::SeqCst), 0);
+
+    // 3. Trailing slash redirects 307; authenticated query/path validation returns 200 or 422.
+    let sso = client
+        .get(format!(
+            "{origin}/settlement/sso/start?token=fixture-admin&user_id=1"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let cookie = sso.headers()["Set-Cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let slash = client
+        .get(format!("{origin}/settlement/api/v1/me/"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(slash.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert!(
+        slash.headers()["Location"]
+            .to_str()
+            .unwrap()
+            .ends_with("/settlement/api/v1/me")
+    );
+    assert_eq!(
+        client
+            .get(format!("{origin}/settlement/api/v1/me?scope=invalid"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    for invalid_url in [
+        "netting/payments?scope=receivable",
+        "orders?view=compact",
+        "cycles/not-an-id",
+    ] {
+        let resp = client
+            .get(format!("{origin}/settlement/api/v1/{invalid_url}"))
+            .header("Cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{invalid_url}"
+        );
+    }
+
+    app_task.abort();
+    let _ = app_task.await;
+    verify_task.abort();
+    let _ = verify_task.await;
+    app.service.source.close().await;
+    app.service.store.close().await;
+}
+
+#[tokio::test]
+async fn concurrent_idempotent_replays_and_conflicting_mutations_preserve_exclusivity() {
+    let harness = Harness::new().await;
+    let peer = harness.peer().await;
+    let actor = admin();
+
+    // 1. Same-key create replays idempotently across concurrent peers.
+    let create_payload = cycle_payload(100, "10.00", 2, START);
+    let (left_create, right_create) = tokio::join!(
+        harness.app.service.mutate(
+            &actor,
+            "race-same-key-create",
+            "create",
+            &create_payload,
+            Prepared::default(),
+            None,
+        ),
+        peer.service.mutate(
+            &actor,
+            "race-same-key-create",
+            "create",
+            &create_payload,
+            Prepared::default(),
+            None,
+        ),
+    );
+    let created = left_create.unwrap();
+    assert_eq!(created, right_create.unwrap());
+    let cycle_id = created["id"].as_i64().unwrap();
+    assert_eq!(harness.rows("cycles").await.len(), 1);
+
+    // 2. Concurrent cost edit vs settlement: exactly one wins (200) and the other fails (409).
+    let preview1 = preview(&harness, &[cycle_id], &[], END).await;
+    let settle_data = json!({
+        "preview_id": preview1["id"],
+        "renewals": [],
+        "delete_cycle_ids": [],
+    });
+    let settle_prepared = peer
+        .service
+        .prepare_settlement(&actor, &settle_data)
+        .await
+        .unwrap();
+    let edit_data = json!({
+        "account_id": 100,
+        "name": "Fixture account 100",
+        "cost": "12.00",
+        "creditor_id": 2,
+        "start": START,
+        "start_mode": "exact",
+        "cost_kind": "exact",
+        "version": 1,
+    });
+    let edit_action = format!("edit:{cycle_id}");
+    let (edit_res, settle_res) = tokio::join!(
+        harness.app.service.mutate(
+            &actor,
+            "race-cost-edit",
+            &edit_action,
+            &edit_data,
+            Prepared::default(),
+            None,
+        ),
+        peer.service.mutate(
+            &actor,
+            "race-cost-settle",
+            "settle",
+            &settle_data,
+            settle_prepared,
+            None,
+        ),
+    );
+    assert_eq!(edit_res.is_ok() as u8 + settle_res.is_ok() as u8, 1);
+    let loser = edit_res.err().or_else(|| settle_res.err()).unwrap();
+    assert_eq!(loser.status, 409);
+
+    // 3. Same-key bill-confirm replay & concurrent replacement exclusivity on account 200.
+    let bill_cycle = create_cycle(
+        &harness,
+        &cycle_payload(200, "2.00", 2, START),
+        "race-bill-cycle",
+    )
+    .await;
+    let bill_cid = bill_cycle["id"].as_i64().unwrap();
+    let csv_a = csv_text(&[(
+        "2025-01-05T00:00:00+00:00",
+        "2.00",
+        "fixture-model",
+        10,
+        20,
+        "fixture-6",
+    )]);
+    let bp_same = bill_preview(&harness, bill_cid, &csv_a, "same.csv").await;
+    let same_bill_payload = bill_payload(json!(1), &bp_same["id"], false);
+    let prep_left = prepare_bill(&harness.app, bill_cid, &same_bill_payload)
+        .await
+        .unwrap();
+    let prep_right = prepare_bill(&peer, bill_cid, &same_bill_payload)
+        .await
+        .unwrap();
+    let (bill_l, bill_r) = tokio::join!(
+        confirm_bill_on(
+            &harness.app,
+            bill_cid,
+            &same_bill_payload,
+            prep_left,
+            "race-same-bill"
+        ),
+        confirm_bill_on(
+            &peer,
+            bill_cid,
+            &same_bill_payload,
+            prep_right,
+            "race-same-bill"
+        ),
+    );
+    assert_eq!(bill_l.unwrap(), bill_r.unwrap());
+
+    let csv_b = csv_text(&[(
+        "2025-01-05T00:00:00+00:00",
+        "2.50",
+        "fixture-model",
+        10,
+        20,
+        "fixture-6",
+    )]);
+    let rep_a = bill_preview(&harness, bill_cid, &csv_a, "rep-a.csv").await;
+    let rep_b = bill_preview(&harness, bill_cid, &csv_b, "rep-b.csv").await;
+    let cur_ver = cycle_row(&harness, bill_cid).await["version"].clone();
+    let pay_a = bill_payload(cur_ver.clone(), &rep_a["id"], false);
+    let pay_b = bill_payload(cur_ver, &rep_b["id"], false);
+    let prep_a = prepare_bill(&harness.app, bill_cid, &pay_a).await.unwrap();
+    let prep_b = prepare_bill(&peer, bill_cid, &pay_b).await.unwrap();
+    let (res_a, res_b) = tokio::join!(
+        confirm_bill_on(&harness.app, bill_cid, &pay_a, prep_a, "race-rep-a"),
+        confirm_bill_on(&peer, bill_cid, &pay_b, prep_b, "race-rep-b"),
+    );
+    assert_eq!(res_a.is_ok() as u8 + res_b.is_ok() as u8, 1);
+    assert_eq!(res_a.err().or_else(|| res_b.err()).unwrap().status, 409);
+
+    // 4. Concurrent distinct-key netting payments have exactly one winner (200) and one loser (409).
+    let exp = create_expense(
+        &harness,
+        &equal_expense_payload("Race netting", "10.00", 2, &[3]),
+        "race-netting-exp",
+    )
+    .await
+    .unwrap();
+    let exp_prev = preview(&harness, &[], &[exp["id"].as_i64().unwrap()], END).await;
+    settle_preview(
+        &harness,
+        exp_prev["id"].as_str().unwrap(),
+        "race-netting-settle",
+        json!([]),
+    )
+    .await
+    .unwrap();
+    let payer_actor = payer();
+    let net_pay = netting_payload(&harness, &payer_actor, 2, 3).await;
+    let (pay_1, pay_2) = tokio::join!(
+        pay_netting_on(&harness.app, &payer_actor, &net_pay, "race-pay-left"),
+        pay_netting_on(&peer, &payer_actor, &net_pay, "race-pay-right"),
+    );
+    assert_eq!(pay_1.is_ok() as u8 + pay_2.is_ok() as u8, 1);
+    assert_eq!(pay_1.err().or_else(|| pay_2.err()).unwrap().status, 409);
+    assert_eq!(harness.rows("netting_payments").await.len(), 1);
 }

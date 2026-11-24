@@ -185,12 +185,7 @@ async fn source_name_overlays_open_views_and_is_frozen_with_new_orders() {
     assert_eq!(detail["display"]["settled"], true);
     assert_eq!(detail["display"]["cost_multiplier"], "1.0000");
 
-    let orders = harness
-        .app
-        .service
-        .orders(&admin(), "all", "full", None)
-        .await
-        .unwrap();
+    let orders = harness.app.service.orders(&admin(), "all").await.unwrap();
     let order_rows = orders["orders"].as_array().unwrap();
     assert!(!order_rows.is_empty());
     assert!(
@@ -226,12 +221,7 @@ async fn source_name_overlays_open_views_and_is_frozen_with_new_orders() {
         stored_settlement["snapshot"]
     );
 
-    let unchanged_orders = harness
-        .app
-        .service
-        .orders(&admin(), "all", "full", None)
-        .await
-        .unwrap();
+    let unchanged_orders = harness.app.service.orders(&admin(), "all").await.unwrap();
     assert!(
         unchanged_orders["orders"]
             .as_array()

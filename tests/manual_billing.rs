@@ -244,25 +244,96 @@ async fn confirm_cycle(
         .await
 }
 
+async fn inject_historical_cycle_manual_basis(harness: &Harness, cycle_id: i64, config: Value) {
+    let bill_end = settlement::time::instant(END).unwrap();
+    let mut db = harness.app.service.store.write().await.unwrap();
+    let c = settlement::store::one(
+        &mut db,
+        "SELECT * FROM cycles WHERE id=?",
+        &[json!(cycle_id)],
+        "cycle missing",
+    )
+    .await
+    .unwrap();
+    let normalized = manual_billing::normalize(&config).unwrap();
+    let resolved = harness
+        .app
+        .service
+        .reconcile_db(
+            &mut db,
+            &c,
+            &bill_end,
+            std::sync::Arc::new(Vec::new()),
+            Some(normalized.clone()),
+            "matched_only",
+        )
+        .await
+        .unwrap();
+    let basis_id = sqlx::query(
+        "INSERT INTO manual_bill_bases(cycle_id,vendor_period_id,config,result,created_by,created_at) VALUES(?,NULL,?,?,1,?)",
+    )
+    .bind(cycle_id)
+    .bind(serde_json::to_string(&normalized).unwrap())
+    .bind(serde_json::to_string(&resolved).unwrap())
+    .bind(START)
+    .execute(&mut *db)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "UPDATE cycles SET cost_fen=?,cost_kind='exact',cost_source='manual_bill',manual_basis_id=?,bill_end=?,bill_digest=?,bill_allocation_mode='matched_only',billable_cost_fen=?,version=version+1 WHERE id=?",
+    )
+    .bind(resolved["cost_fen"].as_i64().unwrap())
+    .bind(basis_id)
+    .bind(&bill_end)
+    .bind(resolved["digest"].as_str().unwrap())
+    .bind(resolved["billable_cost_fen"].as_i64().unwrap())
+    .bind(cycle_id)
+    .execute(&mut *db)
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+}
+
 #[tokio::test]
 async fn independent_cycle_can_return_to_local_proportions_with_the_same_cost() {
     for source in ["local_only", "upstream"] {
         let harness = Harness::new().await;
         let cycle_id = create_cycle(&harness, 100, "10.00", "local-proportion-create").await;
-        let (config, csv_text) = if source == "local_only" {
-            (Some(basis("local_only", &[("100", "1")], &[])), None)
+        if source == "local_only" {
+            // New single-account manual_basis submissions are retired (422), while historical DB rows still reset cleanly.
+            assert_error(
+                preview_cycle(
+                    &harness,
+                    cycle_id,
+                    Some(basis("local_only", &[("100", "1")], &[])),
+                    None,
+                    "matched_only",
+                )
+                .await,
+                422,
+                "独立账号不支持人工补计依据",
+            );
+            inject_historical_cycle_manual_basis(
+                &harness,
+                cycle_id,
+                basis("local_only", &[("100", "1")], &[]),
+            )
+            .await;
         } else {
-            (
+            let bill = preview_cycle(
+                &harness,
+                cycle_id,
                 None,
                 Some(csv(&[(START, "10.00", "fixture-model", "fixture-1")])),
+                "matched_only",
             )
-        };
-        let bill = preview_cycle(&harness, cycle_id, config, csv_text, "matched_only")
             .await
             .expect("old billing basis preview");
-        confirm_cycle(&harness, cycle_id, &bill, false)
-            .await
-            .expect("confirm old billing basis");
+            confirm_cycle(&harness, cycle_id, &bill, false)
+                .await
+                .expect("confirm old billing basis");
+        }
         let before = cycle_row(&harness, cycle_id).await;
         assert_eq!(before["cost_fen"], 1000);
         let saved_bases = manual_basis_rows(&harness).await;
@@ -280,22 +351,6 @@ async fn independent_cycle_can_return_to_local_proportions_with_the_same_cost() 
             .prepare_settlement(&admin(), &old_payload)
             .await
             .expect("prepare old settlement");
-        preview_cycle(
-            &harness,
-            cycle_id,
-            Some(basis("local_only", &[("100", "2")], &[])),
-            None,
-            "matched_only",
-        )
-        .await
-        .expect("leave an unconfirmed manual billing draft");
-        let blocked = harness
-            .app
-            .service
-            .preview(&admin(), &json!({"ids":[cycle_id],"end":END}))
-            .await
-            .expect("blocked settlement preview");
-        assert_eq!(blocked["cycles"][0]["can_settle"], false);
 
         let mut reset = cycle_payload(100, "10.00");
         reset["version"] = before["version"].clone();
@@ -391,47 +446,7 @@ async fn independent_cycle_can_return_to_local_proportions_with_the_same_cost() 
 }
 
 #[tokio::test]
-async fn normal_csv_preview_replaces_pending_manual_preview_for_independent_and_group() {
-    let harness = Harness::new().await;
-    let cycle_id = create_cycle(&harness, 100, "10.00", "manual-draft-normal-create").await;
-    let manual_preview = preview_cycle(
-        &harness,
-        cycle_id,
-        Some(basis("local_only", &[("100", "1")], &[])),
-        None,
-        "matched_only",
-    )
-    .await
-    .expect("local-only preview");
-    assert_eq!(manual_preview["manual_summary"]["source"], "local_only");
-
-    let normal_preview = preview_cycle(
-        &harness,
-        cycle_id,
-        None,
-        Some(csv(&[(
-            "2025-01-01T00:00:00+00:00",
-            "1.00",
-            "fixture-model",
-            "fixture-1",
-        )])),
-        "matched_only",
-    )
-    .await
-    .expect("normal CSV preview");
-    assert!(normal_preview.get("manual_basis").is_none());
-    assert_error(
-        confirm_cycle(&harness, cycle_id, &manual_preview, false).await,
-        404,
-        "账单预览不存在",
-    );
-    confirm_cycle(&harness, cycle_id, &normal_preview, false)
-        .await
-        .expect("confirm normal CSV preview");
-    let cycle = cycle_row(&harness, cycle_id).await;
-    assert_eq!(cycle["cost_source"], "upstream_bill");
-    assert!(cycle["manual_basis_id"].is_null());
-
+async fn normal_csv_preview_replaces_pending_manual_preview_for_group() {
     let harness = Harness::new().await;
     let vendor = create_vendor(
         &harness,
@@ -762,45 +777,36 @@ fn manual_reconcile_can_use_supplement_when_upstream_basis_is_zero_or_excluded()
 }
 
 #[tokio::test]
-async fn independent_local_only_has_no_csv_or_fabricated_import_and_persists_summary() {
+async fn independent_bill_preview_rejects_new_manual_basis_submissions() {
     let harness = Harness::new().await;
     let cycle_id = create_cycle(&harness, 100, "10.00", "manual-local-only-create").await;
-    let preview = preview_cycle(
-        &harness,
-        cycle_id,
-        Some(basis("local_only", &[("100", "1")], &[])),
-        None,
-        "matched_only",
-    )
-    .await
-    .expect("local-only preview");
-    assert_eq!(preview["manual_summary"]["source"], "local_only");
-    assert_eq!(preview["upstream_total_fen"], Value::Null);
-    assert_eq!(preview["file_hash"], "");
-    assert_eq!(preview["can_confirm"], true);
-    assert!(preview["local_unmatched"].as_array().unwrap().len() >= 2);
-
-    confirm_cycle(&harness, cycle_id, &preview, false)
-        .await
-        .expect("confirm local-only preview");
-    assert!(
-        harness.rows("bill_imports").await.is_empty(),
-        "local-only confirmation must not fabricate a bill import"
-    );
-    let row = cycle_row(&harness, cycle_id).await;
-    assert_eq!(row["cost_source"], "manual_bill");
-    assert!(row["bill_import_id"].is_null());
-    assert!(row["manual_basis_id"].is_i64());
+    for source in ["local_only", "upstream"] {
+        assert_error(
+            preview_cycle(
+                &harness,
+                cycle_id,
+                Some(basis(source, &[("100", "1")], &[])),
+                None,
+                "matched_only",
+            )
+            .await,
+            422,
+            "独立账号不支持人工补计依据",
+        );
+    }
+    assert!(harness.rows("bill_imports").await.is_empty());
+    assert!(manual_basis_rows(&harness).await.is_empty());
 }
 
 #[tokio::test]
-async fn independent_manual_preview_excludes_matched_rows_and_selects_ambiguous_ids() {
+async fn vendor_manual_preview_excludes_matched_rows_and_selects_ambiguous_ids() {
     let harness = Harness::new().await;
-    let cycle_id = create_cycle(&harness, 100, "10.00", "manual-upstream-create").await;
-    let preview = preview_cycle(
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "manual-upstream-create").await;
+    let period = vendor["period"].clone();
+    let preview = preview_vendor(
         &harness,
-        cycle_id,
-        Some(basis("upstream", &[("100", "0.5")], &[])),
+        &period,
+        basis("upstream", &[("100", "0.5"), ("200", "1")], &[]),
         Some(csv(&[
             (
                 "2025-01-01T00:00:00+00:00",
@@ -815,12 +821,10 @@ async fn independent_manual_preview_excludes_matched_rows_and_selects_ambiguous_
                 "missing-row",
             ),
         ])),
-        "proportional",
     )
     .await
-    .expect("manual upstream preview");
+    .expect("manual upstream vendor preview");
     assert_eq!(preview["matched_count"], 1);
-    assert_eq!(preview["local_unmatched_count"], 3);
     assert!(
         preview["local_unmatched"]
             .as_array()
@@ -831,10 +835,10 @@ async fn independent_manual_preview_excludes_matched_rows_and_selects_ambiguous_
     );
     assert!(preview["manual_summary"]["amount"].as_str().unwrap() > "0");
 
-    let selected = preview_cycle(
+    let selected = preview_vendor(
         &harness,
-        cycle_id,
-        Some(basis("upstream", &[("100", "0.5")], &[1])),
+        &period,
+        basis("upstream", &[("100", "0.5"), ("200", "1")], &[1]),
         Some(csv(&[
             (
                 "2025-01-01T00:00:00+00:00",
@@ -849,10 +853,9 @@ async fn independent_manual_preview_excludes_matched_rows_and_selects_ambiguous_
                 "fixture-1",
             ),
         ])),
-        "proportional",
     )
     .await
-    .expect("select local missing usage");
+    .expect("select local ambiguous usage");
     let selected_row = selected["local_unmatched"]
         .as_array()
         .unwrap()
@@ -862,107 +865,62 @@ async fn independent_manual_preview_excludes_matched_rows_and_selects_ambiguous_
     assert_eq!(selected_row["included"], true);
     assert_eq!(selected_row["rate"], "0.5");
 
-    let old_confirm = confirm_cycle(&harness, cycle_id, &preview, true).await;
-    assert_error(old_confirm, 404, "账单预览不存在");
+    let old_confirm = confirm_vendor(&harness, &period, &preview).await;
+    assert_error(old_confirm, 404, "记录不存在");
 }
 
 #[tokio::test]
-async fn independent_manual_preview_rejects_non_positive_matched_basis_and_window_drift() {
+async fn vendor_manual_preview_rejects_non_positive_matched_basis_and_version_drift() {
     let harness = Harness::new().await;
-    let cycle_id = create_cycle(&harness, 100, "10.00", "manual-window-create").await;
-    let config = basis("upstream", &[("100", "0.5")], &[]);
-    let no_positive = preview_cycle(
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "manual-window-create").await;
+    let period = vendor["period"].clone();
+    let config = basis("upstream", &[("100", "0"), ("200", "")], &[]);
+    let no_positive = preview_vendor(
         &harness,
-        cycle_id,
-        Some(config.clone()),
+        &period,
+        config.clone(),
         Some(csv(&[(
             "2025-01-25T00:00:00+00:00",
             "4.00",
             "fixture-model",
             "not-local",
         )])),
-        "proportional",
     )
     .await
     .expect("preview with only missing upstream row");
     assert_eq!(no_positive["matched_amount"], "0");
     assert_eq!(no_positive["can_confirm"], false);
 
-    let row = cycle_row(&harness, cycle_id).await;
     let stale = harness
         .app
         .service
-        .bill_preview(
+        .vendor_bill_preview(
             &admin(),
-            cycle_id,
+            period["id"].as_i64().unwrap(),
             &json!({
-                "version": row["version"].as_i64().unwrap() - 1,
+                "version": period["version"].as_i64().unwrap() - 1,
                 "end": END,
                 "allocation_mode": "proportional",
                 "manual_basis": config,
                 "csv": csv(&[("2025-01-01T00:00:00+00:00", "1.00", "fixture-model", "fixture-1")]),
-                "file_name": "fixture-manual.csv"
+                "file_name": "fixture-manual-vendor.csv"
             }),
         )
         .await;
-    assert_error(stale, 409, "周期已修改");
-
-    let valid_preview = preview_cycle(
-        &harness,
-        cycle_id,
-        Some(basis("local_only", &[("100", "1")], &[])),
-        None,
-        "matched_only",
-    )
-    .await
-    .expect("valid preview before version drift");
-    let current = cycle_row(&harness, cycle_id).await;
-    harness
-        .app
-        .service
-        .mutate(
-            &admin(),
-            "manual-window-drift-edit",
-            &format!("edit:{cycle_id}"),
-            &json!({
-                "account_id": 100,
-                "name": "Fixture manual billing cycle",
-                "cost": "11.00",
-                "creditor_id": 2,
-                "start": START,
-                "start_mode": "exact",
-                "cost_kind": "exact",
-                "version": current["version"]
-            }),
-            Prepared::default(),
-            None,
-        )
-        .await
-        .expect("edit cycle to invalidate the preview");
-    assert_error(
-        confirm_cycle(&harness, cycle_id, &valid_preview, false).await,
-        409,
-        "成本或周期",
-    );
-    assert!(harness.rows("bill_imports").await.is_empty());
+    assert_error(stale, 409, "周期已变化");
 }
 
 #[tokio::test]
-async fn independent_local_only_settlement_freezes_manual_snapshot_and_renews_idempotently() {
+async fn historical_independent_local_only_settlement_freezes_manual_snapshot_and_renews_idempotently()
+ {
     let harness = Harness::new().await;
     let cycle_id = create_cycle(&harness, 100, "10.00", "manual-settle-local-create").await;
-    let bill_preview = preview_cycle(
+    inject_historical_cycle_manual_basis(
         &harness,
         cycle_id,
-        Some(basis("local_only", &[("100", "1")], &[])),
-        None,
-        "matched_only",
+        basis("local_only", &[("100", "1")], &[]),
     )
-    .await
-    .expect("local-only bill preview");
-    confirm_cycle(&harness, cycle_id, &bill_preview, false)
-        .await
-        .expect("confirm local-only basis");
+    .await;
     let confirmed = cycle_row(&harness, cycle_id).await;
     let frozen_cost = confirmed["cost_fen"].as_i64().unwrap();
     assert_eq!(confirmed["cost_source"], "manual_bill");
@@ -1054,17 +1012,23 @@ async fn independent_local_only_settlement_freezes_manual_snapshot_and_renews_id
 #[tokio::test]
 async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
     let harness = Harness::new().await;
-    let cycle_id = create_cycle(&harness, 100, "10.00", "manual-draft-create").await;
-    let old_preview = preview_cycle(
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "manual-draft-create").await;
+    let period = vendor["period"].clone();
+    let first = cycle_for_account(&harness, 100).await["id"]
+        .as_i64()
+        .unwrap();
+    let second = cycle_for_account(&harness, 200).await["id"]
+        .as_i64()
+        .unwrap();
+    let old_preview = preview_vendor(
         &harness,
-        cycle_id,
-        Some(basis("local_only", &[("100", "1")], &[])),
+        &period,
+        basis("local_only", &[("100", "1"), ("200", "1")], &[]),
         None,
-        "matched_only",
     )
     .await
     .expect("old basis preview");
-    confirm_cycle(&harness, cycle_id, &old_preview, false)
+    confirm_vendor(&harness, &period, &old_preview)
         .await
         .expect("confirm old basis");
 
@@ -1073,7 +1037,7 @@ async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
         .service
         .preview(
             &admin(),
-            &json!({"ids":[cycle_id],"expense_ids":[],"end":END}),
+            &json!({"ids":[first,second],"expense_ids":[],"end":END}),
         )
         .await
         .expect("old ordinary settlement preview");
@@ -1090,15 +1054,43 @@ async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
         .await
         .expect("prepare old ordinary settlement");
 
-    let changed_preview = preview_cycle(
+    let confirmed_period = vendor_period_row(&harness, period["id"].as_i64().unwrap()).await;
+    let changed_preview = preview_vendor(
         &harness,
-        cycle_id,
-        Some(basis("local_only", &[("100", "0.5")], &[])),
+        &confirmed_period,
+        basis("local_only", &[("100", "0.5"), ("200", "1")], &[]),
         None,
-        "matched_only",
     )
     .await
     .expect("changed manual basis preview");
+    let pid = confirmed_period["id"].as_i64().unwrap();
+    let prepared_bill = harness
+        .app
+        .service
+        .prepare_vendor_bill(&admin(), pid, &json!({"preview_id": changed_preview["id"]}))
+        .await
+        .unwrap();
+    harness
+        .app
+        .service
+        .mutate(
+            &admin(),
+            "manual-draft-reconfirm",
+            &format!("vendor-bill-confirm:{pid}"),
+            &json!({
+                "preview_id": changed_preview["id"],
+                "version": confirmed_period["version"],
+                "accept_difference": false,
+                "accept_outside": false,
+            }),
+            Prepared {
+                vendor_bill: Some(prepared_bill),
+                ..Prepared::default()
+            },
+            None,
+        )
+        .await
+        .expect("confirm changed basis");
     assert_error(
         harness
             .app
@@ -1113,24 +1105,25 @@ async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
             )
             .await,
         409,
-        "人工计费依据已修改",
+        "请重新预览",
     );
 
-    confirm_cycle(&harness, cycle_id, &changed_preview, false)
-        .await
-        .expect("confirm changed basis");
-    let current = cycle_row(&harness, cycle_id).await;
-    assert_eq!(current["cost_fen"], 500);
     let final_preview = harness
         .app
         .service
         .preview(
             &admin(),
-            &json!({"ids":[cycle_id],"expense_ids":[],"end":END}),
+            &json!({"ids":[first,second],"expense_ids":[],"end":END}),
         )
         .await
         .expect("new ordinary settlement preview");
-    assert_eq!(final_preview["cycles"][0]["can_settle"], true);
+    assert!(
+        final_preview["cycles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["can_settle"] == true)
+    );
     let final_payload = json!({
         "preview_id":final_preview["id"],
         "renewals":[],
@@ -1156,7 +1149,7 @@ async fn manual_basis_change_blocks_old_settlement_prepare_until_reconfirmed() {
         )
         .await
         .expect("settle after reconfirming changed basis");
-    assert_eq!(harness.rows("settlements").await.len(), 1);
+    assert_eq!(harness.rows("settlements").await.len(), 2);
 }
 
 #[tokio::test]
@@ -1202,7 +1195,7 @@ async fn vendor_local_only_settlement_preserves_group_cost_and_single_basis_on_r
         "preview_id":settlement_preview["id"],
         "renewals":[],
         "delete_cycle_ids":[],
-        "vendor_renewals":[{"period_id":period["id"],"version":current_period["version"],"cost":"7.00","creditor_id":2,"cycle_ids":[first,second]}]
+        "vendor_renewals":[{"period_id":period["id"],"version":current_period["version"],"cost":"7.00","creditor_id":2}]
     });
     let prepared = harness
         .app
@@ -1275,19 +1268,19 @@ async fn vendor_local_only_settlement_preserves_group_cost_and_single_basis_on_r
 #[tokio::test]
 async fn replacing_manual_csv_moves_matched_usage_out_of_supplement_without_accumulating_rows() {
     let harness = Harness::new().await;
-    let cycle_id = create_cycle(&harness, 100, "10.00", "manual-csv-replace-create").await;
-    let config = basis("upstream", &[("100", "0.5")], &[]);
-    let first = preview_cycle(
+    let vendor = create_vendor(&harness, &[100, 200], "6.00", "manual-csv-replace-create").await;
+    let period = vendor["period"].clone();
+    let config = basis("upstream", &[("100", "0.5"), ("200", "1")], &[]);
+    let first = preview_vendor(
         &harness,
-        cycle_id,
-        Some(config.clone()),
+        &period,
+        config.clone(),
         Some(csv(&[(
             "2025-01-01T00:00:00+00:00",
-            "1.00",
+            "6.00",
             "fixture-model",
             "fixture-1",
         )])),
-        "matched_only",
     )
     .await
     .expect("first manual CSV preview");
@@ -1307,17 +1300,16 @@ async fn replacing_manual_csv_moves_matched_usage_out_of_supplement_without_accu
             .any(|row| row["usage_id"] == 2 && row["included"] == true)
     );
 
-    let second = preview_cycle(
+    let second = preview_vendor(
         &harness,
-        cycle_id,
-        Some(config),
+        &period,
+        config,
         Some(csv(&[(
             "2025-01-10T00:00:00+00:00",
-            "3.00",
+            "6.00",
             "fixture-model",
             "fixture-2",
         )])),
-        "matched_only",
     )
     .await
     .expect("replacement manual CSV preview");
@@ -1337,10 +1329,18 @@ async fn replacing_manual_csv_moves_matched_usage_out_of_supplement_without_accu
             .iter()
             .any(|row| row["usage_id"] == 1 && row["included"] == true)
     );
-    confirm_cycle(&harness, cycle_id, &second, false)
+    confirm_vendor(&harness, &period, &second)
         .await
         .expect("confirm replacement CSV");
-    let imports = harness.rows("bill_imports").await;
+    let mut db = harness.app.service.store.read().await.unwrap();
+    let imports = settlement::store::all(
+        &mut db,
+        "SELECT * FROM vendor_bill_imports ORDER BY id",
+        &[],
+    )
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
     assert_eq!(imports.len(), 1, "replacement CSV must create one import");
     let imported_rows: Value =
         serde_json::from_str(imports[0]["rows"].as_str().unwrap()).expect("imported CSV rows JSON");

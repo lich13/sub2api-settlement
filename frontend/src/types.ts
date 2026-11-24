@@ -88,7 +88,7 @@ export type Account = {
   cost_warning?: string | null;
 };
 export type Overview = {
-  vendor_totals?: {id:number;mine_fen:number|null;members:{cycle_id:number;amount_fen:number|null;allocation_pending:boolean}[]}[];
+  vendor_totals?: {id:number;members:{cycle_id:number;amount_fen:number|null;allocation_pending:boolean}[]}[];
   account_revision?: string;
   account_sync_error?: string | null;
   accounts: Account[];
@@ -139,14 +139,6 @@ export type Order = {
   paid_at?: string;
   netting_payment_id?: number | null;
   drift: boolean;
-};
-export type ReceivableOrder = {
-  id: number;
-  batch_id: number | null;
-  source_name: string;
-  payer_name: string;
-  amount_fen: number;
-  status: string;
 };
 export type Calculation = {
   vendor_period?: VendorPeriod;

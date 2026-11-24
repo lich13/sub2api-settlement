@@ -15,15 +15,6 @@ pub fn vendor_allocations(
     members: &[Value],
     usage: &[UsageRow],
     matched: &Value,
-) -> Result<Value> {
-    vendor_allocations_with_manual(cost, creditor, members, usage, matched, None)
-}
-fn vendor_allocations_with_manual(
-    cost: i64,
-    creditor: i64,
-    members: &[Value],
-    usage: &[UsageRow],
-    matched: &Value,
     manual: Option<&Value>,
 ) -> Result<Value> {
     let roots = usage
@@ -188,7 +179,7 @@ impl Service {
         tokio::task::spawn_blocking(move||{
             let _permit=permit;
             let resolved = if let Some(config) = &manual {Some(crate::manual_billing::reconcile(rows.as_deref().unwrap_or(&[]),&usage,&details,text(&period,"start"),&end,"proportional",config,&members.iter().map(|c|int(c,"account_id")).collect::<Vec<_>>())?)}else{rows.as_ref().map(|r|billing::reconcile(r,&usage,&details,text(&period,"start"),&end,"proportional")).transpose()?};
-            let mut split=vendor_allocations_with_manual(int(&period,"cost_fen"),int(&period,"creditor_id"),&members,&usage,&resolved.as_ref().map_or(json!([]),|r|r["matched"].clone()),manual.as_ref().and(resolved.as_ref()))?;
+            let mut split=vendor_allocations(int(&period,"cost_fen"),int(&period,"creditor_id"),&members,&usage,&resolved.as_ref().map_or(json!([]),|r|r["matched"].clone()),manual.as_ref().and(resolved.as_ref()))?;
             if let Some(r)=&resolved {
                 for account in split["accounts"]
                     .as_array_mut()

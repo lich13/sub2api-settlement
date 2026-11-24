@@ -1,5 +1,3 @@
-import type { Account, Cycle } from "./types";
-
 let csrf = "";
 let currentUser: number | undefined;
 const pending = new Map<string, string>();
@@ -85,18 +83,6 @@ export function billedMoney(value: string) {
   const number = Number(value);
   if (number > 0 && number < 0.005) return "不足 ¥0.01";
   return "¥" + new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number);
-}
-
-export function canImportBill(cycle: Pick<Cycle, "cost_kind" | "cost_source"> & { vendor_period_id?: number | null }) {
-  return !cycle.vendor_period_id;
-}
-
-export function canUpgradePaid(account: Pick<Account, "kind">) {
-  return account.kind === "free";
-}
-
-export function isOperationalAccount(account: Pick<Account, "deleted">) {
-  return !account.deleted;
 }
 
 export function date(value?: string | null, precision: "second" | "minute" = "second") {
