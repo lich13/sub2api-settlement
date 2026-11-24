@@ -1,33 +1,20 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { APP_VERSION } from "./api";
 import { App } from "./main";
+import {
+  click,
+  deferred,
+  flush,
+  jsonResponse as response,
+  renderWithDialog,
+  setInputValue,
+} from "./test-utils";
 import type { Account, Actor, Catalog, Cycle, Overview, Order, Preview } from "./types";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+const dom = renderWithDialog();
 
 const actor: Actor = { id: 9, name: "Admin", role: "admin", csrf: "csrf-fixture" };
 
@@ -236,26 +223,12 @@ function setupFetch(options: {
 }
 
 async function renderApp() {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(<App />);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-async function flush() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  await dom.render(<App />);
+  await flush();
 }
 
 function rowFor(name: string) {
-  const row = Array.from(host!.querySelectorAll("tbody tr"))
+  const row = Array.from(dom.host!.querySelectorAll("tbody tr"))
     .find(element => element.textContent?.includes(name));
   if (!row) throw new Error(`row not found: ${name}`);
   return row;
@@ -269,31 +242,14 @@ function buttonIn(element: Element, text: string) {
 }
 
 function topButton(text: string) {
-  const button = Array.from(host!.querySelectorAll("button"))
+  const button = Array.from(dom.host!.querySelectorAll("button"))
     .find(value => value.textContent?.trim() === text);
   if (!button) throw new Error(`button not found: ${text}`);
   return button as HTMLButtonElement;
 }
 
-async function click(button: HTMLButtonElement) {
-  await act(async () => {
-    button.click();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-function setInputValue(input: HTMLInputElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (!setter) throw new Error("input value setter is unavailable");
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 function inputForLabel(labelText: string) {
-  const label = Array.from(host!.querySelectorAll("label"))
+  const label = Array.from(dom.host!.querySelectorAll("label"))
     .find(element => element.textContent?.includes(labelText));
   const input = label?.querySelector("input");
   if (!input) throw new Error(`input not found for label: ${labelText}`);
@@ -344,21 +300,10 @@ async function removeAccount(setup: ReturnType<typeof setupFetch>) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
 });
 
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
+afterEach(() => {
   Reflect.deleteProperty(document, "hidden");
 });
 
@@ -375,16 +320,16 @@ describe("App account visibility", () => {
       selection.click();
       await Promise.resolve();
     });
-    expect(host!.textContent).toContain("结算 (1)");
+    expect(dom.host!.textContent).toContain("结算 (1)");
 
     await click(buttonIn(row, "修改成本"));
-    expect(host!.textContent).toContain("修改周期成本");
+    expect(dom.host!.textContent).toContain("修改周期成本");
 
     await removeAccount(setup);
-    expect(host!.textContent).not.toContain("Removed account");
-    expect(host!.textContent).not.toContain("修改周期成本");
-    expect(host!.textContent).not.toContain("结算 (1)");
-    expect(host!.textContent).toContain("账号已删除，请选择其他账号");
+    expect(dom.host!.textContent).not.toContain("Removed account");
+    expect(dom.host!.textContent).not.toContain("修改周期成本");
+    expect(dom.host!.textContent).not.toContain("结算 (1)");
+    expect(dom.host!.textContent).toContain("账号已删除，请选择其他账号");
   });
 
   it("closes an open settlement window after deletion while keeping financial history visible", async () => {
@@ -395,15 +340,15 @@ describe("App account visibility", () => {
     const row = rowFor("Removed account");
     await click(buttonIn(row, "结算"));
     await flush();
-    expect(host!.textContent).toContain("结算预览 · 1 项");
+    expect(dom.host!.textContent).toContain("结算预览 · 1 项");
 
     await removeAccount(setup);
-    expect(host!.textContent).not.toContain("结算预览 · 1 项");
-    expect(host!.textContent).toContain("账号已删除，结算窗口已关闭");
+    expect(dom.host!.textContent).not.toContain("结算预览 · 1 项");
+    expect(dom.host!.textContent).toContain("账号已删除，结算窗口已关闭");
 
     await click(topButton("我的账单"));
     await flush();
-    expect(host!.textContent).toContain("Removed account historical bill");
+    expect(dom.host!.textContent).toContain("Removed account historical bill");
   });
 
   it("shows the full account roster to admins and exposes batch settlement only for paid-cycle selection", async () => {
@@ -426,7 +371,7 @@ describe("App account visibility", () => {
     expect(buttonIn(unconfiguredRow, "配置")).toBeTruthy();
     expect(incompleteRow.querySelector('[data-label="预计分摊"]')?.textContent?.trim()).toBe("—");
 
-    const toolbarButtons = Array.from(host!.querySelectorAll(".toolbar-actions button"));
+    const toolbarButtons = Array.from(dom.host!.querySelectorAll(".toolbar-actions button"));
     expect(toolbarButtons.some(value => value.textContent?.trim() === "配置账号")).toBe(false);
     expect(toolbarButtons.some(value => value.textContent?.includes("批量结算"))).toBe(false);
 
@@ -437,7 +382,7 @@ describe("App account visibility", () => {
       paidSelection!.click();
       await Promise.resolve();
     });
-    const batchButton = Array.from(host!.querySelectorAll(".toolbar-actions button"))
+    const batchButton = Array.from(dom.host!.querySelectorAll(".toolbar-actions button"))
       .find(value => value.textContent?.trim().startsWith("批量结算"));
     expect(batchButton?.textContent).toContain("批量结算");
   });
@@ -453,14 +398,14 @@ describe("App account visibility", () => {
     await renderApp();
     await flush();
 
-    const rows = Array.from(host!.querySelectorAll("tbody tr"));
+    const rows = Array.from(dom.host!.querySelectorAll("tbody tr"));
     const rowText = rows.map(value => value.textContent || "").join(" ");
     expect(rowText).toContain("Paid Alpha");
     expect(rowText).toContain("Incomplete Delta");
     expect(rowText).not.toContain("Free Beta");
     expect(rowText).not.toContain("No profile Gamma");
-    expect(host!.querySelector('input[type="checkbox"]')).toBeNull();
-    expect(Array.from(host!.querySelectorAll("button")).some(value => value.textContent?.trim() === "升级付费")).toBe(false);
+    expect(dom.host!.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(Array.from(dom.host!.querySelectorAll("button")).some(value => value.textContent?.trim() === "升级付费")).toBe(false);
   });
 
   it("keeps an unconfigured account editable while polling a new name without losing its cost draft", async () => {
@@ -477,8 +422,8 @@ describe("App account visibility", () => {
     await flush();
 
     await click(buttonIn(rowFor("No profile Gamma"), "配置"));
-    expect(host!.textContent).toContain("配置账号");
-    expect(host!.textContent).not.toContain("公开名称");
+    expect(dom.host!.textContent).toContain("配置账号");
+    expect(dom.host!.textContent).not.toContain("公开名称");
     const accountName = inputForLabel("账号");
     expect(accountName.readOnly).toBe(true);
     expect(accountName.value).toBe("No profile Gamma");
@@ -489,7 +434,7 @@ describe("App account visibility", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     await flush();
 
-    expect(host!.textContent).toContain("配置账号");
+    expect(dom.host!.textContent).toContain("配置账号");
     expect(inputForLabel("账号").value).toBe("No profile renamed");
     expect(inputForLabel("账号").readOnly).toBe(true);
     expect(inputForLabel("成本（元）").value).toBe("66.60");
@@ -510,10 +455,10 @@ describe("App account visibility", () => {
     await renderApp();
     await flush();
 
-    const search = host!.querySelector<HTMLInputElement>('input[aria-label="搜索"]');
+    const search = dom.host!.querySelector<HTMLInputElement>('input[aria-label="搜索"]');
     if (!search) throw new Error("account search input not found");
     setInputValue(search, "Paid Alpha renamed");
-    expect(Array.from(host!.querySelectorAll("tbody tr"))).toHaveLength(0);
+    expect(Array.from(dom.host!.querySelectorAll("tbody tr"))).toHaveLength(0);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     await flush();
@@ -522,14 +467,14 @@ describe("App account visibility", () => {
     const selection = renamedRow.querySelector<HTMLInputElement>('input[type="checkbox"]');
     if (!selection) throw new Error("renamed paid account selection not found");
     await act(async () => { selection.click(); await Promise.resolve(); });
-    const batchButton = Array.from(host!.querySelectorAll(".toolbar-actions button"))
+    const batchButton = Array.from(dom.host!.querySelectorAll(".toolbar-actions button"))
       .find(value => value.textContent?.trim().startsWith("批量结算"));
     if (!batchButton) throw new Error("batch settlement button not found after selection");
     await click(batchButton as HTMLButtonElement);
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     await flush();
 
-    expect(host!.querySelector(".allocation-head strong")?.textContent).toBe("Paid Alpha renamed");
+    expect(dom.host!.querySelector(".allocation-head strong")?.textContent).toBe("Paid Alpha renamed");
     expect(setup.stateCalls()).toBe(2);
   });
 
@@ -561,7 +506,7 @@ describe("App account visibility", () => {
     });
     await flush();
     expect(rowFor("Paid Alpha current")).toBeTruthy();
-    expect(Array.from(host!.querySelectorAll("tbody tr")).some(value => value.querySelector(".account-title strong")?.textContent === "Paid Alpha")).toBe(false);
+    expect(Array.from(dom.host!.querySelectorAll("tbody tr")).some(value => value.querySelector(".account-title strong")?.textContent === "Paid Alpha")).toBe(false);
   });
 
   it("refreshes catalog and overview when the account-state roster gains an account", async () => {
@@ -579,7 +524,7 @@ describe("App account visibility", () => {
     });
     await renderApp();
     await flush();
-    expect(Array.from(host!.querySelectorAll("tbody tr")).some(value => value.textContent?.includes("New account without profile"))).toBe(false);
+    expect(Array.from(dom.host!.querySelectorAll("tbody tr")).some(value => value.textContent?.includes("New account without profile"))).toBe(false);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     await flush();
@@ -608,7 +553,7 @@ describe("App account visibility", () => {
     if (!detailButton) throw new Error("cycle detail button not found");
     await click(detailButton);
 
-    const dialog = host!.querySelector<HTMLDialogElement>("dialog[open]");
+    const dialog = dom.host!.querySelector<HTMLDialogElement>("dialog[open]");
     expect(dialog?.textContent).not.toContain("付费起点已锁定");
     const directText = Array.from(dialog?.querySelector(".form")?.childNodes || [])
       .filter(node => node.nodeType === Node.TEXT_NODE)
@@ -633,7 +578,7 @@ describe("App account visibility", () => {
     await renderApp();
     await flush();
 
-    const selectAll = host!.querySelector<HTMLInputElement>(
+    const selectAll = dom.host!.querySelector<HTMLInputElement>(
       'input[aria-label="全选当前可结算项"]',
     )!;
     expect(selectAll.checked).toBe(false);
@@ -641,24 +586,24 @@ describe("App account visibility", () => {
       selectAll.click();
     });
     expect(selectAll.checked).toBe(true);
-    expect(host!.textContent).toContain("批量结算 (2)");
-    expect(host!.textContent).toContain("批量结算并续费 (2)");
+    expect(dom.host!.textContent).toContain("批量结算 (2)");
+    expect(dom.host!.textContent).toContain("批量结算并续费 (2)");
 
-    const filterSelect = host!.querySelector<HTMLSelectElement>(
+    const filterSelect = dom.host!.querySelector<HTMLSelectElement>(
       'select[aria-label="状态筛选"]',
     )!;
     await act(async () => {
       filterSelect.value = "open";
       filterSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(host!.textContent).toContain("批量结算并续费 (2)");
+    expect(dom.host!.textContent).toContain("批量结算并续费 (2)");
 
     await click(topButton("清空"));
-    expect(host!.textContent).not.toContain("批量结算 (");
+    expect(dom.host!.textContent).not.toContain("批量结算 (");
 
     await click(topButton("固定费用"));
     await click(topButton("新增固定费用"));
-    const dialog = host!.querySelector<HTMLDialogElement>("dialog[open]")!;
+    const dialog = dom.host!.querySelector<HTMLDialogElement>("dialog[open]")!;
     const participantChecks = Array.from(
       dialog.querySelectorAll<HTMLInputElement>(".member-list input[type=checkbox]"),
     );
@@ -669,5 +614,134 @@ describe("App account visibility", () => {
     expect(participantChecks.every((c) => !c.checked)).toBe(true);
     await click(buttonIn(dialog, "全选"));
     expect(participantChecks.every((c) => c.checked)).toBe(true);
+  });
+
+  it("displays fallback version before login, updates from /me, skips redundant polling on manage subtabs, and cancels closed detail requests", async () => {
+    const meDeferred = deferred<Response>();
+    const cycleDeferred = deferred<Response>();
+    let overviewCalls = 0;
+    let catalogCalls = 0;
+    let vendorCalls = 0;
+
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.endsWith("/me")) return meDeferred.promise;
+      if (path.endsWith("/accounts/state")) {
+        return response({
+          ...stateSnapshot([
+            { id: 1, name: "Removed account" },
+            { id: 2, name: "Active account" },
+          ]),
+          error: "账号同步受阻",
+        });
+      }
+      if (path.endsWith("/overview")) {
+        overviewCalls += 1;
+        return response({
+          ...overview,
+          sync_error: "消费同步异常",
+        });
+      }
+      if (path.endsWith("/catalog")) {
+        catalogCalls += 1;
+        return response(catalog);
+      }
+      if (path.endsWith("/vendors")) {
+        vendorCalls += 1;
+        return response({ vendors: [] });
+      }
+      if (path.endsWith("/operations/status")) {
+        return response({
+          last_sync: null,
+          sync_error: "消费同步异常",
+          accounts: { checked_at: null, error: "账号同步受阻" },
+          pending_deletions: 0,
+          checkpoint: null,
+        });
+      }
+      if (path.endsWith("/inbox")) return response({ items: [], unread: 0 });
+      if (path.endsWith("/expenses")) return response({ expenses: [] });
+      if (path.endsWith("/history")) {
+        return response({ cycles: [removedCycle, activeCycle] });
+      }
+      if (path.endsWith("/account-deletions")) {
+        return response({ items: [] });
+      }
+      if (path.includes("/audit")) {
+        return response({ items: [], next_before: null });
+      }
+      if (path.includes("/orders")) return response({ orders: [] });
+      if (path.includes("/netting/balances")) return response({ balances: [] });
+      if (path.includes("/netting/payments")) return response({ payments: [] });
+      if (/\/cycles\/\d+$/.test(path)) return cycleDeferred.promise;
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await dom.render(<App />);
+    expect(dom.host!.querySelector(".app-version")?.textContent).toBe(
+      `v${APP_VERSION}`,
+    );
+
+    await act(async () => {
+      meDeferred.resolve(response({ ...actor, version: "0.99.1" }));
+    });
+    await flush();
+
+    expect(dom.host!.querySelector(".app-version")?.textContent).toBe(
+      "v0.99.1",
+    );
+    expect(overviewCalls).toBe(1);
+    expect(catalogCalls).toBe(1);
+    expect(vendorCalls).toBe(1);
+    expect(dom.host!.querySelectorAll('[role="alert"]').length).toBe(2);
+
+    // Start an async cycle detail request, then switch to manage -> deletions
+    const detailBtn = rowFor("Removed account").querySelector<HTMLButtonElement>(
+      'button[aria-label="Removed account 周期明细"]',
+    )!;
+    await click(detailBtn);
+    expect(dom.host!.querySelector("dialog[open]")).toBeNull();
+
+    // Switch to bills tab: overview updates, catalog and vendors are not re-fetched
+    await click(topButton("我的账单"));
+    await flush();
+    expect(overviewCalls).toBe(2);
+    expect(catalogCalls).toBe(1);
+    expect(vendorCalls).toBe(1);
+
+    // Switch to manage tab -> deletions: top-level sync alerts are deduplicated in favor of OperationStatus,
+    // and cached overview/catalog/vendors are preserved without redundant fetches
+    await click(topButton("管理"));
+    await flush();
+    expect(
+      Array.from(dom.host!.querySelectorAll('[role="alert"]')).map((el) =>
+        el.textContent?.trim(),
+      ),
+    ).toEqual(["消费同步异常"]);
+    const beforeDeletions = { overviewCalls, catalogCalls, vendorCalls };
+    await click(topButton("账号删除"));
+    await flush();
+    expect({ overviewCalls, catalogCalls, vendorCalls }).toEqual(
+      beforeDeletions,
+    );
+
+    // Resolve the earlier cycle detail, then close it and ensure closing invalidates subsequent stale resolves
+    await act(async () => {
+      cycleDeferred.resolve(
+        response({
+          cycle: removedCycle,
+          end: "2026-10-01T00:00:00Z",
+          total_consumption: "1.00",
+          allocations: [],
+          record_count: 1,
+        }),
+      );
+    });
+    await flush();
+    const openedDialog = dom.host!.querySelector<HTMLDialogElement>("dialog[open]")!;
+    expect(openedDialog.textContent).toContain("周期明细");
+    await click(openedDialog.querySelector<HTMLButtonElement>('button[aria-label="关闭"]')!);
+    expect(dom.host!.querySelector("dialog[open]")).toBeNull();
   });
 });

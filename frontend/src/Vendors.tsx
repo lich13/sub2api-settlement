@@ -2,6 +2,7 @@ import { ManualBillingEditor, canonicalManualBasis, useManualBilling } from "./M
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { api, money, costInput, amountPattern, inputDate, fromInput, date, consumption, billedMoney, downloadCsv } from "./api";
+import { FormError } from "./Forms";
 import { Modal } from "./Modal";
 import { Select } from "./Select";
 import type { Account, Catalog, Cycle, LocalUnmatched, Vendor, VendorPeriod, VendorBillPreview, Overview } from "./types";
@@ -79,7 +80,7 @@ export function VendorManager({vendors,accounts,catalog,close,refresh,initialVen
   async function voidPeriod(p:VendorPeriod){setBusy(true);setError("");try{await api(`/vendor-periods/${p.id}/void`,"POST",{version:p.version});await refresh();setVoidCandidate(null);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
   const title=action==="create"?"新建账号组":action==="add"?"添加账号":action==="renew"?"整组续费":action==="edit"?"整组配置":"账号组管理";
   return <Modal title={title} wide busy={busy} dirty={dirty || selected.length > 0} close={close}><div className="form">
-    {error&&<p className="form-error" role="alert">{error}</p>}
+    <FormError error={error} />
     {voidCandidate&&<section className="allocation"><strong>作废 {voidCandidate.name} 的整组结算？</strong><p className="field-hint">本期全部待付款订单将一并作废，已有续费周期保留。</p><div className="row-actions"><button className="button" disabled={busy} onClick={()=>setVoidCandidate(null)}>取消</button><button className="button" disabled={busy} onClick={()=>voidPeriod(voidCandidate)}>确认整组作废</button></div></section>}
     {archiveCandidate&&<section className="allocation"><strong>归档 {archiveCandidate.name}？</strong><p className="field-hint">以下成员将恢复待配置，历史账目保留。</p><p>{archiveCandidate.current_members?.filter(a=>!a.account_deleted).map(a=>accounts.find(x=>x.id===a.account_id)?.name||a.name).join("、")||"无存续成员"}</p><div className="row-actions"><button className="button" disabled={busy} onClick={()=>setArchiveCandidate(null)}>取消</button><button className="button" disabled={busy} onClick={()=>archive(archiveCandidate)}>确认归档</button></div></section>}
     {!editing?<>{activeVendors.map(v=>{const p=currentPeriod(v);return <section className="allocation" key={v.id}><div className="allocation-head"><strong>{v.name}</strong><b className="amount">{money(p?.cost_fen??v.periods[0]?.cost_fen??v.cost_fen)}</b></div><div className="row-actions">{!!v.periods.length&&<button className="text-button" onClick={()=>edit(v,"add")}>添加账号</button>}{!v.periods.some(p=>p.status==="open")&&<>{!!v.periods.length&&<button className="text-button" onClick={()=>edit(v,"renew")}>整组续费</button>}<button className="text-button" disabled={busy} onClick={()=>setArchiveCandidate(v)}>归档</button></>}</div>{v.periods.map(p=><div className="vendor-period-row" key={p.id}><span>{date(p.start)} · {p.status==="open"?"进行中":"已结算"} · {money(p.cost_fen)}</span>{p.status==="open"?<button className="text-button" onClick={()=>edit(v,"edit",p)}>整组配置</button>:<button className="text-button" disabled={busy} onClick={()=>setVoidCandidate(p)}>整组作废</button>}</div>)}</section>;})}{!activeVendors.length&&<p className="field-hint">暂无可管理的账号组</p>}</>:<form className="form" onSubmit={save}>
@@ -139,13 +140,13 @@ export function VendorBillPanel({period,cycles,end,onConfirmed,onDraftChange}:{p
       {preview.manual_summary&&<div><span>手动补计权重</span><b>{billedMoney(preview.manual_summary.amount)}</b></div>}
       <div><span>未匹配上游</span><b>{preview.unmatched_count} 条 · {billedMoney(preview.unmatched_amount)}</b></div>
       <p className="field-hint">{preview.basis==="manual_supplement"?"按已匹配扣费与手动补计权重拆分，组总成本不变。":preview.basis==="local_consumption"?"无正金额匹配，按各账号本地原始消费分摊。":"未匹配费用按各账号已匹配上游扣费比例分摊。"}</p>
-      {preview.coverage_warnings.map(g=><p key={g.account_id} className="form-error">{g.warning}</p>)}
+      {preview.coverage_warnings.map(g=><FormError key={g.account_id} error={g.warning} />)}
       {preview.accounts.map(a=><div key={a.account_id}><span>{a.name}</span><b className="amount">{a.amount_fen==null?"—":money(a.amount_fen)}</b></div>)}
       {!!preview.outside_count&&<div><span>范围外（已自动排除）</span><b>{preview.outside_count} 条 · {billedMoney(preview.outside_amount)}</b></div>}
       {(preview.unmatched_count>0||preview.outside_count>0||!!preview.local_unmatched?.length)&&<button className="text-button" onClick={()=>downloadCsv(`/vendor-periods/${period.id}/bill-previews/${preview.id}/unmatched.csv`,"账号组未匹配账单.csv").catch(e=>setError(e.message))}>导出未匹配明细</button>}
-      {!preview.can_confirm&&<p className="form-error">{preview.manual_basis?"请确认本地消费覆盖及正金额分摊依据":"没有正金额匹配或本地消费依据，无法分摊"}</p>}
+      {!preview.can_confirm&&<FormError error={preview.manual_basis?"请确认本地消费覆盖及正金额分摊依据":"没有正金额匹配或本地消费依据，无法分摊"} />}
       <button className="button primary" disabled={busy||!preview.can_confirm||!period.start_confirmed} onClick={confirm}>确认分摊依据</button>
     </div>}
-    {error&&<p className="form-error" role="alert">{error}</p>}
+    <FormError error={error} />
   </section>;
 }

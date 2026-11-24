@@ -1,16 +1,20 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  advance,
+  deferred,
+  jsonResponse as response,
+  renderWithDialog,
+} from "./test-utils";
 import { useAutoPreview } from "./useAutoPreview";
 import type { Preview } from "./types";
 
 type HookInput = Parameters<typeof useAutoPreview>[0];
 type HookValue = ReturnType<typeof useAutoPreview>;
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
+const dom = renderWithDialog();
 let value: HookValue | undefined;
 
 function Probe(props: HookInput) {
@@ -19,37 +23,16 @@ function Probe(props: HookInput) {
 }
 
 async function mount(input: HookInput) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(<Probe {...input} />);
-  });
+  await dom.render(<Probe {...input} />);
 }
 
 async function rerender(input: HookInput) {
-  await act(async () => {
-    root!.render(<Probe {...input} />);
-  });
+  await dom.render(<Probe {...input} />);
 }
 
 function current() {
   if (!value) throw new Error("hook has not rendered");
   return value;
-}
-
-async function advance(ms: number) {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-}
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
 }
 
 function preview(id: string, lifetimeMs = 60_000): Preview {
@@ -60,30 +43,8 @@ function preview(id: string, lifetimeMs = 60_000): Preview {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-});
-
-afterEach(async () => {
-  if (root) {
-    await act(async () => root!.unmount());
-  }
-  root = undefined;
-  host?.remove();
-  host = undefined;
+afterEach(() => {
   value = undefined;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
 });
 
 describe("useAutoPreview", () => {

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use settlement::{config::Config, http::App, store};
+use settlement::{config::Config, error::Result, http::App, service::Prepared, store};
 use tempfile::TempDir;
 
 pub const START: &str = "2025-01-01T00:00:00+00:00";
@@ -135,4 +135,60 @@ fn write_fixture(path: &Path, data: &Value) {
         serde_json::to_vec(data).expect("serialize synthetic source fixture"),
     )
     .expect("write synthetic source fixture");
+}
+
+pub fn assert_error<T>(result: Result<T>, status: u16, clue: &str) {
+    let error = match result {
+        Ok(_) => panic!("operation should fail"),
+        Err(error) => error,
+    };
+    assert_eq!(error.status, status, "unexpected error: {error}");
+    assert!(
+        error.message.contains(clue),
+        "expected error containing {clue:?}, got {:?}",
+        error.message
+    );
+}
+
+pub async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> Result<Value> {
+    harness
+        .app
+        .service
+        .mutate(&admin(), key, action, payload, Prepared::default(), None)
+        .await
+}
+
+pub async fn cycle_row(harness: &Harness, id: i64) -> Value {
+    harness
+        .rows("cycles")
+        .await
+        .into_iter()
+        .find(|row| row["id"] == id)
+        .unwrap_or_else(|| panic!("cycle {id} not found"))
+}
+
+pub async fn vendor_period_row(harness: &Harness, id: i64) -> Value {
+    let mut db = harness.app.service.store.read().await.unwrap();
+    let row = store::one(
+        &mut db,
+        "SELECT * FROM vendor_periods WHERE id=?",
+        &[json!(id)],
+        "vendor period missing",
+    )
+    .await
+    .unwrap();
+    db.commit().await.unwrap();
+    row
+}
+
+pub async fn cycle_for_account(harness: &Harness, account_id: i64) -> i64 {
+    harness
+        .rows("cycles")
+        .await
+        .into_iter()
+        .rev()
+        .find(|cycle| cycle["account_id"] == account_id && cycle["vendor_period_id"].is_i64())
+        .unwrap_or_else(|| panic!("vendor cycle for account {account_id} not found"))["id"]
+        .as_i64()
+        .unwrap()
 }

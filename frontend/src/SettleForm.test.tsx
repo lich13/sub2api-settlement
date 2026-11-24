@@ -1,51 +1,31 @@
 // @vitest-environment jsdom
 
-import { act, type ComponentProps, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, type ComponentProps } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { SettleForm } from "./SettleForm";
+import {
+  advance,
+  click,
+  deferred,
+  jsonResponse as response,
+  renderWithDialog,
+  setInputValue,
+  setSelectValue,
+} from "./test-utils";
 import type { Calculation, Catalog, Cycle, Preview, VendorPeriod } from "./types";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
-
-async function render(node: ReactNode) {
-  if (!root) {
-    host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-  }
-  await act(async () => {
-    root!.render(node);
-  });
-}
-
-async function advance(ms: number) {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-}
-
-async function click(button: HTMLButtonElement) {
-  await act(async () => {
-    button.click();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
+const dom = renderWithDialog();
+const render = dom.render;
 
 function button(text: string) {
-  const found = Array.from(host!.querySelectorAll("button"))
+  const found = Array.from(dom.host!.querySelectorAll("button"))
     .find(element => element.textContent?.trim() === text);
   if (!found) throw new Error(`button not found: ${text}`);
   return found;
 }
 
 function inputForLabel(labelText: string) {
-  const label = Array.from(host!.querySelectorAll("label"))
+  const label = Array.from(dom.host!.querySelectorAll("label"))
     .find(element => element.textContent?.includes(labelText));
   const input = label?.querySelector("input");
   if (!input) throw new Error(`input not found for label: ${labelText}`);
@@ -53,19 +33,11 @@ function inputForLabel(labelText: string) {
 }
 
 function selectForLabel(labelText: string) {
-  const label = Array.from(host!.querySelectorAll("label"))
+  const label = Array.from(dom.host!.querySelectorAll("label"))
     .find(element => element.textContent?.includes(labelText));
   const select = label?.querySelector<HTMLSelectElement>("select");
   if (!select) throw new Error(`select not found for label: ${labelText}`);
   return select;
-}
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
 }
 
 const catalog: Catalog = {
@@ -160,57 +132,12 @@ function formProps(overrides: Partial<ComponentProps<typeof SettleForm>> = {}): 
   };
 }
 
-function setInputValue(input: HTMLInputElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (!setter) throw new Error("input value setter is unavailable");
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-function setSelectValue(select: HTMLSelectElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-    if (!setter) throw new Error("select value setter is unavailable");
-    setter.call(select, value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-}
-
 function checkbox(labelText: string) {
-  const found = Array.from(host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
+  const found = Array.from(dom.host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
     .find(input => input.closest("label")?.textContent?.includes(labelText));
   if (!found) throw new Error(`checkbox not found: ${labelText}`);
   return found;
 }
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
-});
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
 
 describe("SettleForm preview integration", () => {
   it("keeps an edited renewal draft when a newer preview arrives", async () => {
@@ -232,10 +159,10 @@ describe("SettleForm preview integration", () => {
     await advance(0);
 
     expect(previewCalls).toBe(1);
-    const renewalCost = Array.from(host!.querySelectorAll<HTMLInputElement>("input"))
+    const renewalCost = Array.from(dom.host!.querySelectorAll<HTMLInputElement>("input"))
       .find(input => input.closest("label")?.textContent?.includes("新周期成本（元）"));
     expect(renewalCost?.value).toBe("71.00");
-    expect(Array.from(host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
+    expect(Array.from(dom.host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
       .some(input => input.checked && input.closest("label")?.textContent?.includes("结算后续期"))).toBe(true);
 
     setInputValue(renewalCost!, "66.60");
@@ -244,7 +171,7 @@ describe("SettleForm preview integration", () => {
     await advance(0);
 
     expect(previewCalls).toBe(2);
-    const updatedRenewalCost = Array.from(host!.querySelectorAll<HTMLInputElement>("input"))
+    const updatedRenewalCost = Array.from(dom.host!.querySelectorAll<HTMLInputElement>("input"))
       .find(input => input.closest("label")?.textContent?.includes("新周期成本（元）"));
     expect(updatedRenewalCost?.value).toBe("66.60");
   });
@@ -280,11 +207,11 @@ describe("SettleForm preview integration", () => {
     await advance(0);
 
     expect(previewCalls).toBe(1);
-    const groupRenewalLabels = Array.from(host!.querySelectorAll("label"))
+    const groupRenewalLabels = Array.from(dom.host!.querySelectorAll("label"))
       .filter(label => label.textContent?.trim() === "结算后整组续费");
     expect(groupRenewalLabels).toHaveLength(1);
     expect((groupRenewalLabels[0].querySelector("input") as HTMLInputElement).checked).toBe(true);
-    expect(Array.from(host!.querySelectorAll("label"))
+    expect(Array.from(dom.host!.querySelectorAll("label"))
       .filter(label => label.textContent?.trim() === "结算后续期")).toHaveLength(0);
     expect(inputForLabel("下期组成本（元）").value).toBe("123.45");
 
@@ -362,7 +289,7 @@ describe("SettleForm preview integration", () => {
 
     await click(button("确认结算"));
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
-    expect(host!.textContent).toContain("没有可续费成员，请取消整组续费");
+    expect(dom.host!.textContent).toContain("没有可续费成员，请取消整组续费");
   });
 
   it("keeps renewal and bill-import drafts when the open cycle is renamed", async () => {
@@ -407,7 +334,7 @@ describe("SettleForm preview integration", () => {
     const renewal = inputForLabel("新周期成本（元）");
     setInputValue(renewal, "66.60");
 
-    const fileInput = host!.querySelector<HTMLInputElement>(".bill-import input[type=file]");
+    const fileInput = dom.host!.querySelector<HTMLInputElement>(".bill-import input[type=file]");
     if (!fileInput) throw new Error("bill import file input not found");
     const file = { name: "draft.csv", size: csv.length, text: async () => csv } as File;
     Object.defineProperty(fileInput, "files", { configurable: true, value: [file] });
@@ -427,9 +354,9 @@ describe("SettleForm preview integration", () => {
     await render(<SettleForm {...initialProps} cycles={[renamedCycle]} catalog={renamedCatalog} />);
     await advance(0);
 
-    expect(host!.textContent).toContain("Renamed billing account");
+    expect(dom.host!.textContent).toContain("Renamed billing account");
     expect(inputForLabel("新周期成本（元）").value).toBe("66.60");
-    const importButton = Array.from(host!.querySelectorAll<HTMLButtonElement>(".bill-import button"))
+    const importButton = Array.from(dom.host!.querySelectorAll<HTMLButtonElement>(".bill-import button"))
       .find(value => value.textContent?.trim() === "账单预览");
     expect(importButton?.disabled).toBe(false);
     if (!importButton) throw new Error("bill preview button not found");
@@ -465,17 +392,17 @@ describe("SettleForm preview integration", () => {
 
     await render(<SettleForm {...props} />);
     await advance(0);
-    expect(host!.textContent).toContain("预估倍率");
-    expect(host!.textContent).toContain("0.1367×");
+    expect(dom.host!.textContent).toContain("预估倍率");
+    expect(dom.host!.textContent).toContain("0.1367×");
 
     await render(<SettleForm {...props} cycles={[cycle({ version: 2 })]} />);
     await advance(0);
-    expect(host!.textContent).toContain("结算倍率");
-    expect(host!.textContent).toContain("<0.0001×");
+    expect(dom.host!.textContent).toContain("结算倍率");
+    expect(dom.host!.textContent).toContain("<0.0001×");
 
     await render(<SettleForm {...props} cycles={[cycle({ version: 3 })]} />);
     await advance(0);
-    const multiplier = Array.from(host!.querySelectorAll(".detail-facts span"))
+    const multiplier = Array.from(dom.host!.querySelectorAll(".detail-facts span"))
       .find(value => value.textContent?.includes("倍率"));
     expect(multiplier?.textContent).toContain("预估倍率");
     expect(multiplier?.textContent).toContain("—");
@@ -520,10 +447,10 @@ describe("SettleForm preview integration", () => {
     await render(<SettleForm {...formProps({ cycles: [cycle({ cost_source: "upstream_bill", bill_import_id: 33 })] })} />);
     await advance(0);
 
-    expect(host!.textContent).toContain("上游账单");
+    expect(dom.host!.textContent).toContain("上游账单");
     await click(button("沿用已导入账单"));
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-previews"))).toBe(true);
-    expect(host!.textContent).toContain("确认替换成本");
+    expect(dom.host!.textContent).toContain("确认替换成本");
 
     await click(button("确认替换成本"));
     await advance(0);
@@ -580,7 +507,7 @@ describe("SettleForm preview integration", () => {
     await click(button("沿用已导入账单"));
     const proportionalCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
     expect(JSON.parse(String(proportionalCall?.[1]?.body))).toMatchObject({ allocation_mode: "proportional" });
-    expect(host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
+    expect(dom.host!.textContent).not.toContain("确认本地差异，按已匹配扣费比例分摊");
     expect(button("确认替换成本").disabled).toBe(false);
 
     const mode = selectForLabel("分摊方式");
@@ -591,8 +518,8 @@ describe("SettleForm preview integration", () => {
     await advance(0);
 
     expect(billCalls).toBe(2);
-    expect(host!.textContent).not.toContain("确认替换成本");
-    expect(host!.textContent).toContain("匹配中…");
+    expect(dom.host!.textContent).not.toContain("确认替换成本");
+    expect(dom.host!.textContent).toContain("匹配中…");
     const matchedOnlyCall = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"))[1];
     expect(JSON.parse(String(matchedOnlyCall?.[1]?.body))).toMatchObject({ allocation_mode: "matched_only" });
 
@@ -621,10 +548,10 @@ describe("SettleForm preview integration", () => {
       await Promise.resolve();
     });
 
-    expect(host!.textContent).toContain("上游总扣费");
-    expect(host!.textContent).toContain("本次计费");
-    expect(host!.textContent).toContain("未匹配不计费");
-    expect(host!.textContent).toContain("确认仅按匹配金额计费");
+    expect(dom.host!.textContent).toContain("上游总扣费");
+    expect(dom.host!.textContent).toContain("本次计费");
+    expect(dom.host!.textContent).toContain("未匹配不计费");
+    expect(dom.host!.textContent).toContain("确认仅按匹配金额计费");
 
     await click(button("确认仅按匹配金额计费"));
     await advance(0);
@@ -669,7 +596,7 @@ describe("SettleForm preview integration", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host!.querySelector(".deletion-scope input[type=checkbox]")).toBeNull();
+    expect(dom.host!.querySelector(".deletion-scope input[type=checkbox]")).toBeNull();
     expect(button("确认结算").disabled).toBe(false);
 
     await click(button("确认结算"));
@@ -711,9 +638,9 @@ describe("SettleForm preview integration", () => {
     await advance(0);
     expect(previewCalls).toBe(1);
     expect(inputForLabel("结束时间（北京时间）").value).toBe("2026-10-01T08:00:05");
-    const details = host!.querySelector<HTMLDetailsElement>("details.bill-import")!;
+    const details = dom.host!.querySelector<HTMLDetailsElement>("details.bill-import")!;
     expect(details.open).toBe(false);
-    const startEl = host!.querySelector(".start-confirm")!;
+    const startEl = dom.host!.querySelector(".start-confirm")!;
     expect(startEl.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     setSelectValue(selectForLabel("分摊方式"), "matched_only");
@@ -722,7 +649,7 @@ describe("SettleForm preview integration", () => {
 
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/start-confirm"))).toBe(true);
     expect(previewCalls).toBe(2);
-    expect(host!.textContent).not.toContain("确认起点");
+    expect(dom.host!.textContent).not.toContain("确认起点");
     expect(button("确认结算").disabled).toBe(false);
   });
 
@@ -820,7 +747,7 @@ describe("SettleForm preview integration", () => {
     await advance(0);
 
     // Group B uploads CSV and runs bill preview while Group A's start is still unconfirmed.
-    const panels = host!.querySelectorAll<HTMLElement>(".vendor-bill");
+    const panels = dom.host!.querySelectorAll<HTMLElement>(".vendor-bill");
     expect(panels).toHaveLength(2);
     const fileInputB = panels[1].querySelector<HTMLInputElement>('input[type="file"]')!;
     const csv = "timestamp,cost\n2026-09-20T00:00:00Z,123.45\n";
@@ -858,7 +785,7 @@ describe("SettleForm preview integration", () => {
     await click(reuseBtnA);
     expect(button("确认结算").disabled).toBe(true);
     await act(async () => {
-      host!.querySelector("dialog")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      dom.host!.querySelector("dialog")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(close).not.toHaveBeenCalled();
   });

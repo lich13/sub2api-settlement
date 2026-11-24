@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 mod support;
 
 use serde_json::{Value, json};
@@ -6,9 +5,11 @@ use settlement::{
     billing::UsageRow,
     error::Result,
     service::{Prepared, vendor_billing::vendor_allocations},
-    store,
 };
-use support::legacy::{END, Harness, START, admin, payer};
+use support::legacy::{
+    END, Harness, START, admin, assert_error, cycle_for_account, cycle_row, mutate, payer,
+    vendor_period_row,
+};
 
 fn usage(id: i64, root_id: i64, user_id: i64, amount: &str) -> UsageRow {
     UsageRow {
@@ -48,62 +49,6 @@ fn allocation(accounts: &Value, account_id: i64, user_id: i64) -> i64 {
         .find(|share| share["user_id"] == user_id)
         .and_then(|share| share["amount_fen"].as_i64())
         .unwrap_or_else(|| panic!("account {account_id} has no user {user_id} allocation"))
-}
-
-fn assert_error<T>(result: Result<T>, status: u16, message: &str) {
-    let error = match result {
-        Ok(_) => panic!("operation should fail"),
-        Err(error) => error,
-    };
-    assert_eq!(error.status, status, "unexpected error: {error}");
-    assert!(
-        error.message.contains(message),
-        "expected error containing {message:?}, got {:?}",
-        error.message
-    );
-}
-
-async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> Result<Value> {
-    harness
-        .app
-        .service
-        .mutate(&admin(), key, action, payload, Prepared::default(), None)
-        .await
-}
-
-async fn cycle_row(harness: &Harness, id: i64) -> Value {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .find(|cycle| cycle["id"] == id)
-        .unwrap_or_else(|| panic!("cycle {id} not found"))
-}
-
-async fn vendor_period_row(harness: &Harness, id: i64) -> Value {
-    let mut db = harness.app.service.store.read().await.unwrap();
-    let row = store::one(
-        &mut db,
-        "SELECT * FROM vendor_periods WHERE id=?",
-        &[json!(id)],
-        "vendor period missing",
-    )
-    .await
-    .unwrap();
-    db.commit().await.unwrap();
-    row
-}
-
-async fn cycle_for_account(harness: &Harness, account_id: i64) -> i64 {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .rev()
-        .find(|cycle| cycle["account_id"] == account_id && cycle["vendor_period_id"].is_i64())
-        .unwrap_or_else(|| panic!("vendor cycle for account {account_id} not found"))["id"]
-        .as_i64()
-        .unwrap()
 }
 
 async fn create_vendor(harness: &Harness, account_ids: &[i64], cost: &str, key: &str) -> Value {

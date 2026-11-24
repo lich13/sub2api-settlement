@@ -1,4 +1,6 @@
+import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { FormError } from "./Forms";
 import { Select } from "./Select";
 import { billedMoney, consumption, date } from "./api";
 import type { LocalUnmatched, ManualBasis, ManualSummary } from "./types";
@@ -190,13 +192,14 @@ export function ManualBillingEditor({
         表示不计费。最多六位小数。
       </p>
       {!manual.valid && (
-        <p className="form-error" role="alert">
-          倍率须为非负数，最多六位小数
-        </p>
+        <FormError error="倍率须为非负数，最多六位小数" />
       )}
       {!!ambiguous.length && (
         <details className="manual-ambiguous">
-          <summary>歧义请求 · {ambiguous.length} 条</summary>
+          <summary>
+            歧义请求 · {ambiguous.length} 条
+            <ChevronDown size={16} />
+          </summary>
           <div className="picker-head">
             <p className="field-hint">
               核对后选择；明确匹配的请求不会重复补计。

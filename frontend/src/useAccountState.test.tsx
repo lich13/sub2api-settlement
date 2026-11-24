@@ -1,14 +1,13 @@
 // @vitest-environment jsdom
 
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deferred, jsonResponse as response, renderWithDialog } from "./test-utils";
 import { useAccountState } from "./useAccountState";
 
 type HookValue = ReturnType<typeof useAccountState>;
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
+const dom = renderWithDialog();
 let value: HookValue | undefined;
 
 function Probe({ userId }: { userId?: number }) {
@@ -17,12 +16,7 @@ function Probe({ userId }: { userId?: number }) {
 }
 
 async function mount(userId?: number) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(<Probe userId={userId} />);
-  });
+  await dom.render(<Probe userId={userId} />);
 }
 
 function current() {
@@ -30,37 +24,12 @@ function current() {
   return value;
 }
 
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
 });
 
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
+afterEach(() => {
   value = undefined;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
   Reflect.deleteProperty(document, "hidden");
 });
 

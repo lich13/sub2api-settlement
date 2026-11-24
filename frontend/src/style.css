@@ -1065,8 +1065,28 @@ td small {
 .netting-order strong, .netting-order span { display: block; }
 .netting-order span { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .netting-order b { white-space: nowrap; font-variant-numeric: tabular-nums; }
+:is(.manual-ambiguous, .raw-orders, .audit-list details) > summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+:is(.manual-ambiguous, .raw-orders) > summary {
+  display: flex;
+  justify-content: space-between;
+}
+:is(.manual-ambiguous, .raw-orders, .audit-list details) > summary::-webkit-details-marker {
+  display: none;
+}
+:is(.manual-ambiguous, .raw-orders, .audit-list details) > summary > svg {
+  flex-shrink: 0;
+}
+:is(.manual-ambiguous, .raw-orders, .audit-list details)[open] > summary > svg {
+  transform: rotate(180deg);
+}
 .raw-orders { padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.raw-orders summary { cursor: pointer; font-size: 13px; }
+.raw-orders summary { font-size: 13px; }
 .deletion-list { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .deletion-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 20px; padding: 16px; border-bottom: 1px solid var(--line); }
 .deletion-row:last-child { border-bottom: 0; }
@@ -1082,7 +1102,7 @@ td small {
 .audit-filters label { display:grid; gap:6px; font-size:12px; flex:1 1 180px; }
 .audit-filters input,.audit-filters select { width:100%; }
 .audit-list details { margin-top:6px; max-width:100%; }
-.audit-list summary { font-size:12px; cursor:pointer; color:var(--muted); }
+.audit-list summary { font-size:12px; color:var(--muted); }
 .audit-list pre { overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; max-height:260px; }
 .payment-memo { white-space:pre-wrap; overflow-wrap:anywhere; }
 .deletion-scope { padding:14px 16px; border:1px solid var(--line); border-radius:8px; margin:10px 0; }
@@ -1096,7 +1116,7 @@ td small {
 .manual-rate label span { overflow-wrap: anywhere; }
 .manual-rate input { text-align: right; font-variant-numeric: tabular-nums; }
 .manual-rate .field-hint { margin: 6px 0 0; }
-.manual-ambiguous summary { cursor: pointer; padding-block: 6px; }
+.manual-ambiguous summary { padding-block: 6px; }
 .manual-request { align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .manual-request span { min-width: 0; overflow-wrap: anywhere; }
 .manual-request small { display: block; font-size: 12px; color: var(--muted); line-height: 1.6; }

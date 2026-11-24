@@ -1,34 +1,13 @@
 // @vitest-environment jsdom
 
-import { act, type ComponentProps, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, type ComponentProps } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { NettingDetails, NettingList, NettingReceivables } from "./Netting";
+import { renderWithDialog } from "./test-utils";
 import type { Actor, NetBalance, NetPayment, Order } from "./types";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-
-async function render(node: ReactNode) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(node);
-  });
-}
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-});
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  vi.unstubAllGlobals();
-});
+const dom = renderWithDialog();
+const render = dom.render;
 
 const actor = (id: number, role: Actor["role"] = "user"): Actor => ({
   id, name: id === 1 ? "Alice" : "Bob", role, csrf: "fixture-csrf",
@@ -112,16 +91,16 @@ describe("netting views", () => {
 
     await render(<NettingList {...props} />);
 
-    expect(host!.querySelectorAll(".netting-bill")).toHaveLength(2);
-    expect(host!.textContent).toContain("Alice");
-    expect(host!.textContent).not.toContain("Cara");
-    expect(host!.textContent).toContain("确认转账");
-    expect(host!.textContent).toContain("确认对冲");
-    expect(host!.textContent).not.toContain("转账结清");
-    expect(host!.textContent).not.toContain("Eli");
+    expect(dom.host!.querySelectorAll(".netting-bill")).toHaveLength(2);
+    expect(dom.host!.textContent).toContain("Alice");
+    expect(dom.host!.textContent).not.toContain("Cara");
+    expect(dom.host!.textContent).toContain("确认转账");
+    expect(dom.host!.textContent).toContain("确认对冲");
+    expect(dom.host!.textContent).not.toContain("转账结清");
+    expect(dom.host!.textContent).not.toContain("Eli");
 
-    const payButton = Array.from(host!.querySelectorAll("button")).find(button => button.textContent === "确认转账");
-    const offsetButton = Array.from(host!.querySelectorAll("button")).find(button => button.textContent === "确认对冲");
+    const payButton = Array.from(dom.host!.querySelectorAll("button")).find(button => button.textContent === "确认转账");
+    const offsetButton = Array.from(dom.host!.querySelectorAll("button")).find(button => button.textContent === "确认对冲");
     expect(payButton).toBeDefined();
     expect(offsetButton).toBeDefined();
     await act(async () => payButton!.click());
@@ -146,13 +125,13 @@ describe("netting views", () => {
 
     await render(<NettingList {...props} />);
 
-    expect(host!.querySelectorAll(".netting-bill")).toHaveLength(1);
-    expect(host!.textContent).toContain("Alice 与 Cara");
-    expect(host!.textContent).not.toContain("Alice 与 Bob");
-    const settleButton = host!.querySelector<HTMLButtonElement>(".netting-bill .button.primary");
+    expect(dom.host!.querySelectorAll(".netting-bill")).toHaveLength(1);
+    expect(dom.host!.textContent).toContain("Alice 与 Cara");
+    expect(dom.host!.textContent).not.toContain("Alice 与 Bob");
+    const settleButton = dom.host!.querySelector<HTMLButtonElement>(".netting-bill .button.primary");
     expect(settleButton?.textContent).toBe("标记已结清");
     expect(settleButton?.disabled).toBe(true);
-    expect(host!.querySelector(".raw-orders summary")?.textContent).toBe("原始订单 · 0 张");
+    expect(dom.host!.querySelector(".raw-orders summary")?.textContent).toBe("原始订单 · 0 张");
     await act(async () => settleButton?.click());
     expect(onPay).not.toHaveBeenCalled();
   });
@@ -167,13 +146,13 @@ describe("netting views", () => {
 
     await render(<NettingReceivables balances={balances} />);
 
-    expect(host!.querySelector(".receivable-summary")?.textContent).toContain("¥15.00");
-    expect(host!.querySelectorAll(".receivable-row")).toHaveLength(2);
-    expect(host!.textContent).toContain("Alice");
-    expect(host!.textContent).toContain("Cara");
-    expect(host!.textContent).not.toContain("Drew");
-    expect(host!.textContent).not.toContain("Eli");
-    expect(host!.querySelectorAll("button")).toHaveLength(0);
+    expect(dom.host!.querySelector(".receivable-summary")?.textContent).toContain("¥15.00");
+    expect(dom.host!.querySelectorAll(".receivable-row")).toHaveLength(2);
+    expect(dom.host!.textContent).toContain("Alice");
+    expect(dom.host!.textContent).toContain("Cara");
+    expect(dom.host!.textContent).not.toContain("Drew");
+    expect(dom.host!.textContent).not.toContain("Eli");
+    expect(dom.host!.querySelectorAll("button")).toHaveLength(0);
   });
 
   it("shows both original directions, the offset, the net transfer and source orders", async () => {
@@ -189,14 +168,14 @@ describe("netting views", () => {
 
     await render(<NettingDetails value={value} />);
 
-    expect(host!.textContent).toContain("Alice 应付 Bob");
-    expect(host!.textContent).toContain("Bob 应付 Alice");
-    expect(host!.textContent).toContain("相互抵扣");
-    expect(host!.textContent).toContain("Alice → Bob");
-    expect(host!.textContent).toContain("订单 #11 · 合并单 #90");
-    expect(host!.textContent).toContain("订单 #12");
-    expect(host!.textContent).toContain("结清时间");
-    expect(host!.querySelectorAll(".netting-direction")).toHaveLength(2);
+    expect(dom.host!.textContent).toContain("Alice 应付 Bob");
+    expect(dom.host!.textContent).toContain("Bob 应付 Alice");
+    expect(dom.host!.textContent).toContain("相互抵扣");
+    expect(dom.host!.textContent).toContain("Alice → Bob");
+    expect(dom.host!.textContent).toContain("订单 #11 · 合并单 #90");
+    expect(dom.host!.textContent).toContain("订单 #12");
+    expect(dom.host!.textContent).toContain("结清时间");
+    expect(dom.host!.querySelectorAll(".netting-direction")).toHaveLength(2);
   });
 
   it("labels a zero-balance detail as requiring no payment and handles empty order directions", async () => {
@@ -207,7 +186,27 @@ describe("netting views", () => {
 
     await render(<NettingDetails value={value} />);
 
-    expect(host!.textContent).toContain("无需付款");
-    expect(host!.textContent).toContain("无待抵扣订单");
+    expect(dom.host!.textContent).toContain("无需付款");
+    expect(dom.host!.textContent).toContain("无待抵扣订单");
+  });
+
+  it("renders a vector chevron inside raw-orders summary in admin view", async () => {
+    await render(
+      <NettingList
+        me={actor(1, "admin")}
+        balances={[]}
+        payments={[]}
+        orders={[order()]}
+        adminView={true}
+        filter="all"
+        query=""
+        busy={false}
+        onPay={vi.fn()}
+        onDetail={vi.fn()}
+        onOrder={vi.fn()}
+        onLegacyPaid={vi.fn()}
+      />,
+    );
+    expect(dom.host!.querySelector(".raw-orders > summary > svg")).not.toBeNull();
   });
 });

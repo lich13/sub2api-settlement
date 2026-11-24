@@ -1,56 +1,10 @@
-#[allow(dead_code)]
 mod support;
 
 use serde_json::{Value, json};
 use settlement::{error::Result, input as input_contract, service::Prepared, store};
-use support::legacy::{END, Harness, START, admin};
-
-async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> Result<Value> {
-    harness
-        .app
-        .service
-        .mutate(&admin(), key, action, payload, Prepared::default(), None)
-        .await
-}
-
-async fn vendor_period_row(harness: &Harness, id: i64) -> Value {
-    let mut db = harness.app.service.store.read().await.unwrap();
-    let row = store::one(
-        &mut db,
-        "SELECT * FROM vendor_periods WHERE id=?",
-        &[json!(id)],
-        "vendor period missing",
-    )
-    .await
-    .unwrap();
-    db.commit().await.unwrap();
-    row
-}
-
-async fn cycle_for_account(harness: &Harness, account_id: i64) -> i64 {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .rev()
-        .find(|cycle| cycle["account_id"] == account_id && cycle["vendor_period_id"].is_i64())
-        .unwrap_or_else(|| panic!("vendor cycle for account {account_id} not found"))["id"]
-        .as_i64()
-        .unwrap()
-}
-
-fn assert_error<T>(result: Result<T>, status: u16, clue: &str) {
-    let error = match result {
-        Ok(_) => panic!("operation should fail"),
-        Err(error) => error,
-    };
-    assert_eq!(error.status, status, "unexpected error: {error}");
-    assert!(
-        error.message.contains(clue),
-        "expected business clue {clue:?}, got {:?}",
-        error.message
-    );
-}
+use support::legacy::{
+    END, Harness, START, admin, assert_error, cycle_for_account, mutate, vendor_period_row,
+};
 
 async fn create_group(harness: &Harness, account_ids: &[i64], key: &str) -> Value {
     mutate(

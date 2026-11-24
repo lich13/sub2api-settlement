@@ -1,72 +1,32 @@
 // @vitest-environment jsdom
 
 import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./main";
+import {
+  click as clickElement,
+  flush,
+  jsonResponse as response,
+  renderWithDialog,
+  setInputValue,
+} from "./test-utils";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
+const dom = renderWithDialog();
 
 async function render(node: ReactNode) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(node);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  await dom.render(node);
+  await flush();
 }
 
 async function click(label: string) {
-  const button = Array.from(host!.querySelectorAll("button"))
+  const button = Array.from(dom.host!.querySelectorAll("button"))
     .find(element => element.textContent?.trim() === label);
   if (!button) throw new Error(`button not found: ${label}`);
-  await act(async () => {
-    button.click();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-function setInputValue(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  act(() => {
-    const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
-    if (!setter) throw new Error("input value setter is unavailable");
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
+  await clickElement(button);
 }
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
   vi.stubGlobal("crypto", { randomUUID: () => "fixture-idempotency-key" });
-});
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.unstubAllGlobals();
 });
 
 describe("netting payment confirmation", () => {
@@ -110,8 +70,8 @@ describe("netting payment confirmation", () => {
     });
     await click("确认转账");
 
-    const note = host!.querySelector<HTMLTextAreaElement>("textarea");
-    const reference = host!.querySelector<HTMLInputElement>("input[maxlength='128']");
+    const note = dom.host!.querySelector<HTMLTextAreaElement>("textarea");
+    const reference = dom.host!.querySelector<HTMLInputElement>("input[maxlength='128']");
     expect(note?.maxLength).toBe(500);
     expect(reference?.maxLength).toBe(128);
     setInputValue(note!, "十月账单已转账");

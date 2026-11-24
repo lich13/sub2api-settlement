@@ -1,70 +1,36 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { VendorBillPanel, VendorGroups, VendorManager, expandVendorSelection } from "./Vendors";
+import {
+  click,
+  jsonResponse as response,
+  renderWithDialog,
+  setInputValue,
+  setSelectValue,
+} from "./test-utils";
 import type { Account, Catalog, Cycle, Vendor, VendorBillPreview, VendorPeriod } from "./types";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
-
-async function render(node: ReactNode) {
-  if (!root) {
-    host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-  }
-  await act(async () => {
-    root!.render(node);
-  });
-}
-
-async function click(button: HTMLButtonElement) {
-  await act(async () => {
-    button.click();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
+const dom = renderWithDialog();
+const render = dom.render;
 
 function button(text: string) {
-  const found = Array.from(host!.querySelectorAll<HTMLButtonElement>("button"))
+  const found = Array.from(dom.host!.querySelectorAll<HTMLButtonElement>("button"))
     .find(element => element.textContent?.trim() === text);
   if (!found) throw new Error(`button not found: ${text}`);
   return found;
 }
 
 function inputForLabel(labelText: string) {
-  const label = Array.from(host!.querySelectorAll("label"))
+  const label = Array.from(dom.host!.querySelectorAll("label"))
     .find(element => element.textContent?.includes(labelText));
   const input = label?.querySelector<HTMLInputElement>("input");
   if (!input) throw new Error(`input not found for label: ${labelText}`);
   return input;
 }
 
-function setInputValue(input: HTMLInputElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (!setter) throw new Error("input value setter is unavailable");
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-function setSelectValue(select: HTMLSelectElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-    if (!setter) throw new Error("select value setter is unavailable");
-    setter.call(select, value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-}
-
 function selectForLabel(labelText: string) {
-  const label = Array.from(host!.querySelectorAll("label"))
+  const label = Array.from(dom.host!.querySelectorAll("label"))
     .find(element => element.textContent?.includes(labelText));
   const select = label?.querySelector<HTMLSelectElement>("select");
   if (!select) throw new Error(`select not found for label: ${labelText}`);
@@ -72,18 +38,10 @@ function selectForLabel(labelText: string) {
 }
 
 function candidateCheckbox(name: string) {
-  const checkbox = Array.from(host!.querySelectorAll<HTMLInputElement>("fieldset input[type=checkbox]"))
+  const checkbox = Array.from(dom.host!.querySelectorAll<HTMLInputElement>("fieldset input[type=checkbox]"))
     .find(input => input.closest("label")?.textContent?.includes(name));
   if (!checkbox) throw new Error(`candidate checkbox not found: ${name}`);
   return checkbox;
-}
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
 }
 
 function cycle(overrides: Partial<Cycle> = {}): Cycle {
@@ -206,22 +164,6 @@ function setFile(input: HTMLInputElement, name: string, text: string) {
   Object.defineProperty(input, "files", { configurable: true, value: [file] });
 }
 
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
-});
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.unstubAllGlobals();
-});
-
 describe("vendor group selection and presentation", () => {
   it("expands a selected member to every cycle in its period, including deleted financial members", () => {
     const deleted = cycle({ id: 12, account_id: 102, name: "Deleted account", account_deleted: true });
@@ -247,11 +189,11 @@ describe("vendor group selection and presentation", () => {
       onDetail={vi.fn()}
     />);
 
-    expect(host!.textContent).toContain("1 个账号");
-    expect(host!.textContent).toContain("待账单拆分");
-    expect(host!.textContent).not.toContain("Deleted account");
-    expect(host!.textContent).not.toContain("¥0.00");
-    expect(host!.textContent!.match(/¥123\.45/g)).toHaveLength(1);
+    expect(dom.host!.textContent).toContain("1 个账号");
+    expect(dom.host!.textContent).toContain("待账单拆分");
+    expect(dom.host!.textContent).not.toContain("Deleted account");
+    expect(dom.host!.textContent).not.toContain("¥0.00");
+    expect(dom.host!.textContent!.match(/¥123\.45/g)).toHaveLength(1);
 
     await click(button("结算并续费"));
     expect(onSettle).toHaveBeenCalledWith([11, 12], true);
@@ -324,11 +266,11 @@ describe("vendor group manager v0.11.1 flows", () => {
       refresh={vi.fn(async () => {})}
       initialAction="create"
     />);
-    expect(host!.textContent).toContain("Eligible");
-    expect(host!.textContent).toContain("Cancelled no-profile draft");
-    expect(host!.textContent).not.toContain("Deleted");
-    expect(host!.textContent).not.toContain("Already assigned");
-    expect(host!.textContent).not.toContain("Configured");
+    expect(dom.host!.textContent).toContain("Eligible");
+    expect(dom.host!.textContent).toContain("Cancelled no-profile draft");
+    expect(dom.host!.textContent).not.toContain("Deleted");
+    expect(dom.host!.textContent).not.toContain("Already assigned");
+    expect(dom.host!.textContent).not.toContain("Configured");
   });
 
   it("adds members to an open period with its active period version", async () => {
@@ -371,7 +313,7 @@ describe("vendor group manager v0.11.1 flows", () => {
       initialVendorId={5}
       initialAction="add"
     />);
-    expect(host!.textContent).toContain("新增成员从下一期生效，已结算账期保持不变。");
+    expect(dom.host!.textContent).toContain("新增成员从下一期生效，已结算账期保持不变。");
     await act(async () => { candidateCheckbox("Next period member").click(); });
     await click(button("保存"));
 
@@ -398,7 +340,7 @@ describe("vendor group manager v0.11.1 flows", () => {
       initialVendorId={5}
       initialAction="renew"
     />);
-    expect(host!.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(dom.host!.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
     setInputValue(inputForLabel("下期准确总成本（元）"), "15.00");
     await click(button("确认整组续费"));
 
@@ -435,12 +377,12 @@ describe("vendor group manager v0.11.1 flows", () => {
       onDetail={vi.fn()}
     />);
 
-    expect(host!.textContent).toContain("Shared provider");
-    expect(host!.textContent).toContain("Visible account");
-    expect(host!.textContent).toContain("已结算／待续费");
-    expect(host!.textContent!.match(/¥123\.45/g)).toHaveLength(1);
-    expect(host!.textContent).not.toContain("修改组成本");
-    expect(host!.textContent).not.toContain("整组结算");
+    expect(dom.host!.textContent).toContain("Shared provider");
+    expect(dom.host!.textContent).toContain("Visible account");
+    expect(dom.host!.textContent).toContain("已结算／待续费");
+    expect(dom.host!.textContent!.match(/¥123\.45/g)).toHaveLength(1);
+    expect(dom.host!.textContent).not.toContain("修改组成本");
+    expect(dom.host!.textContent).not.toContain("整组结算");
 
     await click(button("整组续费"));
     expect(onManage).toHaveBeenCalledWith(5, "renew");
@@ -463,7 +405,7 @@ describe("vendor manager", () => {
     />);
     await click(button("整组配置"));
 
-    expect(host!.textContent).toContain("Deleted account · 已删除，保留本期账务");
+    expect(dom.host!.textContent).toContain("Deleted account · 已删除，保留本期账务");
     await click(button("保存"));
 
     const saveCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/vendor-periods/21"));
@@ -493,8 +435,8 @@ describe("vendor manager", () => {
       onManage={vi.fn()}
       onDetail={vi.fn()}
     />);
-    expect(host!.textContent).not.toContain("待配置首期");
-    expect(host!.textContent).not.toContain("配置首期");
+    expect(dom.host!.textContent).not.toContain("待配置首期");
+    expect(dom.host!.textContent).not.toContain("配置首期");
 
     await render(<VendorManager
       vendors={[vendor(settled), emptyVendor]}
@@ -503,7 +445,7 @@ describe("vendor manager", () => {
       close={vi.fn()}
       refresh={vi.fn(async () => {})}
     />);
-    expect(host!.textContent).not.toContain("配置首期");
+    expect(dom.host!.textContent).not.toContain("配置首期");
     await click(button("整组续费"));
     await click(button("确认整组续费"));
 
@@ -547,8 +489,8 @@ describe("vendor manager", () => {
       initialVendorId={5}
       initialAction="renew"
     />);
-    expect(host!.textContent).toContain("暂无可管理的账号组");
-    expect(host!.querySelector("form")).toBeNull();
+    expect(dom.host!.textContent).toContain("暂无可管理的账号组");
+    expect(dom.host!.querySelector("form")).toBeNull();
 
     const emptyVendor: Vendor = { ...vendor(legacyOpen), id: 6, name: "Empty periods", periods: [] };
     await render(<VendorManager
@@ -563,7 +505,7 @@ describe("vendor manager", () => {
     />);
     await click(button("确认整组续费"));
     expect(fetcher).not.toHaveBeenCalled();
-    expect(host!.textContent).toContain("账号组状态已变化，请刷新重试");
+    expect(dom.host!.textContent).toContain("账号组状态已变化，请刷新重试");
 
     const settled = period({ status: "settled", end: "2026-10-01T00:00:00Z", members: [cycle({ status: "settled", end: "2026-10-01T00:00:00Z" })] });
     const close = vi.fn();
@@ -612,7 +554,7 @@ describe("vendor bill panel", () => {
       onConfirmed={onConfirmed}
     />);
 
-    const fileInput = host!.querySelector<HTMLInputElement>("input[type=file]");
+    const fileInput = dom.host!.querySelector<HTMLInputElement>("input[type=file]");
     if (!fileInput) throw new Error("bill file input not found");
     setFile(fileInput, "usage.csv", "timestamp,cost\n2026-09-20T00:00:00Z,99\n");
     await act(async () => {
@@ -622,10 +564,10 @@ describe("vendor bill panel", () => {
     });
     await click(button("账单预览"));
 
-    expect(host!.textContent).toContain("差额");
-    expect(host!.textContent).toContain("范围外（已自动排除）");
-    expect(host!.textContent).not.toContain("确认组成本与账单");
-    expect(host!.textContent).not.toContain("确认排除范围外记录");
+    expect(dom.host!.textContent).toContain("差额");
+    expect(dom.host!.textContent).toContain("范围外（已自动排除）");
+    expect(dom.host!.textContent).not.toContain("确认组成本与账单");
+    expect(dom.host!.textContent).not.toContain("确认排除范围外记录");
     const confirmButton = button("确认分摊依据");
     expect(confirmButton.disabled).toBe(false);
 
@@ -672,7 +614,7 @@ describe("vendor bill panel", () => {
       end="2026-10-01T00:00:00Z"
       onConfirmed={vi.fn(async () => {})}
     />);
-    const fileInput = host!.querySelector<HTMLInputElement>("input[type=file]");
+    const fileInput = dom.host!.querySelector<HTMLInputElement>("input[type=file]");
     if (!fileInput) throw new Error("bill file input not found");
     setFile(fileInput, "no-match.csv", "timestamp,cost\n2026-09-20T00:00:00Z,10\n");
     await act(async () => {
@@ -682,10 +624,10 @@ describe("vendor bill panel", () => {
     });
     await click(button("账单预览"));
 
-    expect(host!.textContent).toContain("无正金额匹配，按各账号本地原始消费分摊。");
-    expect(host!.textContent).toContain("没有正金额匹配或本地消费依据，无法分摊");
-    expect(host!.textContent).toContain("Visible account—");
-    expect(host!.textContent).not.toContain("Visible account¥0.00");
+    expect(dom.host!.textContent).toContain("无正金额匹配，按各账号本地原始消费分摊。");
+    expect(dom.host!.textContent).toContain("没有正金额匹配或本地消费依据，无法分摊");
+    expect(dom.host!.textContent).toContain("Visible account—");
+    expect(dom.host!.textContent).not.toContain("Visible account¥0.00");
     expect(button("确认分摊依据").disabled).toBe(true);
   });
 
@@ -719,7 +661,7 @@ describe("vendor bill panel", () => {
       end={end}
       onConfirmed={vi.fn(async () => {})}
     />);
-    const fileInput = host!.querySelector<HTMLInputElement>("input[type=file]");
+    const fileInput = dom.host!.querySelector<HTMLInputElement>("input[type=file]");
     if (!fileInput) throw new Error("bill file input not found");
     setFile(fileInput, "draft.csv", "timestamp,cost\n2026-09-20T00:00:00Z,10\n");
     await act(async () => {
@@ -728,7 +670,7 @@ describe("vendor bill panel", () => {
       await Promise.resolve();
     });
     await click(button("账单预览"));
-    expect(host!.textContent).toContain("preview-v4");
+    expect(dom.host!.textContent).toContain("preview-v4");
 
     await render(<VendorBillPanel
       period={updatedPeriod}
@@ -736,8 +678,8 @@ describe("vendor bill panel", () => {
       end="2026-10-02T00:00:00Z"
       onConfirmed={vi.fn(async () => {})}
     />);
-    expect(host!.textContent).not.toContain("preview-v4");
-    const updatedFileInput = host!.querySelector<HTMLInputElement>("input[type=file]");
+    expect(dom.host!.textContent).not.toContain("preview-v4");
+    const updatedFileInput = dom.host!.querySelector<HTMLInputElement>("input[type=file]");
     expect(updatedFileInput?.files?.[0]?.name).toBe("draft.csv");
 
     await click(button("账单预览"));

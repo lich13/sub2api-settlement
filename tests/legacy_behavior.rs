@@ -75,7 +75,8 @@ use settlement::{
     time,
 };
 use support::legacy::{
-    END, Harness, NEXT_END, START, admin, creditor, fixture_data, other, payer, stranger,
+    END, Harness, NEXT_END, START, admin, assert_error, creditor, cycle_row, fixture_data, other,
+    payer, stranger,
 };
 use tokio::sync::Barrier;
 
@@ -130,15 +131,6 @@ async fn inject_legacy_estimated_cycle(
     .last_insert_rowid();
     db.commit().await.unwrap();
     id
-}
-
-async fn cycle_row(harness: &Harness, id: i64) -> Value {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .find(|row| row["id"] == id)
-        .unwrap_or_else(|| panic!("cycle {id} not found"))
 }
 
 fn cost_string(fen: i64) -> String {
@@ -241,16 +233,6 @@ async fn settle_preview(
     renewals: Value,
 ) -> Result<Value> {
     settle_on(&harness.app, &admin(), preview_id, key, renewals).await
-}
-
-fn assert_error<T: std::fmt::Debug>(result: Result<T>, status: u16, message: &str) {
-    let error = result.expect_err("operation should fail with the legacy boundary");
-    assert_eq!(error.status, status, "unexpected service error: {error}");
-    assert!(
-        error.message.contains(message),
-        "expected error containing {message:?}, got {:?}",
-        error.message
-    );
 }
 
 async fn inject_legacy_batch(

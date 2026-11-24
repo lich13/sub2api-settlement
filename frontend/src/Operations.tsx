@@ -1,3 +1,5 @@
+import { ChevronDown } from "lucide-react";
+import { Empty, FormError } from "./Forms";
 import { Select } from "./Select";
 import { useEffect, useRef, useState } from "react";
 import { api, date, downloadCsv, fromInput, money } from "./api";
@@ -38,7 +40,7 @@ export function OperationStatus() {
     <div><span>账号核对</span><b>{status?.accounts.error ? "核对异常" : status?.accounts.checked_at ? date(status.accounts.checked_at) : "尚未核对"}</b></div>
     <div><span>待处理删除</span><b>{status?.pending_deletions ?? "—"}</b></div>
     {status?.checkpoint && <div><span>全量对账</span><b>{date(status.checkpoint.last_reconciled)}</b></div>}
-    {(error || status?.sync_error || status?.accounts.error) && <p className="form-error" role="alert">{error || status?.sync_error || status?.accounts.error}</p>}
+    <FormError error={error || status?.sync_error || status?.accounts.error || ""} />
   </section>;
 }
 
@@ -63,9 +65,9 @@ export function AuditLog() {
       <label>结束时间<input type="datetime-local" value={to} onChange={e=>setTo(e.target.value)}/></label>
       <button className="button" disabled={busy||invalid} onClick={download}>导出 CSV</button>
     </div>
-    {error&&<p className="form-error" role="alert">{error}</p>}
-    <div className="audit-list">{page.items.map(a=><div key={a.id}><div><strong>{actions[a.action]||a.action}</strong><span>{a.actor_name} · #{a.entity_id}</span>{a.action==="edit_cycle"&&typeof a.payload.before?.cost_fen==="number"&&typeof a.payload.after?.cost_fen==="number"&&<b>{money(a.payload.before.cost_fen)} → {money(a.payload.after.cost_fen)}</b>}<details><summary>记录内容</summary><pre>{JSON.stringify(a.payload,null,2)}</pre></details></div><time>{date(a.created_at)}</time></div>)}</div>
-    {!page.items.length&&!busy&&!error&&<div className="empty">暂无操作记录</div>}
+    <FormError error={error} />
+    <div className="audit-list">{page.items.map(a=><div key={a.id}><div><strong>{actions[a.action]||a.action}</strong><span>{a.actor_name} · #{a.entity_id}</span>{a.action==="edit_cycle"&&typeof a.payload.before?.cost_fen==="number"&&typeof a.payload.after?.cost_fen==="number"&&<b>{money(a.payload.before.cost_fen)} → {money(a.payload.after.cost_fen)}</b>}<details><summary>记录内容<ChevronDown size={16} /></summary><pre>{JSON.stringify(a.payload,null,2)}</pre></details></div><time>{date(a.created_at)}</time></div>)}</div>
+    {!page.items.length&&!busy&&!error&&<Empty text="暂无操作记录" />}
     {page.next_before&&<button className="button" disabled={busy} onClick={()=>load(page.next_before!)}>加载更多</button>}
     {busy&&<p className="muted" role="status">正在读取…</p>}
   </section>;

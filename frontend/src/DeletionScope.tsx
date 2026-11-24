@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { FormError } from "./Forms";
 
 export type DeletionScopeValue = {
   account_id: number;
@@ -67,9 +68,7 @@ export function DeletionScope({
         </>
       ) : error ? (
         <>
-          <p className="form-error" role="alert">
-            {error}
-          </p>
+          <FormError error={error} />
           <button
             type="button"
             className="text-button"

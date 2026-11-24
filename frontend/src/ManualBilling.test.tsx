@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { SettleForm } from "./SettleForm";
 import { VendorBillPanel } from "./Vendors";
+import {
+  advance,
+  click,
+  deferred,
+  jsonResponse as response,
+  renderWithDialog,
+  setInputValue,
+  setSelectValue,
+} from "./test-utils";
 import type {
   BillPreview,
   Calculation,
@@ -15,51 +23,23 @@ import type {
   VendorPeriod,
 } from "./types";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
-
-async function render(node: ReactNode) {
-  if (!root) {
-    host = document.createElement("div");
-    document.body.append(host);
-    root = createRoot(host);
-  }
-  await act(async () => {
-    root!.render(node);
-  });
-}
-
-async function advance(ms: number) {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-}
-
-async function click(value: HTMLButtonElement) {
-  await act(async () => {
-    value.click();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
+const dom = renderWithDialog();
+const render = dom.render;
 
 function button(text: string) {
-  const value = Array.from(host!.querySelectorAll<HTMLButtonElement>("button"))
+  const value = Array.from(dom.host!.querySelectorAll<HTMLButtonElement>("button"))
     .find(element => element.textContent?.trim() === text);
   if (!value) throw new Error(`button not found: ${text}`);
   return value;
 }
 
 function optionalButton(text: string) {
-  return Array.from(host!.querySelectorAll<HTMLButtonElement>("button"))
+  return Array.from(dom.host!.querySelectorAll<HTMLButtonElement>("button"))
     .find(element => element.textContent?.trim() === text);
 }
 
 function selectForLabel(text: string) {
-  const label = Array.from(host!.querySelectorAll("label"))
+  const label = Array.from(dom.host!.querySelectorAll("label"))
     .find(element => element.textContent?.includes(text));
   const select = label?.querySelector<HTMLSelectElement>("select");
   if (!select) throw new Error(`select not found for label: ${text}`);
@@ -67,57 +47,21 @@ function selectForLabel(text: string) {
 }
 
 function rateInput(name: string) {
-  const input = host!.querySelector<HTMLInputElement>(`input[aria-label="${name} 补计倍率"]`);
+  const input = dom.host!.querySelector<HTMLInputElement>(`input[aria-label="${name} 补计倍率"]`);
   if (!input) throw new Error(`rate input not found: ${name}`);
   return input;
 }
 
 function checkbox(text: string) {
-  const value = Array.from(host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
+  const value = Array.from(dom.host!.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))
     .find(input => input.closest("label")?.textContent?.includes(text));
   if (!value) throw new Error(`checkbox not found: ${text}`);
   return value;
 }
 
-function setInputValue(input: HTMLInputElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (!setter) throw new Error("input value setter is unavailable");
-    setter.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-function setSelectValue(select: HTMLSelectElement, value: string) {
-  act(() => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set;
-    if (!setter) throw new Error("select value setter is unavailable");
-    setter.call(select, value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-}
-
 function setFile(input: HTMLInputElement, name: string, text: string) {
   const file = { name, size: text.length, text: async () => text } as File;
   Object.defineProperty(input, "files", { configurable: true, value: [file] });
-}
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-  } as Response;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 function cycle(overrides: Partial<Cycle> = {}): Cycle {
@@ -234,24 +178,6 @@ function vendorPreview(overrides: Partial<VendorBillPreview> = {}): VendorBillPr
   };
 }
 
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
-});
-
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
-
 describe("billing for an individual cycle", () => {
   it("settles the configured cost from local consumption without a CSV or multiplier", async () => {
     vi.useFakeTimers();
@@ -265,8 +191,8 @@ describe("billing for an individual cycle", () => {
     await render(<SettleForm ids={[7]} cycles={[value]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
     await advance(0);
 
-    expect(host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
-    expect(host!.textContent).not.toContain("缺失请求补计");
+    expect(dom.host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
+    expect(dom.host!.textContent).not.toContain("缺失请求补计");
     expect(button("确认结算").disabled).toBe(false);
     await click(button("确认结算"));
 
@@ -289,8 +215,8 @@ describe("billing for an individual cycle", () => {
 
     await render(<SettleForm ids={[7]} cycles={[cycle()]} catalog={catalog()} done={vi.fn()} close={vi.fn()} />);
     await advance(0);
-    expect(host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
-    const fileInput = host!.querySelector<HTMLInputElement>(".bill-import input[type=file]");
+    expect(dom.host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
+    const fileInput = dom.host!.querySelector<HTMLInputElement>(".bill-import input[type=file]");
     if (!fileInput) throw new Error("bill CSV input not found");
     setFile(fileInput, "usage.csv", csv);
     await act(async () => {
@@ -327,7 +253,7 @@ describe("billing for an individual cycle", () => {
     await advance(0);
     expect(button("确认结算").disabled).toBe(true);
 
-    const fileInput = host!.querySelector<HTMLInputElement>(".bill-import input[type=file]")!;
+    const fileInput = dom.host!.querySelector<HTMLInputElement>(".bill-import input[type=file]")!;
     setFile(fileInput, "unused.csv", "timestamp,cost\n2026-09-20T00:00:00Z,100\n");
     await act(async () => {
       fileInput.dispatchEvent(new Event("change", { bubbles: true }));
@@ -344,7 +270,7 @@ describe("billing for an individual cycle", () => {
     });
     expect(button("确认结算").disabled).toBe(false);
     expect(button("账单预览").disabled).toBe(true);
-    expect(host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
+    expect(dom.host!.querySelector('input[aria-label$="补计倍率"]')).toBeNull();
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/bill-previews"))).toBe(false);
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
   });
@@ -363,7 +289,7 @@ describe("billing for an individual cycle", () => {
     await advance(0);
     await click(button("按本地消费比例分摊"));
 
-    expect(host!.textContent).toContain("周期已更新，请刷新");
+    expect(dom.host!.textContent).toContain("周期已更新，请刷新");
     expect(button("确认结算").disabled).toBe(true);
     expect(fetcher.mock.calls.some(([input]) => String(input).endsWith("/settlements"))).toBe(false);
   });
@@ -453,11 +379,11 @@ describe("manual billing for a vendor group", () => {
     setSelectValue(selectForLabel("账单来源"), "local_only");
     await click(button("账单预览"));
     await click(button("全选"));
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(true);
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(true);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
     expect(optionalButton("确认分摊依据")).toBeUndefined();
     await click(button("清空"));
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(false);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(false);
     expect(fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-confirm"))).toHaveLength(0);
   });
 
@@ -472,9 +398,9 @@ describe("manual billing for a vendor group", () => {
     };
 
     await render(<VendorBillPanel {...props} />);
-    expect(host!.textContent).not.toContain("缺失请求补计");
+    expect(dom.host!.textContent).not.toContain("缺失请求补计");
     setInputValue(rateInput("Alpha"), "1.75");
-    const fileInput = host!.querySelector<HTMLInputElement>(".vendor-bill input[type=file]");
+    const fileInput = dom.host!.querySelector<HTMLInputElement>(".vendor-bill input[type=file]");
     if (!fileInput) throw new Error("vendor CSV input not found");
     setFile(fileInput, "draft.csv", "timestamp,cost\n2026-09-20T00:00:00Z,100\n");
     await act(async () => {
@@ -486,7 +412,7 @@ describe("manual billing for a vendor group", () => {
 
     await render(<VendorBillPanel {...props} cycles={[...props.cycles]} period={{ ...props.period }} />);
     expect(rateInput("Alpha").value).toBe("1.75");
-    expect(host!.querySelector<HTMLInputElement>(".vendor-bill input[type=file]")?.files?.[0]?.name).toBe("draft.csv");
+    expect(dom.host!.querySelector<HTMLInputElement>(".vendor-bill input[type=file]")?.files?.[0]?.name).toBe("draft.csv");
     await click(button("账单预览"));
     const billCall = fetcher.mock.calls.find(([input]) => String(input).endsWith("/bill-previews"));
     expect(JSON.parse(String(billCall?.[1]?.body)).manual_basis).toEqual({
@@ -555,11 +481,11 @@ describe("manual billing for a vendor group", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host!.textContent).not.toContain("stale fixture failure");
+    expect(dom.host!.textContent).not.toContain("stale fixture failure");
 
     await click(button("账单预览"));
-    expect(host!.textContent).toContain("¥2.00");
-    expect(host!.textContent).not.toContain("stale fixture failure");
+    expect(dom.host!.textContent).toContain("¥2.00");
+    expect(dom.host!.textContent).not.toContain("stale fixture failure");
   });
 
   it("drops checked ambiguous requests for an account when its supplement rate is cleared", async () => {
@@ -586,13 +512,14 @@ describe("manual billing for a vendor group", () => {
     setInputValue(rateInput("Alpha"), "0.5");
     setInputValue(rateInput("Beta"), "0.2");
     await click(button("账单预览"));
+    expect(dom.host!.querySelector(".manual-ambiguous > summary > svg")).not.toBeNull();
     await click(button("全选"));
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(true);
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(true);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
 
     setInputValue(rateInput("Alpha"), "");
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(false);
-    expect(host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9001"]')?.checked).toBe(false);
+    expect(dom.host!.querySelector<HTMLInputElement>('input[aria-label="补计请求 9002"]')?.checked).toBe(true);
 
     await click(button("账单预览"));
     const calls = fetcher.mock.calls.filter(([input]) => String(input).endsWith("/bill-previews"));

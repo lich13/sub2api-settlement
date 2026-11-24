@@ -23,11 +23,28 @@ test("admin can reach settlement controls at desktop and narrow widths in both t
     { width: 1440, height: 900, theme: "dark" as const },
     { width: 390, height: 844, theme: "light" as const },
     { width: 390, height: 844, theme: "dark" as const },
+    { width: 375, height: 667, theme: "light" as const },
+    { width: 375, height: 667, theme: "dark" as const },
   ];
 
   for (const variant of variants) {
     await page.setViewportSize({ width: variant.width, height: variant.height });
     await loginAsAdmin(page, demo, variant.theme);
+
+    const versionBadge = page.locator(".topbar .app-version");
+    await expect(versionBadge).toBeVisible();
+    await expect(versionBadge).toHaveText(/^v\d+\.\d+\.\d+$/);
+    const headingBox = await page.getByRole("heading", { name: "结算中心" }).boundingBox();
+    const versionBox = await versionBadge.boundingBox();
+    const brandBox = await page.locator(".topbar .brand").boundingBox();
+    const rightBox = await page.locator(".topbar .header-right").boundingBox();
+    expect(headingBox).not.toBeNull();
+    expect(versionBox).not.toBeNull();
+    expect(brandBox).not.toBeNull();
+    expect(rightBox).not.toBeNull();
+    expect(versionBox!.height).toBeLessThanOrEqual(20);
+    expect(Math.abs((versionBox!.y + versionBox!.height / 2) - (headingBox!.y + headingBox!.height / 2))).toBeLessThanOrEqual(6);
+    expect(brandBox!.x + brandBox!.width).toBeLessThanOrEqual(rightBox!.x);
 
     const navigation = page.getByRole("navigation", { name: "结算导航" });
     await expect(navigation.getByRole("button", { name: "账号成本" })).toBeVisible();
@@ -59,6 +76,10 @@ test("admin settles an account cycle and voids the resulting settlement", async 
   await expect(dialog).toHaveCount(0);
 
   await page.getByRole("navigation", { name: "结算导航" }).getByRole("button", { name: "管理" }).click();
+  await page.getByRole("button", { name: "全部订单", exact: true }).click();
+  await expect(page.locator(".raw-orders > summary > svg")).toBeVisible();
+  await page.getByRole("button", { name: "操作记录", exact: true }).click();
+  await expect(page.locator(".audit-list details > summary > svg").first()).toBeVisible();
   await page.getByRole("button", { name: "周期", exact: true }).click();
   let cycleRow = page.locator(".history-table tbody tr").filter({ hasText: "OpenAI Plus" });
   await expect(cycleRow).toContainText("已结算");

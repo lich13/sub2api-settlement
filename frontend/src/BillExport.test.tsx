@@ -1,43 +1,24 @@
 // @vitest-environment jsdom
 
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettleForm } from "./SettleForm";
 import type { BillPreview, Catalog, Calculation, Cycle, Preview } from "./types";
 import { setCsrf } from "./api";
+import {
+  advance,
+  click,
+  jsonResponse,
+  renderWithDialog,
+} from "./test-utils";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
+const dom = renderWithDialog();
+const render = dom.render;
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
-const nativeShowModal = HTMLDialogElement.prototype.showModal;
-const nativeClose = HTMLDialogElement.prototype.close;
-
-async function render(node: ReactNode) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => root!.render(node));
-}
-
-async function advance(ms: number) {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-}
-
-async function click(button: HTMLButtonElement) {
-  await act(async () => {
-    button.click();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
 
 async function selectBillFile() {
-  const input = host!.querySelector<HTMLInputElement>('input[type="file"]');
+  const input = dom.host!.querySelector<HTMLInputElement>('input[type="file"]');
   if (!input) throw new Error("bill CSV input was not rendered");
   const file = new File(["synthetic bill"], "synthetic.csv", { type: "text/csv" });
   Object.defineProperty(file, "text", { value: async () => "synthetic bill" });
@@ -49,14 +30,7 @@ async function selectBillFile() {
   });
 }
 
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-    blob: async () => new Blob(["fixture csv"], { type: "text/csv" }),
-  } as Response;
-}
+const response = (data: unknown, status = 200) => jsonResponse(data, status, "fixture csv");
 
 const catalog: Catalog = {
   accounts: [],
@@ -118,9 +92,6 @@ const billPreview: BillPreview = {
 };
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  HTMLDialogElement.prototype.close = function () { this.open = false; };
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-01T00:00:00.000Z"));
   setCsrf("fixture-csrf", 1);
@@ -135,11 +106,7 @@ beforeEach(() => {
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 });
 
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
+afterEach(() => {
   if (originalCreateObjectURL) {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: originalCreateObjectURL });
   } else {
@@ -150,11 +117,6 @@ afterEach(async () => {
   } else {
     delete (URL as unknown as { revokeObjectURL?: typeof URL.revokeObjectURL }).revokeObjectURL;
   }
-  HTMLDialogElement.prototype.showModal = nativeShowModal;
-  HTMLDialogElement.prototype.close = nativeClose;
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
   setCsrf("");
 });
 
@@ -173,12 +135,12 @@ describe("unmatched bill export", () => {
     await advance(0);
     await selectBillFile();
 
-    const previewButton = Array.from(host!.querySelectorAll("button"))
+    const previewButton = Array.from(dom.host!.querySelectorAll("button"))
       .find(button => button.textContent?.trim() === "账单预览");
     expect(previewButton).toBeDefined();
     await click(previewButton!);
 
-    const exportButton = Array.from(host!.querySelectorAll("button"))
+    const exportButton = Array.from(dom.host!.querySelectorAll("button"))
       .find(button => button.textContent?.trim() === "导出未匹配明细");
     expect(exportButton).toBeDefined();
     await click(exportButton!);
@@ -188,7 +150,7 @@ describe("unmatched bill export", () => {
     )).toBe(true);
     expect(URL.createObjectURL).toHaveBeenCalledOnce();
     expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledOnce();
-    expect(host!.textContent).not.toContain("导出失败");
+    expect(dom.host!.textContent).not.toContain("导出失败");
   });
 
   it("shows the export error when the download endpoint rejects the request", async () => {
@@ -204,15 +166,15 @@ describe("unmatched bill export", () => {
     await render(<SettleForm ids={[7]} cycles={[cycle()]} catalog={catalog} done={vi.fn()} close={vi.fn()} />);
     await advance(0);
     await selectBillFile();
-    const previewButton = Array.from(host!.querySelectorAll("button"))
+    const previewButton = Array.from(dom.host!.querySelectorAll("button"))
       .find(button => button.textContent?.trim() === "账单预览");
     await click(previewButton!);
-    const exportButton = Array.from(host!.querySelectorAll("button"))
+    const exportButton = Array.from(dom.host!.querySelectorAll("button"))
       .find(button => button.textContent?.trim() === "导出未匹配明细");
     expect(exportButton).toBeDefined();
     await click(exportButton!);
 
-    expect(host!.textContent).toContain("预览已过期");
+    expect(dom.host!.textContent).toContain("预览已过期");
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 });

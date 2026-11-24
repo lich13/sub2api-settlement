@@ -1,9 +1,8 @@
-#[allow(dead_code)]
 mod support;
 
 use serde_json::{Value, json};
-use settlement::{error::Result, maintenance, service::Prepared, store};
-use support::legacy::{END, Harness, START, admin};
+use settlement::{maintenance, store};
+use support::legacy::{END, Harness, START, assert_error, cycle_row, mutate};
 
 fn cycle_payload(account_id: i64, cost: &str, start: &str) -> Value {
     json!({
@@ -13,14 +12,6 @@ fn cycle_payload(account_id: i64, cost: &str, start: &str) -> Value {
         "creditor_id": 2,
         "start": start,
     })
-}
-
-async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> Result<Value> {
-    harness
-        .app
-        .service
-        .mutate(&admin(), key, action, payload, Prepared::default(), None)
-        .await
 }
 
 struct CycleFixture<'a> {
@@ -150,30 +141,6 @@ async fn rows(harness: &Harness, table: &str) -> Vec<Value> {
     .unwrap();
     db.commit().await.unwrap();
     rows
-}
-
-async fn cycle_row(harness: &Harness, id: i64) -> Value {
-    let mut db = harness.app.service.store.read().await.unwrap();
-    let row = store::one(
-        &mut db,
-        "SELECT * FROM cycles WHERE id=?",
-        &[json!(id)],
-        "cycle missing",
-    )
-    .await
-    .unwrap();
-    db.commit().await.unwrap();
-    row
-}
-
-fn assert_error<T: std::fmt::Debug>(result: Result<T>, status: u16, message: &str) {
-    let error = result.expect_err("operation should fail");
-    assert_eq!(error.status, status, "unexpected error: {error}");
-    assert!(
-        error.message.contains(message),
-        "expected error containing {message:?}, got {:?}",
-        error.message
-    );
 }
 
 #[tokio::test]

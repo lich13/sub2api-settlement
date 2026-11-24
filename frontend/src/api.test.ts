@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
+  APP_VERSION,
   api,
+  formatVersion,
   money,
   consumption,
   billedMoney,
@@ -40,6 +42,13 @@ describe("amount presentation", () => {
     expect(input).toBe("2026-09-30T00:00");
     expect(fromInput(input)).toBe("2026-09-29T16:00:00.000Z");
     expect(date(fromInput(input), "minute")).toBe("2026/09/30 00:00");
+  });
+  it("formats authoritative and fallback versions with a single v prefix", () => {
+    expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(formatVersion()).toBe(`v${APP_VERSION}`);
+    expect(formatVersion("0.13.1")).toBe("v0.13.1");
+    expect(formatVersion("v0.13.1")).toBe("v0.13.1");
+    expect(formatVersion("  ")).toBe("");
   });
 });
 

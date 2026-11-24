@@ -1,49 +1,20 @@
 // @vitest-environment jsdom
 
 import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuditLog, OperationStatus } from "./Operations";
+import {
+  deferred,
+  flush,
+  jsonResponse as response,
+  renderWithDialog,
+} from "./test-utils";
 
-let root: Root | undefined;
-let host: HTMLDivElement | undefined;
-
-function response(data: unknown, status = 200): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => data,
-    blob: async () => new Blob(),
-  } as Response;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+const dom = renderWithDialog();
 
 async function mount(element: ReactNode) {
-  host = document.createElement("div");
-  document.body.append(host);
-  root = createRoot(host);
-  await act(async () => {
-    root!.render(element);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-async function flush() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  await dom.render(element);
+  await flush();
 }
 
 function audit(id: number, action: string, marker: string) {
@@ -67,19 +38,13 @@ function setDateInput(input: HTMLInputElement, value: string) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
     value: "visible",
   });
 });
 
-afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = undefined;
-  host?.remove();
-  host = undefined;
-  vi.unstubAllGlobals();
+afterEach(() => {
   Reflect.deleteProperty(document, "visibilityState");
 });
 
@@ -102,8 +67,8 @@ describe("OperationStatus", () => {
     vi.stubGlobal("fetch", fetcher);
 
     await mount(<OperationStatus />);
-    expect(host!.textContent).toContain("尚未同步");
-    expect(host!.textContent).toContain("—");
+    expect(dom.host!.textContent).toContain("尚未同步");
+    expect(dom.host!.textContent).toContain("—");
 
     await act(async () => {
       initial.resolve(response({
@@ -116,22 +81,22 @@ describe("OperationStatus", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host!.textContent).toContain("2");
-    expect(host!.textContent).toContain("全量对账");
+    expect(dom.host!.textContent).toContain("2");
+    expect(dom.host!.textContent).toContain("全量对账");
 
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host!.querySelector('[role="alert"]')?.textContent).toContain("fixture status unavailable");
+    expect(dom.host!.querySelector('[role="alert"]')?.textContent).toContain("fixture status unavailable");
 
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host!.querySelector('[role="alert"]')).toBeNull();
+    expect(dom.host!.querySelector('[role="alert"]')).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });
@@ -152,7 +117,7 @@ describe("AuditLog", () => {
     await mount(<AuditLog />);
     expect(fetcher).toHaveBeenCalledTimes(1);
 
-    const select = host!.querySelector<HTMLSelectElement>("select")!;
+    const select = dom.host!.querySelector<HTMLSelectElement>("select")!;
     await act(async () => {
       select.value = "settle";
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -160,15 +125,16 @@ describe("AuditLog", () => {
       await Promise.resolve();
     });
     await flush();
-    expect(host!.textContent).toContain("new result");
+    expect(dom.host!.textContent).toContain("new result");
 
     await act(async () => {
       oldPage.resolve(response({ items: [audit(1, "create_cycle", "stale result")], next_before: null }));
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(host!.textContent).toContain("new result");
-    expect(host!.textContent).not.toContain("stale result");
+    expect(dom.host!.textContent).toContain("new result");
+    expect(dom.host!.textContent).not.toContain("stale result");
+    expect(dom.host!.querySelector(".audit-list details > summary > svg")).not.toBeNull();
   });
 
   it("uses Beijing date filters for listing and export, then reports an export error", async () => {
@@ -183,18 +149,18 @@ describe("AuditLog", () => {
     await flush();
 
     await act(async () => {
-      const select = host!.querySelector<HTMLSelectElement>("select")!;
+      const select = dom.host!.querySelector<HTMLSelectElement>("select")!;
       select.value = "settle";
       select.dispatchEvent(new Event("change", { bubbles: true }));
       await Promise.resolve();
     });
     await act(async () => {
-      const input = host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];
+      const input = dom.host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[0];
       setDateInput(input, "2026-10-01T00:00");
       await Promise.resolve();
     });
     await act(async () => {
-      const input = host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[1];
+      const input = dom.host!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]')[1];
       setDateInput(input, "2026-10-02T00:00");
       await Promise.resolve();
     });
@@ -208,7 +174,7 @@ describe("AuditLog", () => {
     expect(filteredPath).toContain("from=2026-09-30T16%3A00%3A00.000Z");
     expect(filteredPath).toContain("to=2026-10-01T16%3A00%3A00.000Z");
 
-    const exportButton = Array.from(host!.querySelectorAll("button"))
+    const exportButton = Array.from(dom.host!.querySelectorAll("button"))
       .find(button => button.textContent?.trim() === "导出 CSV") as HTMLButtonElement;
     await act(async () => {
       exportButton.click();
@@ -223,6 +189,6 @@ describe("AuditLog", () => {
     expect(exportPath).toContain("action=settle");
     expect(exportPath).toContain("from=2026-09-30T16%3A00%3A00.000Z");
     expect(exportPath).toContain("to=2026-10-01T16%3A00%3A00.000Z");
-    expect(host!.querySelector('[role="alert"]')?.textContent).toContain("fixture export rejected");
+    expect(dom.host!.querySelector('[role="alert"]')?.textContent).toContain("fixture export rejected");
   });
 });

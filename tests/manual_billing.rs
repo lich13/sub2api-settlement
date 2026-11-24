@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 mod support;
 
 use serde_json::{Value, json};
@@ -9,7 +8,9 @@ use settlement::{
     service::Prepared,
 };
 use std::collections::BTreeMap;
-use support::legacy::{END, Harness, START, admin, payer};
+use support::legacy::{
+    END, Harness, START, admin, assert_error, cycle_row, payer, vendor_period_row,
+};
 
 fn csv(rows: &[(&str, &str, &str, &str)]) -> String {
     let mut value = String::from(
@@ -84,20 +85,6 @@ async fn create_vendor(harness: &Harness, account_ids: &[i64], cost: &str, key: 
         .expect("create fixture vendor group")
 }
 
-async fn vendor_period_row(harness: &Harness, period_id: i64) -> Value {
-    let mut db = harness.app.service.store.read().await.unwrap();
-    let row = settlement::store::one(
-        &mut db,
-        "SELECT * FROM vendor_periods WHERE id=?",
-        &[json!(period_id)],
-        "vendor period missing",
-    )
-    .await
-    .unwrap();
-    db.commit().await.unwrap();
-    row
-}
-
 async fn cycle_for_account(harness: &Harness, account_id: i64) -> Value {
     harness
         .rows("cycles")
@@ -157,15 +144,6 @@ async fn confirm_vendor(harness: &Harness, period: &Value, preview: &Value) -> R
             None,
         )
         .await
-}
-
-async fn cycle_row(harness: &Harness, cycle_id: i64) -> Value {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .find(|row| row["id"] == cycle_id)
-        .unwrap_or_else(|| panic!("cycle {cycle_id} not found"))
 }
 
 async fn manual_basis_rows(harness: &Harness) -> Vec<Value> {
@@ -538,19 +516,6 @@ fn detail(request_id: &str) -> RequestDetail {
         cache_creation_tokens: Some(0),
         ..RequestDetail::default()
     }
-}
-
-fn assert_error<T>(result: Result<T>, status: u16, clue: &str) {
-    let error = match result {
-        Ok(_) => panic!("operation should fail"),
-        Err(error) => error,
-    };
-    assert_eq!(error.status, status, "unexpected error: {error}");
-    assert!(
-        error.message.contains(clue),
-        "expected {clue:?}, got {:?}",
-        error.message
-    );
 }
 
 #[test]

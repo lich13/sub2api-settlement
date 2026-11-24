@@ -1,9 +1,8 @@
-#[allow(dead_code)]
 mod support;
 
 use serde_json::{Value, json};
 use settlement::service::Prepared;
-use support::legacy::{END, Harness, START, admin, fixture_data};
+use support::legacy::{END, Harness, START, admin, cycle_row, fixture_data};
 
 const RATIO_START: &str = "2025-01-10T00:00:00+00:00";
 
@@ -39,15 +38,6 @@ async fn create_cycle(
         .await
         .expect("create fixture cycle");
     result["id"].as_i64().unwrap()
-}
-
-async fn cycle_row(harness: &Harness, id: i64) -> Value {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .find(|cycle| cycle["id"] == json!(id))
-        .unwrap_or_else(|| panic!("cycle {id} not found"))
 }
 
 async fn settlement_row(harness: &Harness, cycle_id: i64) -> Value {

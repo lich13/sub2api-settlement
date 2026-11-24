@@ -1,12 +1,14 @@
-#[allow(dead_code)]
 mod support;
 
 use axum::http::StatusCode;
 use reqwest::Method;
 use serde_json::{Value, json};
-use settlement::{error::Result, maintenance, service::Prepared, store};
+use settlement::{error::Result, maintenance, service::Prepared};
 use std::{net::SocketAddr, path::PathBuf};
-use support::legacy::{END, Harness, START, admin};
+use support::legacy::{
+    END, Harness, START, admin, assert_error, cycle_for_account, cycle_row, mutate,
+    vendor_period_row,
+};
 use tempfile::TempDir;
 use tokio::{net::TcpListener, task::JoinHandle};
 
@@ -76,14 +78,6 @@ impl Drop for RouteHarness {
     }
 }
 
-async fn mutate(harness: &Harness, key: &str, action: &str, payload: &Value) -> Result<Value> {
-    harness
-        .app
-        .service
-        .mutate(&admin(), key, action, payload, Prepared::default(), None)
-        .await
-}
-
 async fn mutate_with_prepared(
     harness: &Harness,
     key: &str,
@@ -96,41 +90,6 @@ async fn mutate_with_prepared(
         .service
         .mutate(&admin(), key, action, payload, prepared, None)
         .await
-}
-
-async fn cycle_row(harness: &Harness, id: i64) -> Value {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .find(|cycle| cycle["id"] == id)
-        .unwrap_or_else(|| panic!("cycle {id} not found"))
-}
-
-async fn vendor_period_row(harness: &Harness, id: i64) -> Value {
-    let mut db = harness.app.service.store.read().await.unwrap();
-    let row = store::one(
-        &mut db,
-        "SELECT * FROM vendor_periods WHERE id=?",
-        &[json!(id)],
-        "vendor period missing",
-    )
-    .await
-    .unwrap();
-    db.commit().await.unwrap();
-    row
-}
-
-async fn cycle_for_account(harness: &Harness, account_id: i64) -> i64 {
-    harness
-        .rows("cycles")
-        .await
-        .into_iter()
-        .rev()
-        .find(|cycle| cycle["account_id"] == account_id && cycle["vendor_period_id"].is_i64())
-        .unwrap_or_else(|| panic!("vendor cycle for account {account_id} not found"))["id"]
-        .as_i64()
-        .unwrap()
 }
 
 async fn create_vendor(harness: &Harness, account_ids: &[i64], cost: &str, key: &str) -> Value {
@@ -235,16 +194,6 @@ async fn settle_group(
         .prepare_settlement(&admin(), &payload)
         .await?;
     mutate_with_prepared(harness, key, "settle", &payload, prepared).await
-}
-
-fn assert_error<T: std::fmt::Debug>(result: Result<T>, status: u16, message: &str) {
-    let error = result.expect_err("operation should fail");
-    assert_eq!(error.status, status, "unexpected error: {error}");
-    assert!(
-        error.message.contains(message),
-        "expected error containing {message:?}, got {:?}",
-        error.message
-    );
 }
 
 #[tokio::test]

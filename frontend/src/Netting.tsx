@@ -1,9 +1,11 @@
+import { ChevronDown } from "lucide-react";
 import { money, date } from "./api";
+import { Empty } from "./Forms";
 import type { Actor, NetBalance, NetDetail, NetPayment, Order } from "./types";
 
 const person = (value: NetBalance, id: number | null) => id === value.user_a ? value.name_a : value.name_b;
 const pairKey = (value: NetBalance) => `${value.user_a}:${value.user_b}`;
-const empty = <div className="empty">暂无账单</div>;
+const empty = <Empty text="暂无账单" />;
 
 export function NettingReceivables({ balances }: { balances: NetBalance[] }) {
   const items = balances.filter(b => b.amount_fen > 0 && b.creditor_id !== null);
@@ -13,7 +15,7 @@ export function NettingReceivables({ balances }: { balances: NetBalance[] }) {
       <div className="receivable-source"><div><strong>{person(b, b.payer_id)}</strong><span>{b.order_count} 张订单</span></div></div>
       <div className="receivable-status"><span className="status pending">待付款</span></div>
       <strong className="receivable-amount">{money(b.amount_fen)}</strong>
-    </article>)}{!items.length && <div className="empty">暂无待收订单</div>}</div>
+    </article>)}{!items.length && <Empty text="暂无待收订单" />}</div>
   </section>;
 }
 
@@ -74,6 +76,6 @@ export function NettingList({ me, balances, payments, orders, adminView, filter,
       <div className="bill-actions"><button className="text-button" onClick={() => onOrder(o.id)}>明细</button>{adminView && o.status === "submitted" && <button className="button primary" disabled={busy} onClick={() => onLegacyPaid(o)}>标记已结清</button>}</div>
     </article>)}
     {!pending.length && !history.length && !legacy.length && empty}
-    {adminView && <details className="raw-orders"><summary>原始订单 · {raw.length} 张</summary>{raw.map(o => <button className="netting-order" key={o.id} onClick={() => onOrder(o.id)}><div><strong>{o.account_name}</strong><span>#{o.id} · {o.payer_name} → {o.creditor_name}</span></div><b>{money(o.amount_fen)}</b></button>)}</details>}
+    {adminView && <details className="raw-orders"><summary>原始订单 · {raw.length} 张<ChevronDown size={16} /></summary>{raw.map(o => <button className="netting-order" key={o.id} onClick={() => onOrder(o.id)}><div><strong>{o.account_name}</strong><span>#{o.id} · {o.payer_name} → {o.creditor_name}</span></div><b>{money(o.amount_fen)}</b></button>)}</details>}
   </div>;
 }

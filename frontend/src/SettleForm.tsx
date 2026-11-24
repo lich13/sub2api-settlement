@@ -457,7 +457,7 @@ function BillImportPanel({
           </button>
         </div>
       )}
-      {error && <div className="form-error">{error}</div>}
+      <FormError error={error} />
     </details>
   );
 }
@@ -904,7 +904,7 @@ export function SettleForm({
                 }}
               />
               {c.start_warning && c.start_warning !== "周期起点未确认" && (
-                <div className="form-error">{c.start_warning}</div>
+                <FormError error={c.start_warning} />
               )}
               {c.cost_warning && <FormError error={c.cost_warning} />}
               {!c.cycle.vendor_period_id && (
